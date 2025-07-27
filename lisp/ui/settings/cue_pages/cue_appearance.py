@@ -15,8 +15,14 @@
 # You should have received a copy of the GNU General Public License
 # along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
-from PyQt5.QtCore import Qt, QT_TRANSLATE_NOOP
-from PyQt5.QtGui import QFontDatabase
+import os
+
+from PyQt5.QtCore import (
+    Qt,
+    QSize,
+    QT_TRANSLATE_NOOP,
+)
+from PyQt5.QtGui import QFontDatabase, QStandardItemModel, QStandardItem
 from PyQt5.QtWidgets import (
     QVBoxLayout,
     QGroupBox,
@@ -25,24 +31,43 @@ from PyQt5.QtWidgets import (
     QSpinBox,
     QLabel,
     QLineEdit,
+    QPushButton,
+    QDialog,
+    QDialogButtonBox,
+    QListWidget,
+    QListView,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
 )
 
 from lisp.ui.settings.pages import SettingsPage
 from lisp.ui.ui_utils import translate, css_to_dict, dict_to_css
 from lisp.ui.widgets import ColorButton
+from lisp.ui.icons import IconTheme
+from lisp import ICON_THEMES_DIR
 
 
 class Appearance(SettingsPage):
     Name = QT_TRANSLATE_NOOP("SettingsPageName", "Appearance")
+    iconName = "music"
 
     def __init__(self, **kwargs):
         super().__init__()
         self.setLayout(QVBoxLayout())
 
-        # Name
+        self.iconSelectorDialog = None
+
+        # Name and Icon
         self.cueNameGroup = QGroupBox(self)
         self.cueNameGroup.setLayout(QHBoxLayout())
         self.layout().addWidget(self.cueNameGroup)
+
+        self.cueIconPreview = QLabel(self)
+        self.cueNameGroup.layout().addWidget(self.cueIconPreview)
+
+        self.cueIconButton = QPushButton(self)
+        self.cueIconButton.clicked.connect(self.showIconSelector)
+        self.cueNameGroup.layout().addWidget(self.cueIconButton)
 
         self.cueNameEdit = QLineEdit(self.cueNameGroup)
         self.cueNameGroup.layout().addWidget(self.cueNameEdit)
@@ -94,9 +119,12 @@ class Appearance(SettingsPage):
 
     def retranslateUi(self):
         self.cueNameGroup.setTitle(
-            translate("CueAppearanceSettings", "Cue name")
+            translate("CueAppearanceSettings", "Cue Name and Icon")
         )
         self.cueNameEdit.setText(translate("CueAppearanceSettings", "NoName"))
+        self.cueIconButton.setText(
+            translate("CueAppearanceSettings", "Change icon")
+        )
         self.cueDescriptionGroup.setTitle(
             translate("CueAppearanceSettings", "Description/Note")
         )
@@ -117,12 +145,28 @@ class Appearance(SettingsPage):
         self.setGroupEnabled(self.fontSizeGroup, enabled)
         self.setGroupEnabled(self.colorGroup, enabled)
 
+    def showIconSelector(self):
+        if self.iconSelectorDialog is None:
+            self.iconSelectorDialog = IconSelectorDialog(self)
+
+        self.iconSelectorDialog.setSelectedIcon(self.iconName)
+
+        if self.iconSelectorDialog.exec() == QDialog.Accepted:
+            self.iconName = self.iconSelectorDialog.getSelectedIcon("led")
+            self.updateIconPreview()
+
+    def updateIconPreview(self):
+        self.cueIconPreview.setPixmap(
+            IconTheme.get(self.iconName).pixmap(20, 20)
+        )
+
     def getSettings(self):
         settings = {}
         style = {}
 
         if self.isGroupEnabled(self.cueNameGroup):
             settings["name"] = self.cueNameEdit.text()
+            settings["icon"] = self.iconName
         if self.isGroupEnabled(self.cueDescriptionGroup):
             settings["description"] = self.cueDescriptionEdit.toPlainText()
         if self.isGroupEnabled(self.colorGroup):
@@ -141,6 +185,9 @@ class Appearance(SettingsPage):
     def loadSettings(self, settings):
         if "name" in settings:
             self.cueNameEdit.setText(settings["name"])
+        if "icon" in settings:
+            self.iconName = settings["icon"]
+            self.updateIconPreview()
         if "description" in settings:
             self.cueDescriptionEdit.setPlainText(settings["description"])
         if "stylesheet" in settings:
@@ -152,3 +199,77 @@ class Appearance(SettingsPage):
             if "font-size" in settings:
                 # [:-2] for removing "pt"
                 self.fontSizeSpin.setValue(int(settings["font-size"][:-2]))
+
+
+class IconSelectorDialog(QDialog):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setWindowModality(Qt.ApplicationModal)
+        self.setLayout(QVBoxLayout())
+
+        self.iconsModel = QStandardItemModel()
+        self.iconsList = QListView(self)
+        self.iconsList.setModel(self.iconsModel)
+        self.iconsList.setItemDelegate(IconOnlyDelegate())
+        self.iconsList.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
+        self.iconsList.setFixedWidth(350)
+        self.iconsList.setMinimumHeight(350)
+        self.iconsList.setViewMode(QListWidget.IconMode)
+        self.iconsList.setResizeMode(QListWidget.Adjust)
+        self.iconsList.setFlow(QListWidget.LeftToRight)
+        self.iconsList.setUniformItemSizes(True)
+        self.iconsList.setWrapping(True)
+        self.iconsList.setIconSize(QSize(48, 48))
+        self.iconsList.setSpacing(10)
+        self.iconsList.activated.connect(self.accept)
+        self.iconsList.clicked.connect(self.accept)
+        self.layout().addWidget(self.iconsList)
+
+        self.buttons = QDialogButtonBox(QDialogButtonBox.Cancel, self)
+        self.buttons.rejected.connect(self.reject)
+        self.layout().addWidget(self.buttons)
+
+        for name in self.fetchIcons():
+            item = QStandardItem()
+            item.setData(name, Qt.UserRole)
+            item.setIcon(IconTheme.get(name))
+
+            self.iconsModel.appendRow(item)
+
+        self.retranslateUi()
+
+    def retranslateUi(self):
+        self.setWindowTitle(
+            translate("CueAppearanceSettings", "Select an Icon")
+        )
+
+    def fetchIcons(self):
+        icons = set()
+
+        for item in os.scandir(os.path.join(ICON_THEMES_DIR, "lisp/cues")):
+            if item.is_file():
+                name, _ = os.path.splitext(item.name)
+                icons.add(name)
+
+        return sorted(icons)
+
+    def getSelectedIcon(self, fallback=None):
+        if self.iconsList.currentIndex().isValid():
+            return self.iconsModel.data(
+                self.iconsList.currentIndex(), Qt.UserRole
+            )
+
+        return fallback
+
+    def setSelectedIcon(self, name):
+        for row in range(self.iconsModel.rowCount()):
+            item = self.iconsModel.item(row)
+            if item.data(Qt.UserRole) == name:
+                self.iconsList.setCurrentIndex(item.index())
+
+
+class IconOnlyDelegate(QStyledItemDelegate):
+    def initStyleOption(self, option, index):
+        super().initStyleOption(option, index)
+
+        option.features &= ~QStyleOptionViewItem.HasDisplay

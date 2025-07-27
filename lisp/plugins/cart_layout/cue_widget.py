@@ -37,6 +37,7 @@ from lisp.cues.media_cue import MediaCue
 from lisp.plugins.cart_layout.page_widget import CartPageWidget
 from lisp.ui.icons import IconTheme
 from lisp.ui.widgets import QClickLabel, QClickSlider
+from lisp import ICON_THEMES_DIR
 
 
 class CueWidget(QWidget):
@@ -317,6 +318,7 @@ class CueWidget(QWidget):
 
     def _updateStyle(self, stylesheet):
         self.nameButton.setStyleSheet(stylesheet)
+        self.nameButton.setIcon(IconTheme.get(f"{self._cue.icon}-cart"))
 
     def _enterFadein(self):
         p = self.timeDisplay.palette()
