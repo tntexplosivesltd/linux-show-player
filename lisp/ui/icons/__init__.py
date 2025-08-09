@@ -18,8 +18,11 @@
 import glob
 import os
 from typing import Union
+from xml.etree import ElementTree as ET
 
-from PyQt5.QtGui import QIcon
+from PyQt5.QtGui import QIcon, QPixmap, QPainter
+from PyQt5.QtSvg import QSvgRenderer
+from PyQt5.QtCore import Qt, QByteArray
 
 from lisp import ICON_THEMES_DIR, ICON_THEME_COMMON
 
@@ -37,9 +40,15 @@ def icon_themes_names():
 class IconTheme:
     _SEARCH_PATTERN = "{}/**/{}.*"
     _BLANK_ICON = QIcon()
+    _CUE_TYPE_VARIATIONS = {
+        "-cart": {"stroke": "black", "fill": "black", "opacity": "0.1"},
+        "-running": {"stroke": "#0D0", "fill": "#0D0", "opacity": "1"},
+        "-pause": {"stroke": "#F90", "fill": "#F90", "opacity": "1"},
+        "-error": {"stroke": "#D11", "fill": "#D11", "opacity": "1"},
+    }
     _GlobalCache = {}
     _GlobalTheme = None
-
+    
     def __init__(self, *names):
         self._lookup_dirs = [os.path.join(ICON_THEMES_DIR, d) for d in names]
 
@@ -53,6 +62,13 @@ class IconTheme:
         if icon is None:
             icon = IconTheme._BLANK_ICON
             for dir_ in IconTheme._GlobalTheme:
+                search_name = IconTheme._strip_cue_suffix(icon_name)
+                if search_name != icon_name:
+                    suffix = icon_name[len(search_name):]
+                    pattern = IconTheme._SEARCH_PATTERN.format(dir_, search_name)
+                    for icon in glob.iglob(pattern, recursive=True):
+                        icon = IconTheme._load_modified_icon(icon, suffix)
+                        break
                 pattern = IconTheme._SEARCH_PATTERN.format(dir_, icon_name)
                 for icon in glob.iglob(pattern, recursive=True):
                     icon = QIcon(icon)
@@ -69,3 +85,37 @@ class IconTheme:
 
         QIcon.setThemeSearchPaths([ICON_THEMES_DIR])
         QIcon.setThemeName(theme_name)
+
+    @staticmethod
+    def _strip_cue_suffix(icon_name: str) -> str:
+        for suffix in IconTheme._CUE_TYPE_VARIATIONS:
+            if icon_name.endswith(suffix):
+                return icon_name[: -len(suffix)]
+        return icon_name
+
+    @staticmethod
+    def _load_modified_icon(svg_path: str, suffix: str) -> QIcon:
+        try:
+            with open(svg_path, "rb") as f:
+                xml_bytes = f.read()
+
+            root = ET.fromstring(xml_bytes)
+            variations = IconTheme._CUE_TYPE_VARIATIONS[suffix]
+            for attr, val in variations.items():
+                root.set(attr, val)
+
+            modified_svg = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+            renderer = QSvgRenderer(QByteArray(modified_svg))
+            size = renderer.defaultSize()
+
+            pixmap = QPixmap(size)
+            pixmap.fill(Qt.transparent)
+
+            painter = QPainter(pixmap)
+            renderer.render(painter)
+            painter.end()
+
+            return QIcon(pixmap)
+        except Exception:
+            return IconTheme._BLANK_ICON
