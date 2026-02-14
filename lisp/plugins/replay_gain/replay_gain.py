@@ -17,20 +17,21 @@
 
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from threading import Thread, Lock
+from threading import Lock, Thread
 
 import gi
 
 gi.require_version("Gst", "1.0")
 from gi.repository import Gst
-from PyQt5.QtWidgets import QMenu, QAction, QDialog
+from PyQt5.QtWidgets import QAction, QDialog, QMenu
 
 from lisp.command.command import Command
 from lisp.core.plugin import Plugin
-from lisp.core.signal import Signal, Connection
+from lisp.core.signal import Connection, Signal
 from lisp.cues.media_cue import MediaCue
 from lisp.ui.ui_utils import translate
-from .gain_ui import GainUi, GainProgressDialog
+
+from .gain_ui import GainProgressDialog, GainUi
 
 logger = logging.getLogger(__name__)
 
@@ -164,7 +165,7 @@ class GainMainThread(Thread):
         self, commands_stack, files, threads, mode, ref_level, norm_level
     ):
         super().__init__()
-        self.setDaemon(True)
+        self.daemon = True
 
         self._commands_stack = commands_stack
         self._update_command = UpdateGainCommand()
@@ -272,10 +273,7 @@ class GstGain:
 
         gain_bus = self.gain_pipe.get_bus()
         gain_bus.add_signal_watch()
-        # Connect only the messages we want
-        gain_bus.connect("message::eos", self._on_message)
-        gain_bus.connect("message::tag", self._on_message)
-        gain_bus.connect("message::error", self._on_message)
+        message_handler = gain_bus.connect("message", self._on_message)
 
         self.gain_pipe.set_state(Gst.State.PLAYING)
         logger.info(
@@ -289,6 +287,8 @@ class GstGain:
         self.__lock.acquire()
 
         # Reset the pipe
+        gain_bus.disconnect(message_handler)
+        gain_bus.remove_signal_watch()
         self.gain_pipe = None
 
         # Return the computation result

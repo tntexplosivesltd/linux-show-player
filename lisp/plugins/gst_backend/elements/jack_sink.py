@@ -76,7 +76,10 @@ class JackSink(GstMediaElement):
 
     def dispose(self):
         try:
-            self.pipeline.get_bus().disconnect(self._handler)
+            bus = self.pipeline.get_bus()
+            bus.remove_signal_watch()
+            bus.disconnect(self._handler)
+
             JackSink._clients.remove(self._client_id)
         finally:
             if not JackSink._clients:
