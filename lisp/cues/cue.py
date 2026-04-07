@@ -132,6 +132,7 @@ class Cue(HasProperties):
     default_start_action = Property(default=CueAction.Start.value)
     default_stop_action = Property(default=CueAction.Stop.value)
     exclusive = Property(default=False)
+    group_id = Property(default="")
 
     CueActions = (CueAction.Start,)
 

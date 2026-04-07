@@ -19,6 +19,7 @@ from PyQt5.QtCore import Qt, QT_TRANSLATE_NOOP, QTimer
 from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import QAction
 
+from lisp.command.group import GroupCuesCommand, UngroupCuesCommand
 from lisp.command.model import ModelInsertItemsCommand
 from lisp.core.configuration import DummyConfiguration
 from lisp.core.properties import ProxyProperty
@@ -182,6 +183,26 @@ class ListLayout(CueLayout):
 
         self.CuesMenu.add(self._edit_actions_group)
 
+        # Group/Ungroup context menu actions
+        self._group_actions_group = MenuActionsGroup(
+            priority=MENU_PRIORITY_CUE
+        )
+        self._group_actions_group.add(
+            SimpleMenuAction(
+                translate("ListLayout", "Ungroup"),
+                self._ungroup_cue,
+                translate("ListLayout", "Ungroup"),
+                self._ungroup_cues,
+            ),
+            SimpleMenuAction(
+                translate("ListLayout", "Group selected"),
+                self._group_single_cue,
+                translate("ListLayout", "Group selected"),
+                self._group_cues,
+            ),
+        )
+        self.CuesMenu.add(self._group_actions_group)
+
         self.retranslate()
 
     def retranslate(self):
@@ -229,15 +250,32 @@ class ListLayout(CueLayout):
         self._view.listView.setStandbyIndex(index)
 
     def go(self, action=CueAction.Default, advance=1):
-        standby_cue = self.standby_cue()
-        if standby_cue is not None:
-            if standby_cue.execute(action) is False:
+        # Loop to skip child cues — they are triggered by their group
+        while True:
+            standby_cue = self.standby_cue()
+            if standby_cue is None:
                 return
 
-            self.cue_executed.emit(standby_cue)
+            if (
+                standby_cue.group_id
+                and self.app.cue_model.get(standby_cue.group_id)
+                is not None
+            ):
+                if self.auto_continue:
+                    self.set_standby_index(
+                        self.standby_index() + advance
+                    )
+                    continue
+                return
+            break
 
-            if self.auto_continue:
-                self.set_standby_index(self.standby_index() + advance)
+        if standby_cue.execute(action) is False:
+            return
+
+        self.cue_executed.emit(standby_cue)
+
+        if self.auto_continue:
+            self.set_standby_index(self.standby_index() + advance)
 
     def cue_at(self, index):
         return self._list_model.item(index)
@@ -253,8 +291,10 @@ class ListLayout(CueLayout):
         self.app.window.menuLayout.clear()
         # Clean context-menu
         self.CuesMenu.remove(self._edit_actions_group)
+        self.CuesMenu.remove(self._group_actions_group)
         # Remove reference cycle
         del self._edit_actions_group
+        del self._group_actions_group
 
     def select_all(self, cue_type=Cue):
         if self.selection_mode:
@@ -417,6 +457,46 @@ class ListLayout(CueLayout):
                 ModelInsertItemsCommand(self.model, pos, clone)
             )
 
+    def _group_single_cue(self, cue):
+        """Wrap a single cue in a group."""
+        self._group_cues([cue])
+
+    def _group_cues(self, cues):
+        from lisp.plugins.action_cues.group_cue import GroupCue
+
+        # Filter out cues that are already in a group or are GroupCues
+        cues = [
+            c for c in cues
+            if not c.group_id and not isinstance(c, GroupCue)
+        ]
+        if len(cues) < 1:
+            return
+
+        self.app.commands_stack.do(
+            GroupCuesCommand(self.app, self._list_model, cues)
+        )
+
+    def _ungroup_cue(self, cue):
+        from lisp.plugins.action_cues.group_cue import GroupCue
+
+        if isinstance(cue, GroupCue):
+            self.app.commands_stack.do(
+                UngroupCuesCommand(
+                    self.app, self._list_model, cue
+                )
+            )
+
+    def _ungroup_cues(self, cues):
+        from lisp.plugins.action_cues.group_cue import GroupCue
+
+        for cue in cues:
+            if isinstance(cue, GroupCue):
+                self.app.commands_stack.do(
+                    UngroupCuesCommand(
+                        self.app, self._list_model, cue
+                    )
+                )
+
     def __go_slot(self):
         if not self._go_timer.isActive():
             action = CueAction(ListLayout.Config.get("goAction"))
@@ -430,8 +510,27 @@ class ListLayout(CueLayout):
 
     def __cue_next(self, cue):
         try:
+            # If this cue is a child of a group, the group manages
+            # sequencing — don't advance in the main list.
+            if (
+                cue.group_id
+                and self.app.cue_model.get(cue.group_id) is not None
+            ):
+                return
+
             next_index = cue.index + 1
             if next_index < len(self._list_model):
+                next_cue = self._list_model.item(next_index)
+
+                # Skip grouped children — their group handles them
+                if (
+                    next_cue.group_id
+                    and self.app.cue_model.get(
+                        next_cue.group_id
+                    ) is not None
+                ):
+                    return
+
                 action = CueNextAction(cue.next_action)
                 if (
                     action == CueNextAction.SelectAfterEnd
@@ -439,7 +538,6 @@ class ListLayout(CueLayout):
                 ):
                     self.set_standby_index(next_index)
                 else:
-                    next_cue = self._list_model.item(next_index)
                     if next_cue.execute() is False:
                         return
 
