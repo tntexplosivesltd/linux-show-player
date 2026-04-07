@@ -17,6 +17,7 @@
 
 from PyQt5.QtCore import QT_TRANSLATE_NOOP, Qt, QTime
 from PyQt5.QtWidgets import (
+    QCheckBox,
     QDateTimeEdit,
     QGroupBox,
     QHBoxLayout,
@@ -48,6 +49,7 @@ class CueGeneralSettingsPage(SettingsPagesTabWidget, CuePageMixin):
         self.addPage(CueBehavioursPage(self.cueType))
         self.addPage(CueWaitsPage(self.cueType))
         self.addPage(CueFadePage(self.cueType))
+        self.addPage(CueExclusivePage(self.cueType))
 
 
 class CueBehavioursPage(CueSettingsPage):
@@ -300,5 +302,51 @@ class CueFadePage(CueSettingsPage):
         if self.isGroupEnabled(self.fadeOutGroup):
             settings["fadeout_type"] = self.fadeOutEdit.fadeType()
             settings["fadeout_duration"] = self.fadeOutEdit.duration()
+
+        return settings
+
+
+class CueExclusivePage(CueSettingsPage):
+    Name = QT_TRANSLATE_NOOP("SettingsPageName", "Exclusive")
+
+    def __init__(self, cueType, **kwargs):
+        super().__init__(cueType, **kwargs)
+        self.setLayout(QVBoxLayout())
+
+        self.exclusiveGroup = QGroupBox(self)
+        self.exclusiveGroup.setLayout(QVBoxLayout())
+        self.layout().addWidget(self.exclusiveGroup)
+
+        self.exclusiveCheckBox = QCheckBox(self.exclusiveGroup)
+        self.exclusiveGroup.layout().addWidget(self.exclusiveCheckBox)
+
+        self.layout().addStretch()
+
+        self.retranslateUi()
+
+    def retranslateUi(self):
+        self.exclusiveGroup.setTitle(
+            translate("CueSettings", "Exclusive")
+        )
+        self.exclusiveCheckBox.setText(
+            translate(
+                "CueSettings",
+                "While playing, prevent other cues from starting",
+            )
+        )
+
+    def enableCheck(self, enabled):
+        self.setGroupEnabled(self.exclusiveGroup, enabled)
+
+    def loadSettings(self, settings):
+        self.exclusiveCheckBox.setChecked(
+            settings.get("exclusive", False)
+        )
+
+    def getSettings(self):
+        settings = {}
+
+        if self.isGroupEnabled(self.exclusiveGroup):
+            settings["exclusive"] = self.exclusiveCheckBox.isChecked()
 
         return settings

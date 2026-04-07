@@ -231,7 +231,9 @@ class ListLayout(CueLayout):
     def go(self, action=CueAction.Default, advance=1):
         standby_cue = self.standby_cue()
         if standby_cue is not None:
-            standby_cue.execute(action)
+            if standby_cue.execute(action) is False:
+                return
+
             self.cue_executed.emit(standby_cue)
 
             if self.auto_continue:
@@ -438,7 +440,8 @@ class ListLayout(CueLayout):
                     self.set_standby_index(next_index)
                 else:
                     next_cue = self._list_model.item(next_index)
-                    next_cue.execute()
+                    if next_cue.execute() is False:
+                        return
 
                     if self.auto_continue and next_cue is self.standby_cue():
                         self.set_standby_index(next_index + 1)
