@@ -18,6 +18,7 @@
 import json
 from enum import Enum
 
+from lisp.core.has_properties import HasProperties
 from lisp.cues.cue import CueState
 
 
@@ -102,4 +103,6 @@ class LispJsonEncoder(json.JSONEncoder):
     def default(self, obj):
         if isinstance(obj, Enum):
             return obj.value
+        if isinstance(obj, HasProperties):
+            return obj.properties()
         return super().default(obj)
