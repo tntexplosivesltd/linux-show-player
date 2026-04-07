@@ -58,9 +58,15 @@ python lisp/plugins/test_harness/client.py cue.list
 python lisp/plugins/test_harness/client.py cue.add '{"type": "StopAll", "properties": {"name": "My Cue"}}'
 python lisp/plugins/test_harness/client.py signals.subscribe '{"signal": "cue_model.item_added"}'
 python lisp/plugins/test_harness/client.py signals.wait_for '{"subscription_id": "...", "timeout": 5.0}'
+python lisp/plugins/test_harness/client.py cue.seek '{"id": "abc-123", "position": 160000}'
+python lisp/plugins/test_harness/client.py cue.add_from_uri '{"uri": "/path/to/audio.wav"}'
+python lisp/plugins/test_harness/client.py layout.move_cue '{"from_index": 5, "to_index": 2}'
+python lisp/plugins/test_harness/client.py layout.context_action '{"action": "Group selected", "cue_ids": ["id1", "id2"]}'
+python lisp/plugins/test_harness/client.py layout.selection_mode '{"enable": true}'
+python lisp/plugins/test_harness/client.py layout.select_cues '{"indices": [1, 2, 3]}'
 ```
 
-The harness provides 35 methods across 7 namespaces: `session.*`, `cue.*`, `layout.*`, `commands.*`, `signals.*`, `plugin.*`, and utilities (`ping`, `app.cue_types`). Key features:
+The harness provides 42 methods across 7 namespaces: `session.*`, `cue.*`, `layout.*`, `commands.*`, `signals.*`, `plugin.*`, and utilities (`ping`, `app.cue_types`). Key features:
 
 - **Full introspection**: Query and mutate cues, sessions, layout, and the undo/redo stack
 - **Signal subscriptions**: Subscribe to any LiSP signal, buffer events, and use `wait_for` to block until an expected event arrives (avoids fragile `sleep()` calls)
