@@ -18,7 +18,7 @@
 import logging
 from threading import Lock
 
-from PyQt5.QtCore import QT_TRANSLATE_NOOP, Qt
+from PyQt5.QtCore import QT_TRANSLATE_NOOP, QTimer, Qt
 from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -149,7 +149,17 @@ class GroupCue(Cue):
         if self.crossfade > 0 and (has_next or can_loop):
             with self._lock:
                 self._crossfade_armed = True
-            Clock_33.add_callback(self._check_crossfade)
+            # Clock_33 is a QTimer — must add callbacks from the
+            # main thread.  __start__ runs in a worker thread, so
+            # defer via QTimer.singleShot.
+            QTimer.singleShot(0, self._start_crossfade_monitor)
+
+    def _start_crossfade_monitor(self):
+        """Add the crossfade check to the clock (main thread only)."""
+        with self._lock:
+            if not self._crossfade_armed:
+                return
+        Clock_33.add_callback(self._check_crossfade)
 
     def _connect_child(self, child, parallel):
         """Connect signal handlers to a child cue. Must hold _lock."""
