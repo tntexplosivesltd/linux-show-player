@@ -251,10 +251,17 @@ class ListLayout(CueLayout):
 
     def go(self, action=CueAction.Default, advance=1):
         # Loop to skip child cues — they are triggered by their group
+        prev_index = -1
         while True:
             standby_cue = self.standby_cue()
             if standby_cue is None:
                 return
+
+            cur_index = self.standby_index()
+            if cur_index == prev_index:
+                # Standby didn't advance (end of list) — stop looping
+                return
+            prev_index = cur_index
 
             if (
                 standby_cue.group_id
@@ -262,9 +269,7 @@ class ListLayout(CueLayout):
                 is not None
             ):
                 if self.auto_continue:
-                    self.set_standby_index(
-                        self.standby_index() + advance
-                    )
+                    self.set_standby_index(cur_index + advance)
                     continue
                 return
             break
