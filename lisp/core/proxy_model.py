@@ -60,7 +60,7 @@ class ProxyModel(ABCProxyModel):
 
     .. note:
         The wrapped model should not be changed.
-        Any ProxyModel could provide it's own methods/signals.
+        Any ProxyModel could provide its own methods/signals.
     """
 
     def add(self, item):

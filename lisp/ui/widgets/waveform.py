@@ -209,7 +209,7 @@ class WaveformSlider(DynamicFontSizeMixin, WaveformWidget):
         # Draw the waveform
         super().paintEvent(event)
 
-        # If needed (mouse-over) draw the seek indicator, and it's timestamp
+        # If needed (mouse-over) draw the seek indicator, and its timestamp
         if self._lastPosition >= 0:
             painter = QPainter()
             painter.begin(self)

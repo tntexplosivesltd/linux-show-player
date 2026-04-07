@@ -100,7 +100,7 @@ class _ALSAPortMonitor(PortMonitor):
                     logger.debug("ALSA MIDI port deleted from system.")
                     self.port_removed.emit()
                 elif event.type == alsaseq.SEQ_EVENT_PORT_START:
-                    # Some client may set it's name after the port creation.
+                    # Some client may set its name after the port creation.
                     # Adding a small wait should ensure that the name are set
                     # when signal is emitted.
                     sleep(0.05)
