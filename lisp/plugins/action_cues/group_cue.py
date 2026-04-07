@@ -150,39 +150,60 @@ class GroupCue(Cue):
 
     def _connect_child(self, child, parallel):
         """Connect signal handlers to a child cue. Must hold _lock."""
-        handler = (
-            self._on_child_ended
-            if parallel
-            else self._on_playlist_child_ended
-        )
-        child.end.connect(handler, Connection.QtQueued)
-        child.stopped.connect(handler, Connection.QtQueued)
-        child.interrupted.connect(handler, Connection.QtQueued)
-        child.error.connect(handler, Connection.QtQueued)
+        if parallel:
+            # Parallel: all end conditions treated the same
+            child.end.connect(
+                self._on_child_ended, Connection.QtQueued
+            )
+            child.stopped.connect(
+                self._on_child_ended, Connection.QtQueued
+            )
+            child.interrupted.connect(
+                self._on_child_ended, Connection.QtQueued
+            )
+            child.error.connect(
+                self._on_child_ended, Connection.QtQueued
+            )
+        else:
+            # Playlist: natural end advances, manual stop kills group
+            child.end.connect(
+                self._on_playlist_child_ended, Connection.QtQueued
+            )
+            child.stopped.connect(
+                self._on_playlist_child_stopped, Connection.QtQueued
+            )
+            child.interrupted.connect(
+                self._on_playlist_child_stopped, Connection.QtQueued
+            )
+            child.error.connect(
+                self._on_playlist_child_stopped, Connection.QtQueued
+            )
         self._connected_children.add(child.id)
 
     def _disconnect_child(self, child, parallel):
         """Disconnect signal handlers from a child cue."""
-        handler = (
-            self._on_child_ended
-            if parallel
-            else self._on_playlist_child_ended
-        )
-        child.end.disconnect(handler)
-        child.stopped.disconnect(handler)
-        child.interrupted.disconnect(handler)
-        child.error.disconnect(handler)
+        if parallel:
+            child.end.disconnect(self._on_child_ended)
+            child.stopped.disconnect(self._on_child_ended)
+            child.interrupted.disconnect(self._on_child_ended)
+            child.error.disconnect(self._on_child_ended)
+        else:
+            child.end.disconnect(self._on_playlist_child_ended)
+            child.stopped.disconnect(
+                self._on_playlist_child_stopped
+            )
+            child.interrupted.disconnect(
+                self._on_playlist_child_stopped
+            )
+            child.error.disconnect(
+                self._on_playlist_child_stopped
+            )
         with self._lock:
             self._connected_children.discard(child.id)
 
     def _disconnect_all_children(self):
         """Disconnect signal handlers from all connected children."""
         parallel = self.group_mode == "parallel"
-        handler = (
-            self._on_child_ended
-            if parallel
-            else self._on_playlist_child_ended
-        )
         with self._lock:
             child_ids = set(self._connected_children)
             self._connected_children.clear()
@@ -190,10 +211,26 @@ class GroupCue(Cue):
         for child_id in child_ids:
             child = self.app.cue_model.get(child_id)
             if child is not None:
-                child.end.disconnect(handler)
-                child.stopped.disconnect(handler)
-                child.interrupted.disconnect(handler)
-                child.error.disconnect(handler)
+                if parallel:
+                    child.end.disconnect(self._on_child_ended)
+                    child.stopped.disconnect(self._on_child_ended)
+                    child.interrupted.disconnect(
+                        self._on_child_ended
+                    )
+                    child.error.disconnect(self._on_child_ended)
+                else:
+                    child.end.disconnect(
+                        self._on_playlist_child_ended
+                    )
+                    child.stopped.disconnect(
+                        self._on_playlist_child_stopped
+                    )
+                    child.interrupted.disconnect(
+                        self._on_playlist_child_stopped
+                    )
+                    child.error.disconnect(
+                        self._on_playlist_child_stopped
+                    )
 
     def _check_crossfade(self):
         """Clock callback: check if crossfade point is reached."""
@@ -265,7 +302,7 @@ class GroupCue(Cue):
             self._ended()
 
     def _on_playlist_child_ended(self, cue):
-        """Playlist mode: advance to next child."""
+        """Playlist mode: child finished naturally, advance."""
         self._disconnect_child(cue, parallel=False)
 
         if not (self.state & CueState.Running):
@@ -287,6 +324,14 @@ class GroupCue(Cue):
                 self._ended()
         else:
             self._play_child_at(next_index, children)
+
+    def _on_playlist_child_stopped(self, cue):
+        """Playlist mode: child was stopped/interrupted, stop group."""
+        self._stop_crossfade_monitor()
+        self._disconnect_all_children()
+
+        if self.state & CueState.Running:
+            self._ended()
 
     def __stop__(self, fade=False):
         self._stop_crossfade_monitor()
