@@ -75,8 +75,6 @@ class NameWidget(QLabel):
         self._refresh()
 
     def _refresh(self):
-        from lisp.plugins.action_cues.group_cue import GroupCue
-
         name = self._item.cue.name
         if self._item.cue.exclusive:
             name = "* " + name
@@ -85,11 +83,6 @@ class NameWidget(QLabel):
             name = "    " + name
 
         super().setText(name)
-
-        # Bold for GroupCue rows
-        font = self.font()
-        font.setBold(isinstance(self._item.cue, GroupCue))
-        self.setFont(font)
 
     def __update_name(self, text):
         self._refresh()
