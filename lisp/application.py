@@ -24,6 +24,7 @@ from PyQt5.QtWidgets import QDialog, qApp
 from lisp import layout, __version__ as lisp_version
 from lisp.command.stack import CommandsStack
 from lisp.core.configuration import Configuration, DummyConfiguration
+from lisp.core.exclusive_manager import ExclusiveManager
 from lisp.core.session import Session
 from lisp.core.signal import Signal
 from lisp.core.singleton import Singleton
@@ -59,6 +60,7 @@ class Application(metaclass=Singleton):
         self.__conf = app_conf
         self.__cue_factory = CueFactory(self)
         self.__cue_model = CueModel()
+        self.__exclusive_manager = ExclusiveManager(self.__cue_model)
         self.__session = None
         self.__commands_stack = CommandsStack()
         self.__main_window = MainWindow(self)
@@ -114,6 +116,10 @@ class Application(metaclass=Singleton):
     @property
     def commands_stack(self) -> CommandsStack:
         return self.__commands_stack
+
+    @property
+    def exclusive_manager(self) -> ExclusiveManager:
+        return self.__exclusive_manager
 
     def start(self, session_file=""):
         # Show the mainWindow maximized

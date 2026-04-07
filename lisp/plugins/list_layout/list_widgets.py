@@ -63,13 +63,25 @@ class NameWidget(QLabel):
 
         self._item = item
         self._item.cue.changed("name").connect(
-            self.__update, Connection.QtQueued
+            self.__update_name, Connection.QtQueued
+        )
+        self._item.cue.changed("exclusive").connect(
+            self.__update_exclusive, Connection.QtQueued
         )
 
-        self.setText(self._item.cue.name)
+        self._refresh()
 
-    def __update(self, text):
-        super().setText(text)
+    def _refresh(self):
+        name = self._item.cue.name
+        if self._item.cue.exclusive:
+            name = "* " + name
+        super().setText(name)
+
+    def __update_name(self, text):
+        self._refresh()
+
+    def __update_exclusive(self, value):
+        self._refresh()
 
 
 class CueStatusIcons(QWidget):

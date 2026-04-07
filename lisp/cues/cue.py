@@ -131,6 +131,7 @@ class Cue(HasProperties):
     fadeout_duration = Property(default=0)
     default_start_action = Property(default=CueAction.Start.value)
     default_stop_action = Property(default=CueAction.Stop.value)
+    exclusive = Property(default=False)
 
     CueActions = (CueAction.Start,)
 
@@ -197,6 +198,20 @@ class Cue(HasProperties):
 
         if action == CueAction.DoNothing:
             return
+
+        # Block start/resume actions if an exclusive cue is running.
+        # hasattr guard: self.app may be a mock/stub without this attr.
+        if action in (
+            CueAction.Start,
+            CueAction.FadeInStart,
+            CueAction.Resume,
+            CueAction.FadeInResume,
+        ):
+            if (
+                hasattr(self.app, "exclusive_manager")
+                and self.app.exclusive_manager.is_start_blocked(self)
+            ):
+                return False
 
         if action in self.CueActions:
             if action == CueAction.Interrupt:
