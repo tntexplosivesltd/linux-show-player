@@ -18,7 +18,7 @@
 import logging
 from threading import Lock
 
-from PyQt5.QtCore import QT_TRANSLATE_NOOP, QTimer, Qt
+from PyQt5.QtCore import QT_TRANSLATE_NOOP, Qt
 from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -30,7 +30,7 @@ from PyQt5.QtWidgets import (
 
 from lisp.core.clock import Clock_33
 from lisp.core.properties import Property
-from lisp.core.signal import Connection
+from lisp.core.signal import Connection, Signal
 
 from lisp.cues.cue import Cue, CueAction, CueState
 from lisp.ui.settings.cue_settings import CueSettingsRegistry
@@ -68,6 +68,15 @@ class GroupCue(Cue):
         self._crossfade_armed = False
         # Track which children have signal handlers connected
         self._connected_children = set()
+
+        # Signal to relay crossfade arming to the main thread.
+        # Clock_33 is a QTimer — callbacks must be added from the
+        # Qt main thread.  __start__ runs in a worker thread, so
+        # we use QtQueued to post to the event loop.
+        self._request_crossfade_arm = Signal()
+        self._request_crossfade_arm.connect(
+            self._start_crossfade_monitor, Connection.QtQueued
+        )
 
     def _resolve_children(self):
         """Return the list of child Cue objects in order."""
@@ -149,10 +158,10 @@ class GroupCue(Cue):
         if self.crossfade > 0 and (has_next or can_loop):
             with self._lock:
                 self._crossfade_armed = True
-            # Clock_33 is a QTimer — must add callbacks from the
-            # main thread.  __start__ runs in a worker thread, so
-            # defer via QTimer.singleShot.
-            QTimer.singleShot(0, self._start_crossfade_monitor)
+            # Relay to the main thread via QtQueued signal — Clock_33
+            # is a QTimer whose callbacks must be added from the main
+            # thread, but __start__ runs in a worker thread.
+            self._request_crossfade_arm.emit()
 
     def _start_crossfade_monitor(self):
         """Add the crossfade check to the clock (main thread only)."""
