@@ -68,3 +68,34 @@ optional arguments:
                         Change output verbosity. default: warning
   --locale LOCALE       Force specified locale/language
 ```
+
+---
+
+## 🧪 Testing
+
+### Unit Tests
+
+Unit tests use [pytest](https://docs.pytest.org/) with [pytest-qt](https://pytest-qt.readthedocs.io/) for QApplication support.
+
+```bash
+poetry run pytest tests/
+poetry run pytest tests/ -v          # verbose output
+poetry run pytest tests/core/        # run a specific package
+```
+
+Tests are in `tests/` and mirror the source layout (`tests/core/`, `tests/cues/`, `tests/command/`).
+
+### Test Harness Plugin (E2E Testing)
+
+The **Test Harness** plugin (`lisp/plugins/test_harness/`) exposes LiSP internals over a JSON-RPC 2.0 TCP socket, enabling automated end-to-end testing from external tools. It is disabled by default and must be explicitly enabled.
+
+Once enabled, start LiSP and use the standalone CLI client:
+
+```bash
+python lisp/plugins/test_harness/client.py ping
+python lisp/plugins/test_harness/client.py cue.list
+python lisp/plugins/test_harness/client.py cue.add '{"type": "StopAll", "properties": {"name": "My Cue"}}'
+python lisp/plugins/test_harness/client.py commands.undo
+```
+
+The harness provides methods for session management, cue CRUD and control, layout operations, undo/redo, and signal subscriptions with a blocking `wait_for` mechanism for testing asynchronous cue behavior. Binds to `127.0.0.1:8070` by default.
