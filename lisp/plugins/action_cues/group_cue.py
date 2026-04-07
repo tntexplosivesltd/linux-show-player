@@ -303,10 +303,9 @@ class GroupCue(Cue):
                         next_child, parallel=False
                     )
 
-                if next_child.fadein_duration > 0:
-                    next_child.execute(CueAction.FadeInStart)
-                else:
-                    next_child.execute(CueAction.Start)
+                if next_child.fadein_duration <= 0:
+                    next_child.fadein_duration = self.crossfade
+                next_child.execute(CueAction.FadeInStart)
 
                 # Re-arm crossfade for the next transition
                 self._arm_crossfade_if_needed(
