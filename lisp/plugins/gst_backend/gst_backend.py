@@ -58,7 +58,7 @@ class GstBackend(Plugin, BaseBackend):
         super().__init__(app)
 
         # Initialize GStreamer
-        Gst.init(None)
+        Gst.init([])
         # Register GStreamer settings widgets
         AppConfigurationDialog.registerSettingsPage(
             "plugins.gst", GstSettings, GstBackend.Config
