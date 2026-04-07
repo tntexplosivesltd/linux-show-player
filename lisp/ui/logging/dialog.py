@@ -129,7 +129,7 @@ class MultiMessagesBox(QDialog):
             self.detailsText.setFixedWidth(width if width < 800 else 800)
 
             self.detailsButton.setVisible(bool(details))
-            # If no details, than hide the widget, otherwise keep it's current
+            # If no details, than hide the widget, otherwise keep its current
             # visibility unchanged
             if not details:
                 self.detailsText.hide()

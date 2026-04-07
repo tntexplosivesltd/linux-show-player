@@ -29,7 +29,7 @@ class HasPropertiesMeta(ABCMeta):
     of keeping an update register of all the properties in the class and
     to propagate the changes in all the hierarchy.
 
-    On it's own this metaclass it's not very useful, look at the HasProperty
+    On its own this metaclass is not very useful, look at the HasProperty
     class for a comprehensive implementation.
 
     Note:

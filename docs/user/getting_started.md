@@ -5,7 +5,7 @@ hide-toc: true
 # Getting Started
 
 Before diving into the different aspects of LiSP you should take a moment to understand
-some of it's base concepts.
+some of its base concepts.
 
 ## Shows
 

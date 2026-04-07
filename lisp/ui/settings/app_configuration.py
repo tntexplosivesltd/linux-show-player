@@ -88,7 +88,7 @@ class AppConfigurationDialog(QDialog):
         try:
             if page_class is None:
                 # The current node have no page, use the parent model-index
-                # as parent for it's children
+                # as parent for its children
                 model_index = model_parent
             else:
                 page_instance = page_class()
