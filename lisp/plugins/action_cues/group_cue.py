@@ -87,6 +87,17 @@ class GroupCue(Cue):
                 cues.append(cue)
         return cues
 
+    def execute(self, action=CueAction.Default):
+        # Block start if no children can be resolved
+        if action in (
+            CueAction.Default,
+            CueAction.Start,
+            CueAction.FadeInStart,
+        ):
+            if not self._resolve_children():
+                return
+        return super().execute(action)
+
     def __start__(self, fade=False):
         children = self._resolve_children()
         if not children:
