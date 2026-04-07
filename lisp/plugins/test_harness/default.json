@@ -1,0 +1,8 @@
+{
+    "_version_": "1",
+    "_enabled_": false,
+    "host": "127.0.0.1",
+    "port": 8070,
+    "maxEventBuffer": 1000,
+    "defaultWaitTimeout": 10.0
+}
