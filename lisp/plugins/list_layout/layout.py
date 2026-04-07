@@ -475,10 +475,15 @@ class ListLayout(CueLayout):
     def _group_cues(self, cues):
         from lisp.plugins.action_cues.group_cue import GroupCue
 
-        # Filter out cues that are already in a group or are GroupCues
+        # Filter out cues that are already in a live group or are
+        # GroupCues. Stale group_id (parent deleted) is allowed.
         cues = [
             c for c in cues
-            if not c.group_id and not isinstance(c, GroupCue)
+            if not isinstance(c, GroupCue)
+            and (
+                not c.group_id
+                or self.app.cue_model.get(c.group_id) is None
+            )
         ]
         if len(cues) < 1:
             return
