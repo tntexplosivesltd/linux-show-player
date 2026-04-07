@@ -140,7 +140,10 @@ class GroupCue(Cue):
         else:
             child.execute(CueAction.Start)
 
-        # Arm crossfade monitoring if needed
+        self._arm_crossfade_if_needed(index, children)
+
+    def _arm_crossfade_if_needed(self, index, children):
+        """Arm the crossfade monitor if there is a next child."""
         has_next = index + 1 < len(children)
         can_loop = self.loop and len(children) > 1
         if self.crossfade > 0 and (has_next or can_loop):
@@ -151,7 +154,6 @@ class GroupCue(Cue):
     def _connect_child(self, child, parallel):
         """Connect signal handlers to a child cue. Must hold _lock."""
         if parallel:
-            # Parallel: all end conditions treated the same
             child.end.connect(
                 self._on_child_ended, Connection.QtQueued
             )
@@ -213,7 +215,9 @@ class GroupCue(Cue):
             if child is not None:
                 if parallel:
                     child.end.disconnect(self._on_child_ended)
-                    child.stopped.disconnect(self._on_child_ended)
+                    child.stopped.disconnect(
+                        self._on_child_ended
+                    )
                     child.interrupted.disconnect(
                         self._on_child_ended
                     )
@@ -257,10 +261,12 @@ class GroupCue(Cue):
         if remaining_ms <= crossfade_ms:
             self._stop_crossfade_monitor()
 
-            # Fade out current child using FadeOutStop (proper state
-            # machine path). If no fadeout_duration is configured, set
-            # it temporarily to the crossfade value so FadeOutStop
-            # uses it.
+            # Disconnect the current child BEFORE fading it out,
+            # so its `stopped` signal won't trigger
+            # _on_playlist_child_stopped and kill the group.
+            self._disconnect_child(child, parallel=False)
+
+            # Fade out current child
             if child.fadeout_duration <= 0:
                 child.fadeout_duration = self.crossfade
             child.execute(CueAction.FadeOutStop)
@@ -282,6 +288,11 @@ class GroupCue(Cue):
                     next_child.execute(CueAction.FadeInStart)
                 else:
                     next_child.execute(CueAction.Start)
+
+                # Re-arm crossfade for the next transition
+                self._arm_crossfade_if_needed(
+                    next_index, children
+                )
 
     def _stop_crossfade_monitor(self):
         with self._lock:

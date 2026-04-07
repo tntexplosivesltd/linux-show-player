@@ -250,29 +250,17 @@ class ListLayout(CueLayout):
         self._view.listView.setStandbyIndex(index)
 
     def go(self, action=CueAction.Default, advance=1):
-        # Loop to skip child cues — they are triggered by their group
-        prev_index = -1
-        while True:
-            standby_cue = self.standby_cue()
-            if standby_cue is None:
-                return
+        standby_cue = self.standby_cue()
+        if standby_cue is None:
+            return
 
-            cur_index = self.standby_index()
-            if cur_index == prev_index:
-                # Standby didn't advance (end of list) — stop looping
-                return
-            prev_index = cur_index
-
-            if (
-                standby_cue.group_id
-                and self.app.cue_model.get(standby_cue.group_id)
-                is not None
-            ):
-                if self.auto_continue:
-                    self.set_standby_index(cur_index + advance)
-                    continue
-                return
-            break
+        # Child cues are triggered by their group, not by GO
+        if (
+            standby_cue.group_id
+            and self.app.cue_model.get(standby_cue.group_id)
+            is not None
+        ):
+            return
 
         if standby_cue.execute(action) is False:
             return
@@ -280,7 +268,25 @@ class ListLayout(CueLayout):
         self.cue_executed.emit(standby_cue)
 
         if self.auto_continue:
-            self.set_standby_index(self.standby_index() + advance)
+            self._advance_standby_past_children(advance)
+
+    def _advance_standby_past_children(self, advance=1):
+        """Advance standby, skipping any grouped child cues."""
+        while True:
+            prev = self.standby_index()
+            self.set_standby_index(prev + advance)
+            if self.standby_index() == prev:
+                break  # End of list
+            cue = self.standby_cue()
+            if cue is None:
+                break
+            if (
+                cue.group_id
+                and self.app.cue_model.get(cue.group_id)
+                is not None
+            ):
+                continue  # Skip this child
+            break
 
     def cue_at(self, index):
         return self._list_model.item(index)
@@ -481,24 +487,36 @@ class ListLayout(CueLayout):
             GroupCuesCommand(self.app, self._list_model, cues)
         )
 
-    def _ungroup_cue(self, cue):
+    def _find_group_cue(self, cue):
+        """Return the GroupCue for a cue (itself or its parent)."""
         from lisp.plugins.action_cues.group_cue import GroupCue
 
         if isinstance(cue, GroupCue):
+            return cue
+        if cue.group_id:
+            group = self.app.cue_model.get(cue.group_id)
+            if isinstance(group, GroupCue):
+                return group
+        return None
+
+    def _ungroup_cue(self, cue):
+        group = self._find_group_cue(cue)
+        if group is not None:
             self.app.commands_stack.do(
                 UngroupCuesCommand(
-                    self.app, self._list_model, cue
+                    self.app, self._list_model, group
                 )
             )
 
     def _ungroup_cues(self, cues):
-        from lisp.plugins.action_cues.group_cue import GroupCue
-
+        seen = set()
         for cue in cues:
-            if isinstance(cue, GroupCue):
+            group = self._find_group_cue(cue)
+            if group is not None and group.id not in seen:
+                seen.add(group.id)
                 self.app.commands_stack.do(
                     UngroupCuesCommand(
-                        self.app, self._list_model, cue
+                        self.app, self._list_model, group
                     )
                 )
 
@@ -523,30 +541,33 @@ class ListLayout(CueLayout):
             ):
                 return
 
+            # Find the next non-child cue (skip grouped children)
             next_index = cue.index + 1
-            if next_index < len(self._list_model):
+            while next_index < len(self._list_model):
                 next_cue = self._list_model.item(next_index)
-
-                # Skip grouped children — their group handles them
                 if (
                     next_cue.group_id
                     and self.app.cue_model.get(
                         next_cue.group_id
                     ) is not None
                 ):
+                    next_index += 1
+                    continue
+                break
+            else:
+                return  # No more cues
+
+            action = CueNextAction(cue.next_action)
+            if (
+                action == CueNextAction.SelectAfterEnd
+                or action == CueNextAction.SelectAfterWait
+            ):
+                self.set_standby_index(next_index)
+            else:
+                if next_cue.execute() is False:
                     return
 
-                action = CueNextAction(cue.next_action)
-                if (
-                    action == CueNextAction.SelectAfterEnd
-                    or action == CueNextAction.SelectAfterWait
-                ):
-                    self.set_standby_index(next_index)
-                else:
-                    if next_cue.execute() is False:
-                        return
-
-                    if self.auto_continue and next_cue is self.standby_cue():
-                        self.set_standby_index(next_index + 1)
+                if self.auto_continue and next_cue is self.standby_cue():
+                    self._advance_standby_past_children()
         except (IndexError, KeyError):
             pass
