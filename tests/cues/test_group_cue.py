@@ -193,6 +193,115 @@ class TestStopDisconnectsChildren:
         assert len(group._connected_children) == 0
 
 
+class TestGroupInterrupt:
+    def test_interrupt_returns_true(self, group, mock_app):
+        """__interrupt__ should return True like __stop__/__pause__."""
+        c1 = _make_child("c1", state=CueState.Running)
+        mock_app.cue_model.get = lambda cid: {
+            "c1": c1
+        }.get(cid)
+        group.children = ["c1"]
+        group.group_mode = "parallel"
+        group.__start__(fade=False)
+
+        result = group.__interrupt__(fade=False)
+        assert result is True
+
+
+class TestResumeFromPause:
+    def test_parallel_resumes_paused_children(
+        self, group, mock_app
+    ):
+        """After pause, start should resume paused children,
+        not restart them from scratch."""
+        c1 = _make_child("c1", state=CueState.Pause)
+        c2 = _make_child("c2", state=CueState.Pause)
+        mock_app.cue_model.get = lambda cid: {
+            "c1": c1, "c2": c2
+        }.get(cid)
+        group.children = ["c1", "c2"]
+        group.group_mode = "parallel"
+
+        group.__start__(fade=False)
+
+        c1.execute.assert_called_once_with(CueAction.Resume)
+        c2.execute.assert_called_once_with(CueAction.Resume)
+
+    def test_playlist_resumes_from_current_index(
+        self, group, mock_app
+    ):
+        """After pause at index 1, start should resume the
+        paused child at that index, not reset to index 0."""
+        c1 = _make_child("c1", state=CueState.Stop)
+        c2 = _make_child("c2", state=CueState.Pause)
+        mock_app.cue_model.get = lambda cid: {
+            "c1": c1, "c2": c2
+        }.get(cid)
+        group.children = ["c1", "c2"]
+        group.group_mode = "playlist"
+        group._playlist_index = 1
+
+        group.__start__(fade=False)
+
+        assert group._playlist_index == 1
+        c2.execute.assert_called_once_with(CueAction.Resume)
+        c1.execute.assert_not_called()
+
+
+class TestCrossfadePreservation:
+    def test_crossfade_preserves_child_fadeout_duration(
+        self, group, mock_app
+    ):
+        """Crossfade should not permanently modify a child's
+        fadeout_duration property (it would be serialized)."""
+        c1 = _make_child(
+            "c1", state=CueState.Running, duration=10000
+        )
+        c1.current_time = MagicMock(return_value=9500)
+        c1.fadeout_duration = 0
+        c2 = _make_child("c2")
+        mock_app.cue_model.get = lambda cid: {
+            "c1": c1, "c2": c2
+        }.get(cid)
+        group.children = ["c1", "c2"]
+        group.group_mode = "playlist"
+        group.crossfade = 1.0
+
+        group._playlist_index = 0
+        group._crossfade_armed = True
+        group._connected_children = {"c1"}
+
+        group._check_crossfade()
+
+        assert c1.fadeout_duration == 0
+
+    def test_crossfade_preserves_next_child_fadein_duration(
+        self, group, mock_app
+    ):
+        """Crossfade should not permanently modify the next
+        child's fadein_duration property."""
+        c1 = _make_child(
+            "c1", state=CueState.Running, duration=10000
+        )
+        c1.current_time = MagicMock(return_value=9500)
+        c2 = _make_child("c2")
+        c2.fadein_duration = 0
+        mock_app.cue_model.get = lambda cid: {
+            "c1": c1, "c2": c2
+        }.get(cid)
+        group.children = ["c1", "c2"]
+        group.group_mode = "playlist"
+        group.crossfade = 1.0
+
+        group._playlist_index = 0
+        group._crossfade_armed = True
+        group._connected_children = {"c1"}
+
+        group._check_crossfade()
+
+        assert c2.fadein_duration == 0
+
+
 class TestGroupIdProperty:
     def test_group_id_default(self, mock_app):
         from lisp.cues.cue import Cue
