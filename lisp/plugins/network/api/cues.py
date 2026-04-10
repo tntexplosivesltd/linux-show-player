@@ -59,11 +59,13 @@ class CueActionEndPoint(EndPoint):
 
         try:
             data = request.get_media()
+            if not isinstance(data, dict):
+                raise ValueError("Request body must be a JSON object")
             action = CueAction(data.get("action"))
 
             cue.execute(action=action)
             response.status = falcon.HTTP_CREATED
-        except ValueError:
+        except (ValueError, AttributeError):
             response.status = falcon.HTTP_BAD_REQUEST
 
 
