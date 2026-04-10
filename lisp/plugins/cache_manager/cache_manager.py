@@ -1,3 +1,4 @@
+import logging
 import os
 from pathlib import Path
 from threading import Thread
@@ -11,16 +12,17 @@ from PyQt5.QtWidgets import (
     QLabel,
     QSpinBox,
     QHBoxLayout,
-    QMessageBox,
 )
 
 from lisp import DEFAULT_CACHE_DIR
 from lisp.core.plugin import Plugin
-from lisp.core.signal import Signal, Connection
 from lisp.plugins import get_plugin
 from lisp.ui.settings.app_configuration import AppConfigurationDialog
 from lisp.ui.settings.pages import SettingsPage
 from lisp.ui.ui_utils import translate
+from lisp.ui.widgets.notification import NotificationLevel
+
+logger = logging.getLogger(__name__)
 
 
 class CacheManager(Plugin):
@@ -35,10 +37,6 @@ class CacheManager(Plugin):
             "plugins.cache_manager", CacheManagerSettings, CacheManager.Config
         )
 
-        self.threshold_warning = Signal()
-        self.threshold_warning.connect(
-            self._show_threshold_warning, Connection.QtQueued
-        )
         Thread(target=self._check_cache_size).start()
 
     def _check_cache_size(self):
@@ -46,21 +44,15 @@ class CacheManager(Plugin):
         if threshold > 0:
             cache_size = self.cache_size()
             if cache_size > threshold:
-                self.threshold_warning.emit(threshold, cache_size)
-
-    def _show_threshold_warning(self, threshold, _):
-        QMessageBox.warning(
-            self.app.window,
-            translate(
-                "CacheManager",
-                "Cache size",
-            ),
-            translate(
-                "CacheManager",
-                "The cache has exceeded {}. Consider clean it.\n"
-                "You can do it in the application settings.",
-            ).format(humanize.naturalsize(threshold)),
-        )
+                message = translate(
+                    "CacheManager",
+                    "The cache has exceeded {}. "
+                    "Consider cleaning it in Settings.",
+                ).format(humanize.naturalsize(threshold))
+                logger.warning(message)
+                self.app.notify.emit(
+                    message, NotificationLevel.Warning
+                )
 
     def cache_root(self):
         cache_dir = self.app.conf.get("cache.position", "")

@@ -28,6 +28,7 @@ from lisp.core.loading import load_classes
 from lisp.core.plugin import Plugin, PluginNotLoadedError, PluginState
 from lisp.core.plugin_loader import PluginsLoader
 from lisp.ui.ui_utils import translate, install_translation
+from lisp.ui.widgets.notification import NotificationLevel
 
 logger = logging.getLogger(__name__)
 
@@ -105,10 +106,12 @@ class PluginsManager:
             # Register plugin
             self._plugins[name] = plugin
         except Exception:
-            logger.exception(
-                translate(
-                    "PluginsError", 'Failed to register plugin: "{}"'
-                ).format(name)
+            message = translate(
+                "PluginsError", 'Failed to register plugin: "{}"'
+            ).format(name)
+            logger.exception(message)
+            self.application.notify.emit(
+                message, NotificationLevel.Warning
             )
 
     def is_loaded(self, plugin_name: str) -> bool:
@@ -147,10 +150,13 @@ class PluginsManager:
                     )
                 )
             except Exception:
-                logger.exception(
-                    translate(
-                        "PluginsError", 'Failed to terminate plugin: "{}"'
-                    ).format(name)
+                message = translate(
+                    "PluginsError",
+                    'Failed to terminate plugin: "{}"',
+                ).format(name)
+                logger.exception(message)
+                self.application.notify.emit(
+                    message, NotificationLevel.Warning
                 )
 
         self._plugins.clear()

@@ -788,3 +788,41 @@ RunningCueWidget>QWidget {
     border: none;
     background-color: none;
 }
+
+/* Toast Notifications */
+
+#NotificationToast {
+    border-radius: 6px;
+    padding: 0px;
+}
+
+#NotificationToast[level="info"] {
+    background-color: #404858;
+    border: 1px solid #5a6a80;
+    color: #c8d0dc;
+}
+
+#NotificationToast[level="warning"] {
+    background-color: #504030;
+    border: 1px solid #806830;
+    color: #e0c880;
+}
+
+#NotificationToastProgress {
+    border: none;
+    border-radius: 0px;
+    background: transparent;
+    height: 2px;
+}
+
+#NotificationToastProgress::chunk {
+    border-radius: 0px;
+}
+
+#NotificationToastProgress[level="info"]::chunk {
+    background-color: #80AAD5;
+}
+
+#NotificationToastProgress[level="warning"]::chunk {
+    background-color: #FFAA00;
+}

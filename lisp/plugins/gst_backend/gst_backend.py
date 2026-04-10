@@ -28,6 +28,7 @@ from lisp.core.decorators import memoize
 from lisp.core.plugin import Plugin
 from lisp.cues.media_cue import MediaCue
 from lisp.plugins.gst_backend import config, elements, settings
+from lisp.ui.widgets.notification import NotificationLevel
 from lisp.plugins.gst_backend.gi_repository import Gst
 from lisp.plugins.gst_backend.gst_media_cue import (
     GstCueFactory,
@@ -112,11 +113,22 @@ class GstBackend(Plugin, BaseBackend):
         if duration is None or duration <= 0:
             duration = self.uri_duration(uri)
 
-        return GstWaveform(
+        waveform = GstWaveform(
             uri,
             duration,
             cache_dir=self.app.conf.get("cache.position", ""),
         )
+
+        # Notify operator when waveform generation fails
+        unquoted = uri.unquoted_uri
+        waveform.failed.connect(
+            lambda: self.app.notify.emit(
+                f'Cannot generate waveform for "{unquoted}"',
+                NotificationLevel.Warning,
+            )
+        )
+
+        return waveform
 
     def _add_uri_audio_cue(self):
         """Add audio MediaCue(s) form user-selected files"""

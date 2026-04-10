@@ -4,12 +4,14 @@ from lisp.core.exclusive_manager import ExclusiveManager
 from lisp.cues.cue import CueState
 
 
-def _make_model(cues=None):
-    """Create a mock CueModel that iterates over the given cues."""
-    model = MagicMock()
+def _make_app(cues=None):
+    """Create a mock Application with a CueModel."""
+    app = MagicMock()
     cue_list = cues or []
-    model.__iter__ = MagicMock(return_value=iter(cue_list))
-    return model
+    app.cue_model.__iter__ = MagicMock(
+        return_value=iter(cue_list)
+    )
+    return app
 
 
 def _make_cue(exclusive=False, state=CueState.Stop, name="Test"):
@@ -23,8 +25,8 @@ def _make_cue(exclusive=False, state=CueState.Stop, name="Test"):
 class TestIsStartBlocked:
     def test_no_running_cues_not_blocked(self):
         cue = _make_cue()
-        model = _make_model([cue])
-        mgr = ExclusiveManager(model)
+        app = _make_app([cue])
+        mgr = ExclusiveManager(app)
         assert mgr.is_start_blocked(cue) is False
 
     def test_blocked_when_exclusive_cue_running(self):
@@ -32,8 +34,8 @@ class TestIsStartBlocked:
             exclusive=True, state=CueState.Running, name="Running"
         )
         new = _make_cue(name="New")
-        model = _make_model([running, new])
-        mgr = ExclusiveManager(model)
+        app = _make_app([running, new])
+        mgr = ExclusiveManager(app)
         assert mgr.is_start_blocked(new) is True
 
     def test_not_blocked_when_non_exclusive_running(self):
@@ -41,8 +43,8 @@ class TestIsStartBlocked:
             exclusive=False, state=CueState.Running
         )
         new = _make_cue()
-        model = _make_model([running, new])
-        mgr = ExclusiveManager(model)
+        app = _make_app([running, new])
+        mgr = ExclusiveManager(app)
         assert mgr.is_start_blocked(new) is False
 
     def test_exclusive_blocks_other_exclusive(self):
@@ -50,16 +52,16 @@ class TestIsStartBlocked:
             exclusive=True, state=CueState.Running
         )
         new = _make_cue(exclusive=True)
-        model = _make_model([running, new])
-        mgr = ExclusiveManager(model)
+        app = _make_app([running, new])
+        mgr = ExclusiveManager(app)
         assert mgr.is_start_blocked(new) is True
 
     def test_not_blocked_by_self(self):
         cue = _make_cue(
             exclusive=True, state=CueState.Running
         )
-        model = _make_model([cue])
-        mgr = ExclusiveManager(model)
+        app = _make_app([cue])
+        mgr = ExclusiveManager(app)
         assert mgr.is_start_blocked(cue) is False
 
     def test_blocked_by_prewait_state(self):
@@ -67,8 +69,8 @@ class TestIsStartBlocked:
             exclusive=True, state=CueState.PreWait
         )
         new = _make_cue()
-        model = _make_model([running, new])
-        mgr = ExclusiveManager(model)
+        app = _make_app([running, new])
+        mgr = ExclusiveManager(app)
         assert mgr.is_start_blocked(new) is True
 
     def test_blocked_by_postwait_state(self):
@@ -76,8 +78,8 @@ class TestIsStartBlocked:
             exclusive=True, state=CueState.PostWait
         )
         new = _make_cue()
-        model = _make_model([running, new])
-        mgr = ExclusiveManager(model)
+        app = _make_app([running, new])
+        mgr = ExclusiveManager(app)
         assert mgr.is_start_blocked(new) is True
 
     def test_not_blocked_by_stopped_exclusive(self):
@@ -85,8 +87,8 @@ class TestIsStartBlocked:
             exclusive=True, state=CueState.Stop
         )
         new = _make_cue()
-        model = _make_model([stopped, new])
-        mgr = ExclusiveManager(model)
+        app = _make_app([stopped, new])
+        mgr = ExclusiveManager(app)
         assert mgr.is_start_blocked(new) is False
 
     def test_not_blocked_by_paused_exclusive(self):
@@ -94,6 +96,6 @@ class TestIsStartBlocked:
             exclusive=True, state=CueState.Pause
         )
         new = _make_cue()
-        model = _make_model([paused, new])
-        mgr = ExclusiveManager(model)
+        app = _make_app([paused, new])
+        mgr = ExclusiveManager(app)
         assert mgr.is_start_blocked(new) is False
