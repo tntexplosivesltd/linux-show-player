@@ -60,6 +60,23 @@ class UriAudioCueFactory(GstCueFactory):
         return cue
 
 
+class UriVideoCueFactory(GstCueFactory):
+    def __init__(self, base_pipeline):
+        super().__init__(base_pipeline)
+        self.input = "UriAvInput"
+
+    def __call__(self, app, id=None, uri=None):
+        cue = super().__call__(app, id=id)
+
+        if uri is not None:
+            try:
+                cue.media.elements.UriAvInput.uri = uri
+            except AttributeError:
+                pass
+
+        return cue
+
+
 class CaptureAudioCueFactory(GstCueFactory):
     def __init__(self, base_pipeline):
         super().__init__(base_pipeline)

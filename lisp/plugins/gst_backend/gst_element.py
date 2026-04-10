@@ -89,6 +89,18 @@ class GstMediaElement(MediaElement):
                 return self.src().unlink(sink)
         return False
 
+    def video_src(self):
+        """Return the GstElement used as video src, if any"""
+        return None
+
+    def post_link(self, all_elements):
+        """Called after all elements are linked in the linear chain.
+
+        Override to wire non-linear branches (e.g. video paths).
+
+        :param all_elements: The GstMediaElements collection
+        """
+
 
 class GstSrcElement(GstMediaElement):
     ElementType = ElementType.Input

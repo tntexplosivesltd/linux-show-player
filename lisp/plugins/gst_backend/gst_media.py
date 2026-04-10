@@ -257,6 +257,11 @@ class GstMedia(Media):
                     exc_info=True,
                 )
 
+        # Post-link pass: allow compound elements to wire non-linear
+        # branches (e.g. video paths from UriAVInput to VideoSink)
+        for element in self.elements:
+            element.post_link(self.elements)
+
         # Reload the elements properties
         self.elements.update_properties(elements_properties)
 
