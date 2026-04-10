@@ -80,10 +80,10 @@ class ArtNetTimecodeSender:
         packet.append(14)  # ProtVerLo
         packet.append(0)  # Filler1
         packet.append(0)  # StreamId
-        packet.append(frames)  # Frames
-        packet.append(seconds)  # Seconds
-        packet.append(minutes)  # Minutes
-        packet.append(hours)  # Hours
+        packet.append(max(0, min(frames, 255)))  # Frames
+        packet.append(max(0, min(seconds, 59)))  # Seconds
+        packet.append(max(0, min(minutes, 59)))  # Minutes
+        packet.append(max(0, min(hours, 23)))  # Hours
         packet.append(self.FORMAT_CODES[fmt])  # Type
 
         return packet

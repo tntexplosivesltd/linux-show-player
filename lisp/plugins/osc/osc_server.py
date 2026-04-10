@@ -124,6 +124,7 @@ class OscServer:
             if self.__running:
                 self.__srv.shutdown()
                 self.__srv.server_close()
+                self.__thread.join(timeout=5)
                 self.__running = False
 
             logger.info(translate("OscServerInfo", "OSC server stopped"))
