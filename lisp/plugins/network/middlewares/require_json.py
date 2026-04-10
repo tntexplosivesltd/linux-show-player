@@ -9,7 +9,7 @@ class RequireJSONMiddleware:
         if req.method not in ("POST", "PUT", "PATCH"):
             return
 
-        if "application/json" not in req.content_type:
+        if not req.content_type or "application/json" not in req.content_type:
             raise HTTPUnsupportedMediaType(
                 description="Content-Type must be application/json"
             )
