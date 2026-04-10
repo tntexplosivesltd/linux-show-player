@@ -226,12 +226,14 @@ class MediaCue(Cue):
 
     def _on_eos(self):
         with self._st_lock:
-            self.__fader.stop()
+            if self.__fader is not None:
+                self.__fader.stop()
             self._ended()
 
     def _on_error(self):
         with self._st_lock:
-            self.__fader.stop()
+            if self.__fader is not None:
+                self.__fader.stop()
             self._error()
 
     def _can_fade(self):

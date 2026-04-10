@@ -79,6 +79,36 @@ class TestVideoPipelineCreation:
         assert src_pad.get_peer() is not None
 
 
+class TestImagePipelineCreation:
+    """Verify image pipelines are constructed correctly."""
+
+    def test_image_pipeline_creates_elements(self):
+        media = GstMedia()
+        media.pipe = ("ImageInput", "VideoSink")
+        assert len(media.elements) == 2
+
+    def test_image_pipeline_video_branch_wired(self):
+        """Video branch from ImageInput to VideoSink."""
+        media = GstMedia()
+        media.pipe = ("ImageInput", "VideoSink")
+
+        video_src = media.elements[0].video_src()
+        src_pad = video_src.get_static_pad("src")
+        assert src_pad.get_peer() is not None
+
+    def test_image_pipeline_no_audio_src(self):
+        """ImageInput has no audio source."""
+        media = GstMedia()
+        media.pipe = ("ImageInput", "VideoSink")
+        assert media.elements[0].src() is None
+
+    def test_image_pipeline_default_duration(self):
+        """ImageInput provides a default 5s duration."""
+        media = GstMedia()
+        media.pipe = ("ImageInput", "VideoSink")
+        assert media.duration == 5000
+
+
 class TestProductionVideoPipeline:
     """Test the full default video pipeline from default.json."""
 

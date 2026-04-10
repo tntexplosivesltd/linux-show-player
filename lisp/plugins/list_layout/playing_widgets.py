@@ -192,11 +192,14 @@ class RunningMediaCueWidget(RunningCueWidget):
         super().__init__(cue, config, **kwargs)
         self._dbmeter_element = None
 
+        self.waveform = None
         if (
             config.get("show.waveformSlider", False)
             and cue.media.input_uri() is not None
         ):
             self.waveform = get_backend().media_waveform(cue.media)
+
+        if self.waveform is not None:
             self.seekSlider = WaveformSlider(
                 self.waveform, parent=self.gridLayoutWidget
             )

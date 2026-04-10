@@ -77,6 +77,32 @@ class UriVideoCueFactory(GstCueFactory):
         return cue
 
 
+class UriImageCueFactory(GstCueFactory):
+    def __init__(self, base_pipeline, duration=5000):
+        super().__init__(base_pipeline)
+        self.input = "ImageInput"
+        self._duration = duration
+
+    def __call__(self, app, id=None, uri=None):
+        cue = super().__call__(app, id=id)
+
+        if uri is not None:
+            try:
+                cue.media.elements.ImageInput.uri = uri
+            except AttributeError:
+                pass
+
+        # Set display duration on the element itself.
+        # ImageInput's EOS timer uses this value, and GstMedia
+        # reads elements[0].duration for the cue's duration.
+        try:
+            cue.media.elements.ImageInput.duration = self._duration
+        except AttributeError:
+            pass
+
+        return cue
+
+
 class CaptureAudioCueFactory(GstCueFactory):
     def __init__(self, base_pipeline):
         super().__init__(base_pipeline)
