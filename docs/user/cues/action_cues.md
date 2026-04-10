@@ -2,6 +2,31 @@
 
 Actions cues allows to control other cues status or parameters.
 
+## Group Cue
+
+This cue groups other cues together, providing two playback modes. Child cues are visually indented in the list layout and are triggered by the group rather than by the GO button.
+
+To create a group, select multiple cues in the list layout, then right-click and choose **Group selected**. To dissolve a group, right-click the group cue (or any of its children) and choose **Ungroup**.
+
+### Options (Group Settings)
+
+* **Mode:**
+    * *Parallel:* Start all children simultaneously. The group remains running until the last child ends.
+    * *Playlist:* Play children sequentially, one after another. Designed for pre-show/intermission music.
+* **Crossfade:** *(Playlist mode only)* Crossfade duration in seconds between consecutive tracks. When the current child has this much time remaining, the next child starts with a fade-in while the current one fades out.
+* **Loop:** *(Playlist mode only)* When the last child finishes, loop back to the first child.
+
+### Behavior
+
+| Action | Parallel | Playlist |
+|---|---|---|
+| **Start** | Starts all children | Starts first child |
+| **Stop** | Stops all running children | Stops current child |
+| **Pause** | Pauses all running children | Pauses current child |
+| **Interrupt** | Interrupts all running children | Interrupts current child |
+
+In playlist mode, when a child ends naturally the next child starts automatically. If a child is manually stopped or interrupted, the entire group stops.
+
 ## Collection Cue
 
 This cue allow to tigger multiple cues at once, for each cue a different action can be specified.<br>
