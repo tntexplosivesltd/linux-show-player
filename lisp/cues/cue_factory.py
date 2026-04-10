@@ -39,6 +39,10 @@ class CueFactory:
         """
         self.__registry[cue_type] = factory
 
+    def registered_types(self):
+        """Return a list of all registered cue type names."""
+        return list(self.__registry.keys())
+
     def has_factory(self, cue_type):
         """Return True if there is a factory for `cue_type`
 

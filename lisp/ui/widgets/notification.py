@@ -243,6 +243,12 @@ class NotificationToast(QFrame):
 
         self._anim.setStartValue(self.pos())
         self._anim.setEndValue(self._hidden_pos())
+        try:
+            self._anim.finished.disconnect(
+                self._on_slide_out_finished
+            )
+        except TypeError:
+            pass
         self._anim.finished.connect(self._on_slide_out_finished)
         self._anim.start()
 

@@ -257,33 +257,11 @@ class GroupCue(Cue):
         parallel = self.group_mode == "parallel"
         with self._lock:
             child_ids = set(self._connected_children)
-            self._connected_children.clear()
 
         for child_id in child_ids:
             child = self.app.cue_model.get(child_id)
             if child is not None:
-                if parallel:
-                    child.end.disconnect(self._on_child_ended)
-                    child.stopped.disconnect(
-                        self._on_child_ended
-                    )
-                    child.interrupted.disconnect(
-                        self._on_child_ended
-                    )
-                    child.error.disconnect(self._on_child_ended)
-                else:
-                    child.end.disconnect(
-                        self._on_playlist_child_ended
-                    )
-                    child.stopped.disconnect(
-                        self._on_playlist_child_stopped
-                    )
-                    child.interrupted.disconnect(
-                        self._on_playlist_child_stopped
-                    )
-                    child.error.disconnect(
-                        self._on_playlist_child_stopped
-                    )
+                self._disconnect_child(child, parallel)
 
     def _check_crossfade(self):
         """Clock callback: check if crossfade point is reached."""
