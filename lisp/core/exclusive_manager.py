@@ -42,18 +42,20 @@ class ExclusiveManager:
         A cue is blocked if any exclusive cue is currently running.
         """
         with self._lock:
-            for other in list(self._cue_model):
-                if other is cue:
-                    continue
-                if other.exclusive and other.state & CueState.IsRunning:
-                    message = (
-                        f'Blocked by exclusive cue '
-                        f'#{other.index + 1} "{other.name}"'
-                    )
-                    logger.info(message)
-                    self._app.notify.emit(
-                        message, NotificationLevel.Info
-                    )
-                    return True
+            cues = list(self._cue_model)
+
+        for other in cues:
+            if other is cue:
+                continue
+            if other.exclusive and other.state & CueState.IsRunning:
+                message = (
+                    f'Blocked by exclusive cue '
+                    f'#{other.index + 1} "{other.name}"'
+                )
+                logger.info(message)
+                self._app.notify.emit(
+                    message, NotificationLevel.Info
+                )
+                return True
 
         return False

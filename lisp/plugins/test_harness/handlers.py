@@ -53,7 +53,7 @@ def register_all(dispatcher, app, signal_manager):
         return {"pong": True, "timestamp": time.time()}
 
     def handle_cue_types(params):
-        return list(app.cue_factory._CueFactory__registry.keys())
+        return app.cue_factory.registered_types()
 
     # --- Session ---
 
@@ -352,9 +352,17 @@ def register_all(dispatcher, app, signal_manager):
         _require_session()
         return [serialize_cue_brief(cue) for cue in app.layout.selected_cues()]
 
+    def _require_list_layout():
+        from lisp.plugins.list_layout.layout import ListLayout
+        if not isinstance(app.layout, ListLayout):
+            raise AppError(
+                "This operation requires ListLayout"
+            )
+
     def handle_layout_selection_mode(params):
         """Get or set selection mode."""
         _require_session()
+        _require_list_layout()
         enable = params.get("enable")
         if enable is not None:
             invoke_on_main_thread(
@@ -365,6 +373,7 @@ def register_all(dispatcher, app, signal_manager):
     def handle_layout_select_cues(params):
         """Select cues by index list. Enables selection mode first."""
         _require_session()
+        _require_list_layout()
         indices = params.get("indices", [])
 
         def do_select():

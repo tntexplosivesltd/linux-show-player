@@ -205,6 +205,10 @@ class SignalManager:
         deadline = time.monotonic() + timeout
 
         while True:
+            # Clear before scanning so events arriving during the
+            # scan will re-set the flag for the next iteration.
+            sub.notify.clear()
+
             # Snapshot the deque to avoid concurrent mutation issues
             snapshot = list(sub.events)
             for i, event in enumerate(snapshot):
@@ -226,7 +230,6 @@ class SignalManager:
 
             # Wait for notification with short timeout to recheck
             sub.notify.wait(timeout=min(0.1, remaining))
-            sub.notify.clear()
 
     def list_signals(self):
         """Return list of available signal names."""
