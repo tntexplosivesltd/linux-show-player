@@ -86,14 +86,15 @@ The harness provides 42 methods across 7 namespaces: `session.*`, `cue.*`, `layo
 - **Command Pattern** (`lisp/command/`): All undoable user actions go through `CommandsStack` for undo/redo support.
 - **Plugin System** (`lisp/core/plugin.py`, `lisp/plugins/`): Plugins declare `Name`, `Depends`, `OptDepends`, `CorePlugin`. Loaded dynamically by `PluginsManager` with dependency resolution. Each plugin is a directory under `lisp/plugins/` with its own `__init__.py` exporting a `Plugin` subclass.
 - **CueFactory** (`lisp/cues/cue_factory.py`): Registry pattern for creating cue types by name.
+- **Cue Groups** (`lisp/plugins/action_cues/group_cue.py`): `GroupCue` provides QLab-style grouping with two modes — **parallel** (start all children simultaneously) and **playlist** (sequential playback with optional crossfade and looping). The model stays flat: all cues live in `CueModel`; hierarchy is expressed via a `group_id` property on each child cue pointing to its parent `GroupCue`. Grouping/ungrouping is done via `GroupCuesCommand`/`UngroupCuesCommand` (`lisp/command/group.py`), available from the list layout's right-click menu ("Group selected" / "Ungroup").
 
 ### Package Layout
 
 - `lisp/core/` - Framework essentials: signals, configuration (JSON-based with default/user fallback), plugin infrastructure, session management, decorators, singleton
-- `lisp/cues/` - `Cue` base class, `MediaCue` subclass, `CueModel` (model-view for cue lists), `CueFactory`
+- `lisp/cues/` - `Cue` base class (has `group_id` property for group membership), `MediaCue` subclass, `CueModel` (flat `{id: cue}` dict), `CueFactory`
 - `lisp/backend/` - Abstract `Backend` interface for audio/video playback; concrete implementation lives in `lisp/plugins/gst_backend/`
 - `lisp/layout/` - `CueLayout` base for organizing/displaying cues (concrete: `cart_layout`, `list_layout` plugins)
-- `lisp/command/` - Undo/redo command infrastructure
+- `lisp/command/` - Undo/redo command infrastructure (includes `group.py` for group/ungroup commands)
 - `lisp/ui/` - Qt5 widgets, main window, settings dialogs, themes, icon themes
 - `lisp/plugins/` - All functionality beyond core: GStreamer backend, MIDI, OSC, action cues, layouts, network control, timecode, presets, etc.
 

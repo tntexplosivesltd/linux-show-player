@@ -5,7 +5,7 @@ Cues are the main component of every show/session.
 There are multiple types of cues, able to perform different tasks, we can organize them in the following categories:
 
 * **Media cues:** used to play multimedia contents
-* **Action cues:** used to trigger/alter other cues
+* **Action cues:** used to trigger/alter other cues (includes Group Cue for parallel/playlist grouping)
 * **Integration cues:** used to interact with external devices or application via common protocols
 * **Misc cues:** cues that don't fit in others categories
 
