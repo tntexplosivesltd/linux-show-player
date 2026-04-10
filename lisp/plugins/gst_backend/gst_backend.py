@@ -33,6 +33,7 @@ from lisp.plugins.gst_backend.gi_repository import Gst
 from lisp.plugins.gst_backend.gst_media_cue import (
     GstCueFactory,
     UriAudioCueFactory,
+    UriVideoCueFactory,
 )
 from lisp.plugins.gst_backend.gst_media_settings import GstMediaSettings
 from lisp.plugins.gst_backend.gst_settings import GstSettings
@@ -74,12 +75,18 @@ class GstBackend(Plugin, BaseBackend):
 
         # Register GstMediaCue factory
         app.cue_factory.register_factory("GstMediaCue", GstCueFactory(tuple()))
-        # Add Menu entry
+        # Add Menu entries
         self.app.window.registerCueMenu(
             translate("GstBackend", "Audio cue (from file)"),
             self._add_uri_audio_cue,
             category=QT_TRANSLATE_NOOP("CueCategory", "Media cues"),
             shortcut="CTRL+M",
+        )
+        self.app.window.registerCueMenu(
+            translate("GstBackend", "Video cue (from file)"),
+            self._add_uri_video_cue,
+            category=QT_TRANSLATE_NOOP("CueCategory", "Media cues"),
+            shortcut="CTRL+SHIFT+M",
         )
 
         # Load elements and their settings-widgets
@@ -131,26 +138,50 @@ class GstBackend(Plugin, BaseBackend):
         return waveform
 
     def _add_uri_audio_cue(self):
-        """Add audio MediaCue(s) form user-selected files"""
-        # Get the last visited directory, or use the session-file location
+        """Add audio MediaCue(s) from user-selected files"""
         directory = GstBackend.Config.get("mediaLookupDir", "")
         if not os.path.exists(directory):
             directory = self.app.session.dir()
 
-        # Open a filechooser, at the last visited directory
         files, _ = QFileDialog.getOpenFileNames(
             self.app.window,
             translate("GstBackend", "Select media files"),
             directory,
-            qfile_filters(self.supported_extensions(), anyfile=True),
+            qfile_filters(
+                {"audio": self.supported_extensions()["audio"]},
+                anyfile=True,
+            ),
         )
 
         if files:
-            # Updated the last visited directory
-            GstBackend.Config["mediaLookupDir"] = os.path.dirname(files[0])
+            GstBackend.Config["mediaLookupDir"] = os.path.dirname(
+                files[0]
+            )
             GstBackend.Config.write()
-
             self.add_cue_from_files(files)
+
+    def _add_uri_video_cue(self):
+        """Add video MediaCue(s) from user-selected files"""
+        directory = GstBackend.Config.get("mediaLookupDir", "")
+        if not os.path.exists(directory):
+            directory = self.app.session.dir()
+
+        files, _ = QFileDialog.getOpenFileNames(
+            self.app.window,
+            translate("GstBackend", "Select video files"),
+            directory,
+            qfile_filters(
+                {"video": self.supported_extensions()["video"]},
+                anyfile=True,
+            ),
+        )
+
+        if files:
+            GstBackend.Config["mediaLookupDir"] = os.path.dirname(
+                files[0]
+            )
+            GstBackend.Config.write()
+            self.add_video_cue_from_files(files)
 
     def add_cue_from_urls(self, urls):
         extensions = self.supported_extensions()
@@ -181,6 +212,27 @@ class GstBackend(Plugin, BaseBackend):
             cues.append(cue)
 
         # Insert the cue into the layout
+        self.app.commands_stack.do(
+            LayoutAutoInsertCuesCommand(self.app.session.layout, *cues)
+        )
+
+        QApplication.restoreOverrideCursor()
+
+    def add_video_cue_from_files(self, files):
+        QApplication.setOverrideCursor(QCursor(Qt.WaitCursor))
+
+        factory = UriVideoCueFactory(
+            GstBackend.Config.get(
+                "video_pipeline", ["Volume", "DbMeter", "VideoSink"]
+            )
+        )
+
+        cues = []
+        for file in files:
+            cue = factory(self.app, uri=file)
+            cue.name = os.path.splitext(os.path.basename(file))[0]
+            cues.append(cue)
+
         self.app.commands_stack.do(
             LayoutAutoInsertCuesCommand(self.app.session.layout, *cues)
         )
