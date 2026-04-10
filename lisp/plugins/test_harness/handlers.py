@@ -87,6 +87,8 @@ def register_all(dispatcher, app, signal_manager):
         path = params.get("path")
         if not path:
             raise AppError("path is required")
+        if not path.endswith(".lsp"):
+            raise AppError("path must end with .lsp")
 
         def do_save():
             app._Application__save_to_file(path)
@@ -98,6 +100,8 @@ def register_all(dispatcher, app, signal_manager):
         path = params.get("path")
         if not path:
             raise AppError("path is required")
+        if not path.endswith(".lsp"):
+            raise AppError("path must end with .lsp")
 
         def do_load():
             app._Application__load_from_file(path)
