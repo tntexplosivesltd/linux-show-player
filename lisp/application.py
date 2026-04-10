@@ -56,11 +56,12 @@ class Application(metaclass=Singleton):
         self.session_created = Signal()
         self.session_loaded = Signal()
         self.session_before_finalize = Signal()
+        self.notify = Signal()
 
         self.__conf = app_conf
         self.__cue_factory = CueFactory(self)
         self.__cue_model = CueModel()
-        self.__exclusive_manager = ExclusiveManager(self.__cue_model)
+        self.__exclusive_manager = ExclusiveManager(self)
         self.__session = None
         self.__commands_stack = CommandsStack()
         self.__main_window = MainWindow(self)

@@ -19,6 +19,7 @@ import logging
 import threading
 
 from lisp.cues.cue import CueState
+from lisp.ui.widgets.notification import NotificationLevel
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +31,9 @@ class ExclusiveManager:
     blocked from starting until the exclusive cue stops.
     """
 
-    def __init__(self, cue_model):
-        self._cue_model = cue_model
+    def __init__(self, app):
+        self._app = app
+        self._cue_model = app.cue_model
         self._lock = threading.Lock()
 
     def is_start_blocked(self, cue):
@@ -44,10 +46,13 @@ class ExclusiveManager:
                 if other is cue:
                     continue
                 if other.exclusive and other.state & CueState.IsRunning:
-                    logger.info(
-                        'Blocked by exclusive cue #%d "%s"',
-                        other.index + 1,
-                        other.name,
+                    message = (
+                        f'Blocked by exclusive cue '
+                        f'#{other.index + 1} "{other.name}"'
+                    )
+                    logger.info(message)
+                    self._app.notify.emit(
+                        message, NotificationLevel.Info
                     )
                     return True
 

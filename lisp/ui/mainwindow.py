@@ -48,8 +48,10 @@ from lisp.ui.logging.models import create_log_model
 from lisp.ui.logging.status import LogStatusIcon, LogMessageWidget
 from lisp.ui.logging.viewer import LogViewer
 from lisp.ui.settings.app_configuration import AppConfigurationDialog
+from lisp.core.signal import Connection
 from lisp.ui.ui_utils import translate
 from lisp.ui.widgets import DigitalLabelClock
+from lisp.ui.widgets.notification import NotificationToast
 
 logger = logging.getLogger(__name__)
 
@@ -181,6 +183,15 @@ class MainWindow(QMainWindow, metaclass=QSingleton):
 
         # Status bar
         self.statusBar().addPermanentWidget(MainStatusBar(self), 1)
+
+        # Toast notifications (overlay on central widget)
+        self._notification_toast = NotificationToast(
+            self.centralWidget()
+        )
+        self._app.notify.connect(
+            self._notification_toast.show_notification,
+            Connection.QtQueued,
+        )
 
         # Set component text
         self.retranslateUi()
@@ -331,6 +342,7 @@ class MainWindow(QMainWindow, metaclass=QSingleton):
     def __sessionCreated(self):
         self.centralWidget().layout().addWidget(self._app.session.layout.view)
         self._app.session.layout.view.show()
+        self._notification_toast.raise_()
         self.updateWindowTitle()
 
     def __simpleCueInsert(self, cueClass):

@@ -31,6 +31,7 @@ _APP_SIGNALS = {
     "session.session_created",
     "session.session_loaded",
     "session.session_before_finalize",
+    "app.notify",
 }
 
 # Signals available on app.cue_model
