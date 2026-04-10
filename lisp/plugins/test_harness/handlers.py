@@ -324,6 +324,36 @@ def register_all(dispatcher, app, signal_manager):
         invoke_on_main_thread(do_add)
         return {"ok": True}
 
+    def handle_cue_add_image_from_uri(params):
+        """Add image cue(s) from file paths using the backend."""
+        _require_session()
+        files = params.get("files")
+        if not files:
+            uri = params.get("uri")
+            if uri:
+                files = [uri]
+            else:
+                raise AppError("files or uri is required")
+
+        duration = params.get("duration", 5000)
+
+        from lisp.backend import get_backend
+
+        def do_add():
+            backend = get_backend()
+            if backend is None:
+                raise AppError("No backend available")
+            if not hasattr(backend, "add_image_cue_from_files"):
+                raise AppError(
+                    "Backend does not support image cues"
+                )
+            backend.add_image_cue_from_files(
+                files, duration=duration
+            )
+
+        invoke_on_main_thread(do_add)
+        return {"ok": True}
+
     # --- Layout ---
 
     def handle_layout_go(params):
@@ -656,6 +686,7 @@ def register_all(dispatcher, app, signal_manager):
         "cue.seek": handle_cue_seek,
         "cue.add_from_uri": handle_cue_add_from_uri,
         "cue.add_video_from_uri": handle_cue_add_video_from_uri,
+        "cue.add_image_from_uri": handle_cue_add_image_from_uri,
         # Layout
         "layout.go": handle_layout_go,
         "layout.cues": handle_layout_cues,

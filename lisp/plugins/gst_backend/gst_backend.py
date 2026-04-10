@@ -33,6 +33,7 @@ from lisp.plugins.gst_backend.gi_repository import Gst
 from lisp.plugins.gst_backend.gst_media_cue import (
     GstCueFactory,
     UriAudioCueFactory,
+    UriImageCueFactory,
     UriVideoCueFactory,
 )
 from lisp.plugins.gst_backend.gst_media_settings import GstMediaSettings
@@ -88,6 +89,12 @@ class GstBackend(Plugin, BaseBackend):
             category=QT_TRANSLATE_NOOP("CueCategory", "Media cues"),
             shortcut="CTRL+SHIFT+M",
         )
+        self.app.window.registerCueMenu(
+            translate("GstBackend", "Image cue (from file)"),
+            self._add_uri_image_cue,
+            category=QT_TRANSLATE_NOOP("CueCategory", "Media cues"),
+            shortcut="CTRL+SHIFT+I",
+        )
 
         # Load elements and their settings-widgets
         elements.load()
@@ -107,14 +114,23 @@ class GstBackend(Plugin, BaseBackend):
 
     @memoize
     def supported_extensions(self):
-        extensions = {"audio": [], "video": []}
+        extensions = {"audio": [], "video": [], "image": []}
 
         for gst_mime, gst_extensions in gst_mime_types():
-            for mime in ["audio", "video"]:
+            for mime in ["audio", "video", "image"]:
                 if gst_mime.startswith(mime):
                     extensions[mime].extend(gst_extensions)
 
         return extensions
+
+    def media_waveform(self, media):
+        # Skip waveform for media without audio (e.g. image cues)
+        try:
+            if media.elements[0].src() is None:
+                return None
+        except (IndexError, AttributeError):
+            pass
+        return super().media_waveform(media)
 
     def uri_waveform(self, uri, duration=None):
         if duration is None or duration <= 0:
@@ -183,6 +199,29 @@ class GstBackend(Plugin, BaseBackend):
             GstBackend.Config.write()
             self.add_video_cue_from_files(files)
 
+    def _add_uri_image_cue(self):
+        """Add image MediaCue(s) from user-selected files"""
+        directory = GstBackend.Config.get("mediaLookupDir", "")
+        if not os.path.exists(directory):
+            directory = self.app.session.dir()
+
+        files, _ = QFileDialog.getOpenFileNames(
+            self.app.window,
+            translate("GstBackend", "Select image files"),
+            directory,
+            qfile_filters(
+                {"image": self.supported_extensions()["image"]},
+                anyfile=True,
+            ),
+        )
+
+        if files:
+            GstBackend.Config["mediaLookupDir"] = os.path.dirname(
+                files[0]
+            )
+            GstBackend.Config.write()
+            self.add_image_cue_from_files(files)
+
     def add_cue_from_urls(self, urls):
         extensions = self.supported_extensions()
         extensions = extensions["audio"] + extensions["video"]
@@ -225,6 +264,28 @@ class GstBackend(Plugin, BaseBackend):
             GstBackend.Config.get(
                 "video_pipeline", ["Volume", "DbMeter", "VideoSink"]
             )
+        )
+
+        cues = []
+        for file in files:
+            cue = factory(self.app, uri=file)
+            cue.name = os.path.splitext(os.path.basename(file))[0]
+            cues.append(cue)
+
+        self.app.commands_stack.do(
+            LayoutAutoInsertCuesCommand(self.app.session.layout, *cues)
+        )
+
+        QApplication.restoreOverrideCursor()
+
+    def add_image_cue_from_files(self, files, duration=5000):
+        QApplication.setOverrideCursor(QCursor(Qt.WaitCursor))
+
+        factory = UriImageCueFactory(
+            GstBackend.Config.get(
+                "image_pipeline", ["VideoSink"]
+            ),
+            duration=duration,
         )
 
         cues = []

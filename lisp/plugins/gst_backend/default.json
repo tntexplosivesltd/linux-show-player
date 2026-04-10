@@ -2,5 +2,6 @@
   "_version_": "2",
   "_enabled_": true,
   "pipeline": ["Volume", "Equalizer10", "DbMeter", "AutoSink"],
-  "video_pipeline": ["Volume", "DbMeter", "VideoSink"]
+  "video_pipeline": ["Volume", "DbMeter", "VideoSink"],
+  "image_pipeline": ["VideoSink"]
 }

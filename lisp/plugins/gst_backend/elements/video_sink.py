@@ -51,27 +51,57 @@ class VideoSink(GstMediaElement):
         self.pipeline.add(self.video_sink)
         self.video_queue.link(self.video_sink)
 
+        self._audio_removed = False
+        self._video_removed = False
+
     def sink(self):
         """Audio sink -- connected by the linear chain."""
         return self.audio_sink
 
     def post_link(self, all_elements):
-        """Wire the video branch from the source's video_src()."""
-        for element in all_elements:
-            video_src = element.video_src()
-            if video_src is not None:
-                if not video_src.link(self.video_queue):
-                    logger.warning(
-                        "VideoSink: failed to link video source "
-                        "to video queue"
-                    )
-                return
+        """Wire the video branch and remove unused sinks.
 
-        logger.debug(
-            "VideoSink: no video source found in pipeline"
-        )
+        For video+audio pipelines (UriAvInput): wires the video
+        branch, keeps both audio and video sinks.
+
+        For video-only pipelines (ImageInput): wires the video
+        branch and removes the unused audio sink to prevent the
+        pipeline from hanging on an unlinked autoaudiosink.
+        """
+        video_wired = False
+        has_audio_src = False
+
+        for element in all_elements:
+            if element is self:
+                continue
+            if not video_wired:
+                video_src = element.video_src()
+                if video_src is not None:
+                    if not video_src.link(self.video_queue):
+                        logger.warning(
+                            "VideoSink: failed to link video "
+                            "source to video queue"
+                        )
+                    video_wired = True
+            if element.src() is not None:
+                has_audio_src = True
+
+        if not video_wired:
+            logger.debug(
+                "VideoSink: no video source found in pipeline"
+            )
+
+        if not has_audio_src:
+            logger.info(
+                "VideoSink: no audio source, removing "
+                "audio sink"
+            )
+            self.pipeline.remove(self.audio_sink)
+            self._audio_removed = True
 
     def dispose(self):
-        self.pipeline.remove(self.video_queue)
-        self.pipeline.remove(self.video_sink)
-        self.pipeline.remove(self.audio_sink)
+        if not self._video_removed:
+            self.pipeline.remove(self.video_queue)
+            self.pipeline.remove(self.video_sink)
+        if not self._audio_removed:
+            self.pipeline.remove(self.audio_sink)
