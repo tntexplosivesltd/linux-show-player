@@ -117,7 +117,12 @@ class GroupCue(Cue):
                 self._connect_child(child, parallel=True)
 
         for child in children:
-            if fade and child.fadein_duration > 0:
+            if child.state & CueState.IsPaused:
+                if fade and child.fadein_duration > 0:
+                    child.execute(CueAction.FadeInResume)
+                else:
+                    child.execute(CueAction.Resume)
+            elif fade and child.fadein_duration > 0:
                 child.execute(CueAction.FadeInStart)
             else:
                 child.execute(CueAction.Start)
@@ -127,11 +132,20 @@ class GroupCue(Cue):
     def _start_playlist(self, children, fade):
         """Start first child in the playlist."""
         with self._lock:
-            self._playlist_index = 0
+            # If the current child is paused, resume from that
+            # position instead of resetting to the beginning.
+            idx = self._playlist_index
+            resuming = (
+                idx < len(children)
+                and children[idx].state & CueState.IsPaused
+            )
+            if not resuming:
+                idx = 0
+                self._playlist_index = 0
             self._connected_children = set()
             self._crossfade_armed = False
 
-        self._play_child_at(0, children, fade)
+        self._play_child_at(idx, children, fade)
         return True
 
     def _play_child_at(self, index, children=None, fade=False):
@@ -155,7 +169,12 @@ class GroupCue(Cue):
             self._playlist_index = index
             self._connect_child(child, parallel=False)
 
-        if fade and child.fadein_duration > 0:
+        if child.state & CueState.IsPaused:
+            if fade and child.fadein_duration > 0:
+                child.execute(CueAction.FadeInResume)
+            else:
+                child.execute(CueAction.Resume)
+        elif fade and child.fadein_duration > 0:
             child.execute(CueAction.FadeInStart)
         else:
             child.execute(CueAction.Start)
@@ -296,10 +315,14 @@ class GroupCue(Cue):
             # _on_playlist_child_stopped and kill the group.
             self._disconnect_child(child, parallel=False)
 
-            # Fade out current child
+            # Fade out current child — temporarily set the
+            # fade duration for the crossfade without permanently
+            # modifying the child's property (which gets serialized).
+            orig_fadeout = child.fadeout_duration
             if child.fadeout_duration <= 0:
                 child.fadeout_duration = self.crossfade
             child.execute(CueAction.FadeOutStop)
+            child.fadeout_duration = orig_fadeout
 
             # Start next child with fade in
             next_index = index + 1
@@ -314,9 +337,11 @@ class GroupCue(Cue):
                         next_child, parallel=False
                     )
 
+                orig_fadein = next_child.fadein_duration
                 if next_child.fadein_duration <= 0:
                     next_child.fadein_duration = self.crossfade
                 next_child.execute(CueAction.FadeInStart)
+                next_child.fadein_duration = orig_fadein
 
                 # Re-arm crossfade for the next transition
                 self._arm_crossfade_if_needed(
@@ -408,6 +433,8 @@ class GroupCue(Cue):
                     child.execute(CueAction.FadeOutInterrupt)
                 else:
                     child.execute(CueAction.Interrupt)
+
+        return True
 
 
 class GroupCueSettings(SettingsPage):
