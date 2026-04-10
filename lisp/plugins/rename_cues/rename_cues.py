@@ -60,5 +60,5 @@ class RenameCues(Plugin):
                 RenameCuesCommand(self.app.cue_model, renameUi.cues_list)
             )
 
-    def terminate(self):
+    def finalize(self):
         self.app.window.menuTools.removeAction(self.menuAction)

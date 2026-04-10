@@ -111,7 +111,7 @@ class ReplayGain(Plugin):
         if self._gain_thread is not None:
             self._gain_thread.stop()
 
-    def terminate(self):
+    def finalize(self):
         self.stop()
         self.app.window.menuTools.removeAction(self.menu_action)
 

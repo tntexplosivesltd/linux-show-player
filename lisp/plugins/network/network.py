@@ -51,6 +51,6 @@ class Network(Plugin):
         )
         self.announcer.start()
 
-    def terminate(self):
+    def finalize(self):
         self.announcer.stop()
         self.server.stop()
