@@ -132,8 +132,6 @@ class ListLayoutView(QWidget):
     def __listViewCurrentChanged(self, current, _):
         cue = None
         if current is not None:
-            index = self.listView.indexOfTopLevelItem(current)
-            if index < len(self.listModel):
-                cue = self.listModel.item(index)
+            cue = current.cue
 
         self.infoPanel.cue = cue
