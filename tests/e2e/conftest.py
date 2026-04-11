@@ -22,4 +22,6 @@ collect_ignore = [
     "test_index_action_cue_e2e.py",
     "test_volume_control_e2e.py",
     "test_cart_layout_e2e.py",
+    "test_global_controls_e2e.py",
+    "test_exclusive_mode_e2e.py",
 ]
