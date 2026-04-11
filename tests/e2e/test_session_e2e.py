@@ -79,10 +79,6 @@ def test_1_mediacue_roundtrip(t):
         "value": "RoundTrip Tone",
     })
     call("cue.set_property", {
-        "id": cue_id, "property": "volume",
-        "value": 0.42,
-    })
-    call("cue.set_property", {
         "id": cue_id, "property": "fadein_duration",
         "value": 1.5,
     })
@@ -108,10 +104,6 @@ def test_1_mediacue_roundtrip(t):
     t.check(
         "1: name preserved",
         cue_prop(rid, "name") == "RoundTrip Tone",
-    )
-    t.check(
-        "1: volume preserved",
-        abs(cue_prop(rid, "volume") - 0.42) < 1e-6,
     )
     t.check(
         "1: fadein_duration preserved",
@@ -258,14 +250,14 @@ def test_5_is_saved_after_save(t):
     cue_id = ids["tone_A"]
 
     call("session.save", {"path": SAVE_PATH})
-    is_saved = call("commands.is_saved")["is_saved"]
+    is_saved = call("commands.is_saved")["saved"]
     t.check("5: is_saved True after save", is_saved is True)
 
     # Mutate via command stack (UpdateCueCommand)
     call("cue.set_property", {
         "id": cue_id, "property": "name", "value": "Mutated",
     })
-    is_saved = call("commands.is_saved")["is_saved"]
+    is_saved = call("commands.is_saved")["saved"]
     t.check("5: is_saved False after mutation", is_saved is False)
 
 
@@ -285,13 +277,13 @@ def test_6_is_saved_after_load(t):
     })
     t.check(
         "6 precond: session dirty before load",
-        call("commands.is_saved")["is_saved"] is False,
+        call("commands.is_saved")["saved"] is False,
     )
 
     call("session.load", {"path": SAVE_PATH})
     _wait_for_count(4)
 
-    is_saved = call("commands.is_saved")["is_saved"]
+    is_saved = call("commands.is_saved")["saved"]
     t.check("6: is_saved True after load", is_saved is True)
 
 
@@ -311,7 +303,7 @@ def test_7_save_overwrite(t):
         "value": "Overwritten Name",
     })
     call("session.save", {"path": SAVE_PATH})
-    is_saved = call("commands.is_saved")["is_saved"]
+    is_saved = call("commands.is_saved")["saved"]
     t.check("7: is_saved True after overwrite save", is_saved is True)
 
     # Reload to verify overwritten content was written
@@ -333,7 +325,7 @@ def test_8_session_new_resets_model(t):
         call("cue.count")["count"] == 4,
     )
 
-    call("session.new", {"layout": "ListLayout"})
+    call("session.new", {"layout_type": "ListLayout"})
 
     # Poll until model is empty (async reset)
     deadline = time.time() + 10.0

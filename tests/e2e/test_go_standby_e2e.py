@@ -220,15 +220,13 @@ def test_6_trigger_after_wait_delays_then_fires(t, ids):
 
     call("cue.execute", {"id": A_id, "action": "Start"})
     time.sleep(0.3)
-    # Seek A near the end so the post-wait fires quickly
+    # Seek A near the end so content ends quickly
     call("cue.seek", {"id": A_id, "position": 7500})
 
-    # Wait for A to finish (post-wait fires after A ends)
-    wait_state(A_id, "Stop", timeout=3.0)
+    # Wait for A to enter PostWait (content ended, timer running)
+    wait_state(A_id, "PostWait", timeout=3.0)
 
-    # B should NOT be running immediately after A stops
-    # (post_wait is 1.5 s)
-    time.sleep(0.3)
+    # B should NOT be running during the post-wait
     t.check("6: B not yet started (in post-wait)",
             cue_state(B_id) == "Stop")
 
