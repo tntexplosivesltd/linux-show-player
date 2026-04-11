@@ -95,6 +95,16 @@ class UriAvInput(GstSrcElement):
     def input_uri(self) -> SessionURI:
         return SessionURI(self.uri)
 
+    def stop(self):
+        """Reset linked flags so pads re-link on the next play.
+
+        When the pipeline goes to READY, uridecodebin removes its
+        dynamic pads.  On the next PAUSED transition it creates
+        new pads, so we must allow __on_pad_added to link them.
+        """
+        self._audio_linked = False
+        self._video_linked = False
+
     def dispose(self):
         self.decoder.disconnect(self._pad_handler)
         self.decoder.disconnect(self._no_more_pads_handler)

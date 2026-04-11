@@ -57,11 +57,25 @@ class GstBackend(Plugin, BaseBackend):
         "Provide audio playback capabilities via the GStreamer framework"
     )
 
+    _video_window = None
+
+    @classmethod
+    def video_window(cls):
+        """Return the singleton VideoOutputWindow, or None."""
+        return cls._video_window
+
     def __init__(self, app):
         super().__init__(app)
 
         # Initialize GStreamer
         Gst.init([])
+
+        # Create the shared video output window.
+        # Import here to avoid circular imports at module level.
+        from lisp.plugins.gst_backend.gst_video_window import (
+            VideoOutputWindow,
+        )
+        GstBackend._video_window = VideoOutputWindow(app.window)
         # Register GStreamer settings widgets
         AppConfigurationDialog.registerSettingsPage(
             "plugins.gst", GstSettings, GstBackend.Config
@@ -99,6 +113,15 @@ class GstBackend(Plugin, BaseBackend):
         # Load elements and their settings-widgets
         elements.load()
         settings.load()
+
+        # Auto-show/hide the video window based on whether any
+        # video or image cues exist in the session.
+        self.app.cue_model.item_added.connect(
+            self.__update_video_window_visibility
+        )
+        self.app.cue_model.item_removed.connect(
+            self.__update_video_window_visibility
+        )
 
         backend.set_backend(self)
 
@@ -299,3 +322,38 @@ class GstBackend(Plugin, BaseBackend):
         )
 
         QApplication.restoreOverrideCursor()
+
+    def __update_video_window_visibility(self, cue=None):
+        """Show the video window if any video/image cues exist.
+
+        Optimised: on add, if the new cue has VideoSink we can
+        show immediately.  On remove, we only need to scan the
+        model if the removed cue had VideoSink.
+        """
+        window = GstBackend.video_window()
+        if window is None:
+            return
+
+        cue_has_video = (
+            cue is not None
+            and hasattr(cue, "media")
+            and cue.media.element("VideoSink") is not None
+        )
+
+        if cue_has_video and not window.isVisible():
+            # Fast path: new video cue added, show immediately
+            window.show()
+            return
+
+        if not cue_has_video and window.isVisible():
+            # Non-video cue changed, window already correct
+            return
+
+        # Full scan needed (video cue removed, or initial state)
+        for c in self.app.cue_model:
+            if hasattr(c, "media") and \
+                    c.media.element("VideoSink") is not None:
+                window.show()
+                return
+
+        window.hide()

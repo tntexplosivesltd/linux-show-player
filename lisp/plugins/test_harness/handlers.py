@@ -655,6 +655,26 @@ def register_all(dispatcher, app, signal_manager):
 
         return {"loaded": is_loaded(name)}
 
+    # --- Video window ---
+
+    def handle_video_window_state(params):
+        """Query the video output window state."""
+        from lisp.plugins.gst_backend.gst_backend import GstBackend
+
+        window = GstBackend.video_window()
+        if window is None:
+            return {"exists": False}
+
+        return {
+            "exists": True,
+            "visible": window.isVisible(),
+            "fullscreen": window.isFullScreen(),
+            "handle": window.window_handle(),
+            "render_visible": window._render_widget.isVisible()
+            if window._render_widget is not None
+            else False,
+        }
+
     # --- Register all methods ---
 
     methods = {
@@ -718,6 +738,8 @@ def register_all(dispatcher, app, signal_manager):
         # Plugins
         "plugin.list": handle_plugin_list,
         "plugin.is_loaded": handle_plugin_is_loaded,
+        # Video window
+        "video_window.state": handle_video_window_state,
     }
 
     for method_name, handler in methods.items():

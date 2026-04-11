@@ -108,9 +108,14 @@ class ImageInput(GstSrcElement):
         self._remaining_ms = max(0, self._remaining_ms - elapsed)
 
     def stop(self):
-        """Cancel EOS timer and reset for next play."""
+        """Cancel EOS timer and reset for next play.
+
+        Also resets the linked flag so uridecodebin's new
+        dynamic pads can re-link on the next PAUSED transition.
+        """
         self._cancel_timer()
         self._remaining_ms = 0
+        self._linked = False
 
     def _start_timer(self):
         self._cancel_timer()

@@ -25,11 +25,39 @@ from lisp.plugins.gst_backend.gst_element import GstMediaElement
 
 logger = logging.getLogger(__name__)
 
+# Preferred video sink elements in priority order.
+# glimagesink: OpenGL-based, good quality, works on X11 + XWayland.
+# xvimagesink: X11 XVideo extension, lower overhead, X11 only.
+_VIDEO_SINK_FACTORIES = ("glimagesink", "xvimagesink")
+
+
+def _create_video_sink():
+    """Create the best available video sink with VideoOverlay support.
+
+    Falls back through _VIDEO_SINK_FACTORIES in order.  If none are
+    available, returns autovideosink (no overlay, opens own window).
+    """
+    for name in _VIDEO_SINK_FACTORIES:
+        element = Gst.ElementFactory.make(name, None)
+        if element is not None:
+            logger.debug("VideoSink: using %s", name)
+            return element
+
+    logger.warning(
+        "VideoSink: no overlay-capable sink found, "
+        "falling back to autovideosink"
+    )
+    return Gst.ElementFactory.make("autovideosink", None)
+
 
 class VideoSink(GstMediaElement):
     ElementType = ElementType.Output
     MediaType = MediaType.AudioAndVideo
     Name = QT_TRANSLATE_NOOP("MediaElementName", "A/V System Out")
+
+    # Track the last VideoSink that rendered, so we can release
+    # its GL context before a different sink takes over.
+    _previous_sink = None
 
     def __init__(self, pipeline):
         super().__init__(pipeline)
@@ -40,19 +68,47 @@ class VideoSink(GstMediaElement):
         )
         self.pipeline.add(self.audio_sink)
 
-        # Video path: queue -> autovideosink
-        # The queue decouples the video branch from the audio branch,
-        # and autovideosink picks the best available video output.
+        # Video path: queue -> overlay-capable video sink
         self.video_queue = Gst.ElementFactory.make("queue", None)
-        self.video_sink = Gst.ElementFactory.make(
-            "autovideosink", None
-        )
+        self.video_sink = _create_video_sink()
         self.pipeline.add(self.video_queue)
         self.pipeline.add(self.video_sink)
         self.video_queue.link(self.video_sink)
 
         self._audio_removed = False
         self._video_removed = False
+        self._window_handle = 0
+
+        # Install a synchronous bus handler so we can set the
+        # window handle before the sink opens its own window.
+        bus = self.pipeline.get_bus()
+        bus.enable_sync_message_emission()
+        self._sync_handler = bus.connect(
+            "sync-message::element", self.__on_sync_message
+        )
+
+    def play(self):
+        # If a different VideoSink previously held the GL context
+        # on the shared window, force its GStreamer sink to NULL
+        # to release it.  The old pipeline is already in READY
+        # state at this point, so this is safe.
+        prev = VideoSink._previous_sink
+        if prev is not None and prev is not self:
+            prev.video_sink.set_state(Gst.State.NULL)
+            logger.debug(
+                "VideoSink: released previous GL context"
+            )
+
+        VideoSink._previous_sink = self
+
+        window = self._video_window()
+        if window is not None:
+            window.show_display()
+
+    def stop(self):
+        window = self._video_window()
+        if window is not None:
+            window.clear_display()
 
     def sink(self):
         """Audio sink -- connected by the linear chain."""
@@ -100,8 +156,47 @@ class VideoSink(GstMediaElement):
             self._audio_removed = True
 
     def dispose(self):
+        bus = self.pipeline.get_bus()
+        if bus is not None:
+            bus.disconnect(self._sync_handler)
         if not self._video_removed:
             self.pipeline.remove(self.video_queue)
             self.pipeline.remove(self.video_sink)
         if not self._audio_removed:
             self.pipeline.remove(self.audio_sink)
+
+    @staticmethod
+    def _video_window():
+        from lisp.plugins.gst_backend.gst_backend import (
+            GstBackend,
+        )
+        return GstBackend.video_window()
+
+    def __on_sync_message(self, bus, message):
+        """Handle prepare-window-handle from the video sink.
+
+        This runs in the GStreamer streaming thread, before the
+        sink creates its own window.  Setting the handle here
+        ensures GStreamer renders into our VideoOutputWindow.
+
+        Always fetches the current handle from the window
+        (not cached) because the render widget may have been
+        recreated since the last call.
+        """
+        if message.get_structure() is None:
+            return
+        if message.get_structure().get_name() != \
+                "prepare-window-handle":
+            return
+
+        window = self._video_window()
+        if window is not None:
+            self._window_handle = window.window_handle()
+
+        if self._window_handle != 0:
+            message.src.set_window_handle(self._window_handle)
+            logger.debug(
+                "VideoSink: set window handle %d on %s",
+                self._window_handle,
+                message.src.get_name(),
+            )

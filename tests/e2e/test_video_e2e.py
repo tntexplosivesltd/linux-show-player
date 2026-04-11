@@ -326,6 +326,54 @@ def test_4_natural_eos():
           wait_state(cue_id, "Stop", timeout=8))
 
 
+def test_5_stop_and_replay():
+    """Stop a video mid-playback, then play it again.
+
+    Regression test: uridecodebin removes dynamic pads on READY
+    transition.  If _audio_linked/_video_linked flags are not
+    reset in stop(), the second play fails with 'not-linked'.
+    """
+    print("\n=== Test 5: Stop and Replay ===")
+    clear_cues()
+
+    video_path = os.path.join(MEDIA_DIR, "test_video.webm")
+    call("cue.add_video_from_uri", {"uri": video_path})
+    time.sleep(1)
+
+    cues = call("cue.list")
+    check("5a: Video cue added", len(cues) == 1)
+
+    if not cues:
+        print("  SKIP: No cue to test")
+        return
+
+    cue_id = cues[0]["id"]
+
+    # First play, let it run briefly, then stop
+    call("cue.start", {"id": cue_id})
+    check("5b: First play reaches Running",
+          wait_state(cue_id, "Running", timeout=5))
+    time.sleep(1)
+    call("cue.stop", {"id": cue_id})
+    check("5c: First play reaches Stop",
+          wait_state(cue_id, "Stop", timeout=3))
+
+    # Second play — must not error
+    time.sleep(0.5)
+    call("cue.start", {"id": cue_id})
+    check("5d: Second play reaches Running",
+          wait_state(cue_id, "Running", timeout=5))
+
+    time.sleep(0.5)
+    state = call("cue.state", {"id": cue_id})
+    check("5e: current_time advancing on replay",
+          state["current_time"] > 0)
+
+    call("cue.stop", {"id": cue_id})
+    check("5f: Second play reaches Stop",
+          wait_state(cue_id, "Stop", timeout=3))
+
+
 # ── Main ─────────────────────────────────────────────────────
 
 def main():
@@ -353,6 +401,8 @@ def main():
         test_3_video_and_audio_coexist()
         stop_all()
         test_4_natural_eos()
+        stop_all()
+        test_5_stop_and_replay()
         stop_all()
     finally:
         if not args.no_launch:
