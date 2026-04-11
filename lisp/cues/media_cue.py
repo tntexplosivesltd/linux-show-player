@@ -110,14 +110,12 @@ class MediaCue(Cue):
 
             if fade and self._state & CueState.Running and self._can_fade():
                 self._st_lock.release()
-                ended = self.__fadeout(
+                self.__fadeout(
                     self.fadeout_duration,
                     self.__fade_to_zero(),
                     FadeOutType[self.fadeout_type],
                 )
                 self._st_lock.acquire()
-                if not ended:
-                    return False
 
         self.media.stop()
         return True
@@ -131,14 +129,12 @@ class MediaCue(Cue):
 
             if fade and self._state & CueState.Running and self._can_fade():
                 self._st_lock.release()
-                ended = self.__fadeout(
+                self.__fadeout(
                     self.fadeout_duration,
                     self.__fade_to_zero(),
                     FadeOutType[self.fadeout_type],
                 )
                 self._st_lock.acquire()
-                if not ended:
-                    return False
 
         self.media.pause()
         return True
@@ -274,7 +270,15 @@ class MediaCue(Cue):
     def _on_eos(self):
         with self._st_lock:
             self.__fader_group.stop()
-            self._ended()
+            # Skip if the cue was already stopped (e.g. interrupt
+            # raced with the ImageInput EOS timer) or if a
+            # fade-out-stop is in progress (it will complete the
+            # state transition itself).
+            if (
+                self._state & CueState.Running
+                and not self.__in_fadeout
+            ):
+                self._ended()
 
     def _on_error(self):
         with self._st_lock:

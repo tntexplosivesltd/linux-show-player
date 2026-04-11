@@ -423,6 +423,63 @@ def test_5_stop_and_replay():
           wait_state(cue_id, "Stop", timeout=3))
 
 
+def test_6_interrupt_mid_playback():
+    """Interrupt (ESC) an image cue mid-display.
+
+    Regression test: ImageInput's threading.Timer may fire EOS
+    after interrupt() has already set the cue to Stop.  The old
+    code in _on_eos called _ended() unconditionally, XOR-ing
+    CueState.Running onto an already-Stop state and creating a
+    stuck Stop|Running bitmask.
+    """
+    print("\n=== Test 6: Interrupt Image Cue Mid-Playback ===")
+    clear_cues()
+
+    image_path = os.path.join(MEDIA_DIR, "test_image.png")
+    call("cue.add_image_from_uri", {
+        "uri": image_path, "duration": 5000,
+    })
+    time.sleep(1)
+
+    cues = call("cue.list")
+    check("6a: Image cue added", len(cues) == 1)
+
+    if not cues:
+        print("  SKIP: No cue to test")
+        return
+
+    cue_id = cues[0]["id"]
+
+    # Play the cue and let it run for 2-3 seconds
+    call("cue.start", {"id": cue_id})
+    check("6b: Cue reaches Running",
+          wait_state(cue_id, "Running", timeout=5))
+
+    time.sleep(2.5)
+
+    # Interrupt (same as pressing ESC in the UI)
+    call("cue.interrupt", {"id": cue_id})
+
+    # Must reach Stop cleanly within a couple of seconds
+    check("6c: Cue reaches Stop after interrupt",
+          wait_state(cue_id, "Stop", timeout=5))
+
+    # Wait for the EOS timer to fire (it was set for 5s total,
+    # ~2.5s remain).  The cue must stay in Stop, not get stuck.
+    time.sleep(4)
+    check("6d: Cue still in Stop after EOS timer",
+          cue_state(cue_id) == "Stop")
+
+    # Verify the cue can be replayed (not stuck)
+    call("cue.start", {"id": cue_id})
+    check("6e: Cue replays after interrupt",
+          wait_state(cue_id, "Running", timeout=5))
+
+    call("cue.stop", {"id": cue_id})
+    check("6f: Cue stops after replay",
+          wait_state(cue_id, "Stop", timeout=3))
+
+
 # -- Main -------------------------------------------------------------
 
 def main():
@@ -452,6 +509,8 @@ def main():
         test_4_parallel_audio_and_image()
         stop_all()
         test_5_stop_and_replay()
+        stop_all()
+        test_6_interrupt_mid_playback()
         stop_all()
     finally:
         if not args.no_launch:
