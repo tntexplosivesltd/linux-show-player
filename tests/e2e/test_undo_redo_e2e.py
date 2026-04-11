@@ -246,7 +246,7 @@ def test_6_is_saved_transitions(t):
     # Save to establish a clean baseline
     call("session.save", {"path": SAVE_PATH})
     t.check("6: is_saved True after save",
-            call("commands.is_saved")["is_saved"] is True)
+            call("commands.is_saved")["saved"] is True)
 
     # Add a cue — stack is now dirty
     call("cue.add", {
@@ -255,23 +255,23 @@ def test_6_is_saved_transitions(t):
     })
     time.sleep(0.2)
     t.check("6: is_saved False after cue.add",
-            call("commands.is_saved")["is_saved"] is False)
+            call("commands.is_saved")["saved"] is False)
 
     # Save again — should be clean
     call("session.save", {"path": SAVE_PATH})
     t.check("6: is_saved True after second save",
-            call("commands.is_saved")["is_saved"] is True)
+            call("commands.is_saved")["saved"] is True)
 
     # Move a cue — dirty again
     call("layout.move_cue", {"from_index": 0, "to_index": 1})
     time.sleep(0.2)
     t.check("6: is_saved False after move",
-            call("commands.is_saved")["is_saved"] is False)
+            call("commands.is_saved")["saved"] is False)
 
     # Save again — clean
     call("session.save", {"path": SAVE_PATH})
     t.check("6: is_saved True after move+save",
-            call("commands.is_saved")["is_saved"] is True)
+            call("commands.is_saved")["saved"] is True)
 
     # Set property — dirty again
     call("cue.set_property", {
@@ -279,7 +279,7 @@ def test_6_is_saved_transitions(t):
     })
     time.sleep(0.2)
     t.check("6: is_saved False after set_property",
-            call("commands.is_saved")["is_saved"] is False)
+            call("commands.is_saved")["saved"] is False)
 
 
 def test_7_clear_then_undo_is_noop(t):
