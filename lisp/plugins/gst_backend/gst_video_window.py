@@ -58,6 +58,7 @@ class VideoOutputWindow(QMainWindow):
             Qt.WA_DontCreateNativeAncestors
         )
 
+        self._fullscreen = False
         self.resize(640, 480)
 
     def window_handle(self):
@@ -74,20 +75,13 @@ class VideoOutputWindow(QMainWindow):
         self._sync_render_geometry()
 
     def set_display(self, screen_index):
-        """Move the window to the specified screen.
+        """Move the window to the specified screen by index.
 
         :param screen_index: Index into QApplication.screens()
         """
         screens = QApplication.screens()
         if 0 <= screen_index < len(screens):
-            screen = screens[screen_index]
-            geo = screen.geometry()
-            self.move(geo.topLeft())
-            logger.debug(
-                "VideoOutputWindow: moved to screen %d (%s)",
-                screen_index,
-                screen.name(),
-            )
+            self.set_display_screen(screens[screen_index])
         else:
             logger.warning(
                 "VideoOutputWindow: screen index %d out of "
@@ -96,9 +90,35 @@ class VideoOutputWindow(QMainWindow):
                 len(screens),
             )
 
+    def set_display_screen(self, screen):
+        """Move the window to the given QScreen.
+
+        :param screen: Target QScreen
+        """
+        geo = screen.geometry()
+        self.move(geo.topLeft())
+        logger.debug(
+            "VideoOutputWindow: moved to screen %s",
+            screen.name(),
+        )
+
     def set_fullscreen(self, enabled):
-        """Toggle fullscreen mode."""
-        if enabled:
+        """Toggle fullscreen mode.
+
+        If the window is already visible the change is applied
+        immediately.  Otherwise it is stored and applied the next
+        time the window is shown.
+        """
+        self._fullscreen = enabled
+        if self.isVisible():
+            self._apply_fullscreen()
+
+    def show(self):
+        """Apply deferred fullscreen setting, then show."""
+        self._apply_fullscreen()
+
+    def _apply_fullscreen(self):
+        if self._fullscreen:
             self.showFullScreen()
         else:
             self.showNormal()

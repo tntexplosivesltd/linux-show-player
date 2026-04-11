@@ -3,5 +3,7 @@
   "_enabled_": true,
   "pipeline": ["Volume", "Equalizer10", "DbMeter", "AutoSink"],
   "video_pipeline": ["Volume", "DbMeter", "VideoAlpha", "VideoSink"],
-  "image_pipeline": ["VideoAlpha", "VideoSink"]
+  "image_pipeline": ["VideoAlpha", "VideoSink"],
+  "video_fullscreen": true,
+  "video_screen": -1
 }

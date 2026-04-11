@@ -62,7 +62,7 @@ class CueTime(metaclass=MetaCueTime):
         self.__init()
 
     def __init(self, *args):
-        if self._cue.duration > 0 and not self._active:
+        if self._cue.duration != 0 and not self._active:
             # Cue "status" signals
             self._cue.started.connect(self.start, Connection.QtQueued)
             self._cue.paused.connect(self.stop, Connection.QtQueued)
@@ -73,7 +73,7 @@ class CueTime(metaclass=MetaCueTime):
             if self._cue.state & CueState.Running:
                 self.start()
             self._active = True
-        elif self._cue.duration < 0 and self._active:
+        elif self._cue.duration == 0 and self._active:
             self._cue.started.disconnect(self.start)
             self._cue.paused.disconnect(self.stop)
             self._cue.stopped.disconnect(self.stop)

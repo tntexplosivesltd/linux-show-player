@@ -79,6 +79,7 @@ class GstBackend(Plugin, BaseBackend):
             VideoOutputWindow,
         )
         GstBackend._video_window = VideoOutputWindow(app.window)
+        self.__apply_video_config()
 
         # Block overlapping video/image cue playback.
         self.app.video_exclusive_manager = (
@@ -334,6 +335,45 @@ class GstBackend(Plugin, BaseBackend):
 
         QApplication.restoreOverrideCursor()
 
+    def __apply_video_config(self):
+        """Apply video output settings to the shared window.
+
+        Screen selection:
+        * ``-1`` (auto): use the first non-primary screen if one
+          is connected, otherwise fall back to the primary screen.
+        * ``0..N``: use that specific screen index.
+
+        Fullscreen is only engaged when the target screen is a
+        secondary display — never on the primary, so the LiSP
+        operator UI is not covered.
+        """
+        window = GstBackend.video_window()
+        if window is None:
+            return
+
+        screens = QApplication.screens()
+        primary = QApplication.primaryScreen()
+        screen_cfg = GstBackend.Config.get("video_screen", -1)
+
+        if screen_cfg >= 0 and screen_cfg < len(screens):
+            target = screens[screen_cfg]
+        elif len(screens) > 1:
+            # Auto: pick first non-primary screen
+            target = next(
+                (s for s in screens if s is not primary),
+                primary,
+            )
+        else:
+            target = primary
+
+        window.set_display_screen(target)
+
+        is_secondary = target is not primary
+        fullscreen = GstBackend.Config.get(
+            "video_fullscreen", True
+        )
+        window.set_fullscreen(fullscreen and is_secondary)
+
     def __update_video_window_visibility(self, cue=None):
         """Show the video window if any video/image cues exist.
 
@@ -352,7 +392,8 @@ class GstBackend(Plugin, BaseBackend):
         )
 
         if cue_has_video and not window.isVisible():
-            # Fast path: new video cue added, show immediately
+            # Re-apply config (user may have changed settings)
+            self.__apply_video_config()
             window.show()
             return
 
@@ -364,6 +405,7 @@ class GstBackend(Plugin, BaseBackend):
         for c in self.app.cue_model:
             if hasattr(c, "media") and \
                     c.media.element("VideoSink") is not None:
+                self.__apply_video_config()
                 window.show()
                 return
 

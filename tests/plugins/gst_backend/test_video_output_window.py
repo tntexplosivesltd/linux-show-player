@@ -47,15 +47,30 @@ class TestVideoOutputWindowBehavior:
     def test_set_fullscreen_true(self, qtbot):
         window = VideoOutputWindow()
         qtbot.addWidget(window)
+        window.show()
+        qtbot.waitExposed(window)
         window.set_fullscreen(True)
         assert window.isFullScreen()
 
     def test_set_fullscreen_false(self, qtbot):
         window = VideoOutputWindow()
         qtbot.addWidget(window)
+        window.show()
+        qtbot.waitExposed(window)
         window.set_fullscreen(True)
         window.set_fullscreen(False)
         assert not window.isFullScreen()
+
+    def test_set_fullscreen_deferred(self, qtbot):
+        """Fullscreen is applied when the window is shown."""
+        window = VideoOutputWindow()
+        qtbot.addWidget(window)
+        window.set_fullscreen(True)
+        # Not visible yet — isFullScreen() is False
+        assert not window.isFullScreen()
+        window.show()
+        qtbot.waitExposed(window)
+        assert window.isFullScreen()
 
     def test_set_display_out_of_range(self, qtbot):
         window = VideoOutputWindow()

@@ -480,6 +480,43 @@ def test_6_interrupt_mid_playback():
           wait_state(cue_id, "Stop", timeout=3))
 
 
+def test_7_indefinite_duration():
+    """Image cue with duration=-1 displays until manually stopped."""
+    print("\n=== Test 7: Indefinite Duration Image Cue ===")
+    clear_cues()
+
+    image_path = os.path.join(MEDIA_DIR, "test_image.png")
+    call("cue.add_image_from_uri", {
+        "uri": image_path, "duration": -1,
+    })
+    time.sleep(1)
+
+    cues = call("cue.list")
+    check("7a: Image cue added", len(cues) == 1)
+
+    if not cues:
+        print("  SKIP: No cue to test")
+        return
+
+    cue_id = cues[0]["id"]
+
+    # Play the cue
+    call("cue.start", {"id": cue_id})
+    check("7b: Cue reaches Running",
+          wait_state(cue_id, "Running", timeout=5))
+
+    # Wait longer than a normal 5s image would display —
+    # cue must still be Running (no EOS timer).
+    time.sleep(7)
+    check("7c: Still Running after 7s (no auto-stop)",
+          cue_state(cue_id) == "Running")
+
+    # Manual stop
+    call("cue.stop", {"id": cue_id})
+    check("7d: Cue reaches Stop after manual stop",
+          wait_state(cue_id, "Stop", timeout=3))
+
+
 # -- Main -------------------------------------------------------------
 
 def main():
@@ -511,6 +548,8 @@ def main():
         test_5_stop_and_replay()
         stop_all()
         test_6_interrupt_mid_playback()
+        stop_all()
+        test_7_indefinite_duration()
         stop_all()
     finally:
         if not args.no_launch:

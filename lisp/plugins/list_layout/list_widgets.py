@@ -220,6 +220,12 @@ class TimeWidget(QProgressBar):
             self.setFormat(strtime(duration, accurate=2))
             # Avoid settings min and max to 0, or the bar go in busy state
             self.setRange(0 if duration > 0 else -1, int(duration))
+        elif duration == -1:
+            # Indefinite duration — show elapsed time, no progress
+            self.setEnabled(True)
+            self.setTextVisible(True)
+            self.setFormat(strtime(0, accurate=2))
+            self.setRange(0, 1)
         else:
             self.setTextVisible(False)
 

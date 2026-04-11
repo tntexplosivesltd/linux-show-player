@@ -81,7 +81,9 @@ class RunningCueWidget(QWidget):
         self.timeDisplay.setStyleSheet("background-color: transparent")
         self.timeDisplay.setSegmentStyle(QLCDNumber.Flat)
         self.timeDisplay.setDigitCount(8)
-        self.timeDisplay.display(strtime(cue.duration))
+        self.timeDisplay.display(
+            strtime(max(0, cue.duration))
+        )
         self.gridLayout.addWidget(self.timeDisplay, 1, 1)
 
         self.gridLayout.setRowStretch(0, 1)
@@ -158,14 +160,22 @@ class RunningCueWidget(QWidget):
     def _time_updated(self, time):
         if not self.visibleRegion().isEmpty():
             # If the given value is the duration or < 0 set the time to 0
-            if time == self.cue.duration or time < 0:
+            if (
+                (self.cue.duration > 0 and time == self.cue.duration)
+                or time < 0
+            ):
                 time = 0
 
             self._update_timers(time)
 
     def _update_timers(self, time):
+        # Indefinite cues show elapsed time (no countdown)
+        if self.cue.duration > 0:
+            display_time = self.cue.duration - time
+        else:
+            display_time = time
         self.timeDisplay.display(
-            strtime(self.cue.duration - time, accurate=self._accurate_time)
+            strtime(display_time, accurate=self._accurate_time)
         )
 
     def _pause(self):
@@ -206,7 +216,7 @@ class RunningMediaCueWidget(RunningCueWidget):
         else:
             self.seekSlider = QClickSlider(self.gridLayoutWidget)
             self.seekSlider.setOrientation(Qt.Horizontal)
-            self.seekSlider.setRange(0, cue.duration)
+            self.seekSlider.setRange(0, max(0, cue.duration))
 
         self.seekSlider.setFocusPolicy(Qt.NoFocus)
         self.seekSlider.sliderMoved.connect(self._seek)
@@ -257,7 +267,7 @@ class RunningMediaCueWidget(RunningCueWidget):
         self.cue.media.seek(position)
 
     def _update_duration(self, duration):
-        self.seekSlider.setMaximum(duration)
+        self.seekSlider.setMaximum(max(0, duration))
 
     def _update_timers(self, time):
         super()._update_timers(time)

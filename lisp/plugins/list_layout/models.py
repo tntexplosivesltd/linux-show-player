@@ -116,7 +116,7 @@ class RunningCueModel(ReadOnlyProxyModel):
         self.model_reset.emit()
 
     def _add(self, cue):
-        if cue.duration > 0 and cue not in self.__playing:
+        if cue.duration != 0 and cue not in self.__playing:
             self.__playing.append(cue)
             self.item_added.emit(cue)
 

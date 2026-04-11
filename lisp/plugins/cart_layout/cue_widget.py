@@ -368,6 +368,13 @@ class CueWidget(QWidget):
                 self.timeBar.show()
             self.timeBar.setMaximum(duration)
             self.seekSlider.setMaximum(duration)
+        elif duration == -1:
+            # Indefinite — show time bar for elapsed display
+            if not self.timeBar.isVisible():
+                self.layout().addWidget(self.timeBar, 1)
+                self.timeBar.show()
+            self.timeBar.setMaximum(1)
+            self.seekSlider.setMaximum(0)
         else:
             self.layout().removeWidget(self.timeBar)
             self.timeBar.hide()
@@ -384,8 +391,9 @@ class CueWidget(QWidget):
             # Set the value the seek slider
             self.seekSlider.setValue(time)
 
-            # If in count-down mode the widget will show the remaining time
-            if self._countdownMode:
+            # If in count-down mode the widget will show the remaining
+            # time — but not for indefinite cues (no known endpoint)
+            if self._countdownMode and self._cue.duration > 0:
                 time = self._cue.duration - time
 
             # Set the value of the timer progress-bar
