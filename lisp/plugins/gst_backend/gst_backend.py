@@ -294,7 +294,8 @@ class GstBackend(Plugin, BaseBackend):
 
         factory = UriVideoCueFactory(
             GstBackend.Config.get(
-                "video_pipeline", ["Volume", "DbMeter", "VideoSink"]
+                "video_pipeline",
+                ["Volume", "DbMeter", "VideoAlpha", "VideoSink"],
             )
         )
 
@@ -315,7 +316,8 @@ class GstBackend(Plugin, BaseBackend):
 
         factory = UriImageCueFactory(
             GstBackend.Config.get(
-                "image_pipeline", ["VideoSink"]
+                "image_pipeline",
+                ["VideoAlpha", "VideoSink"],
             ),
             duration=duration,
         )
