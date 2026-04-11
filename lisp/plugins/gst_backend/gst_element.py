@@ -134,7 +134,13 @@ class GstMediaElements(Collection, HasInstanceProperties):
         :type element: lisp.backend.media_element.MediaElement
         """
         if self.elements:
-            self.elements[-1].link(element)
+            # Walk backward to find the nearest element that
+            # can link to this one.  Skips video-only elements
+            # (sink()=None) that don't participate in the
+            # linear audio chain.
+            for prev in reversed(self.elements):
+                if prev.link(element):
+                    break
         self.elements.append(element)
 
         # Add a property for the new added element
