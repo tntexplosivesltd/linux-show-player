@@ -91,8 +91,18 @@ def start_lisp(layout="ListLayout"):
         try:
             resp = send_request(HOST, PORT, "ping")
             if "result" in resp:
-                os.unlink(session_path)
-                return
+                # Wait for session to fully load before proceeding
+                # (ping responds when harness is up, but session
+                # may still be loading from the temp file).
+                try:
+                    info = send_request(
+                        HOST, PORT, "session.info"
+                    )
+                    if "result" in info:
+                        os.unlink(session_path)
+                        return
+                except Exception:
+                    pass
         except (ConnectionRefusedError, ConnectionError, OSError):
             pass
         time.sleep(0.5)
@@ -108,7 +118,9 @@ def start_lisp(layout="ListLayout"):
 def stop_lisp():
     """Terminate LiSP gracefully."""
     global _lisp_proc
-    if _lisp_proc and _lisp_proc.poll() is None:
+    if _lisp_proc is None:
+        return
+    if _lisp_proc.poll() is None:
         _lisp_proc.send_signal(signal.SIGTERM)
         try:
             _lisp_proc.wait(timeout=5)

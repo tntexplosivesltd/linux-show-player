@@ -158,14 +158,13 @@ def test_4_post_wait_trigger_after_wait(t, ids):
 
     call("cue.execute", {"id": A_id, "action": "Start"})
     wait_state(A_id, "Running", timeout=3.0)
-    # Seek near end so post-wait fires quickly
+    # Seek near end so content ends quickly
     call("cue.seek", {"id": A_id, "position": 7500})
 
-    # Wait for A to finish playback
-    wait_state(A_id, "Stop", timeout=3.0)
+    # Wait for A to enter PostWait (content ended, timer running)
+    wait_state(A_id, "PostWait", timeout=3.0)
 
-    # B should not start immediately (post_wait is 1.5s)
-    time.sleep(0.3)
+    # B should not start during the post-wait
     t.check("4a: B not yet started (in post-wait)",
             cue_state(B_id) == "Stop")
 

@@ -177,7 +177,7 @@ class ListLayout(CueLayout):
         )
 
         self._view.listView.setAutoExpand(
-            ListLayout.Config["autoExpandOnPlay"]
+            ListLayout.Config.get("autoExpandOnPlay", True)
         )
 
         # Context menu actions
