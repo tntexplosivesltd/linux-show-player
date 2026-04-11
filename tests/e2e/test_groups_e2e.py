@@ -639,6 +639,44 @@ def test_10_edge_cases(ids, group_id):
     stop_all()
 
 
+def test_11_collapse_persist(ids, group_id):
+    print("\n═══ Test 11: Collapse Persistence ═══")
+
+    # 11a: Set collapsed
+    call("cue.set_property", {
+        "id": group_id, "property": "collapsed",
+        "value": True,
+    })
+    check("11a: Collapsed set",
+          cue_prop(group_id, "collapsed") is True)
+
+    # 11b: Save and reload
+    save_path = "/tmp/lisp_collapse_test_session.lsp"
+    call("session.save", {"path": save_path})
+    call("session.load", {"path": save_path})
+    time.sleep(2)
+
+    cues = call("cue.list")
+    group = next(
+        c for c in sorted(cues, key=lambda c: c["index"])
+        if c["_type_"] == "GroupCue"
+    )
+    gid = group["id"]
+
+    check("11b: Collapsed persists after reload",
+          cue_prop(gid, "collapsed") is True)
+
+    # 11c: Default is not collapsed
+    call("cue.set_property", {
+        "id": gid, "property": "collapsed",
+        "value": False,
+    })
+    check("11c: Can set back to expanded",
+          cue_prop(gid, "collapsed") is False)
+
+    return gid
+
+
 # ── Main ─────────────────────────────────────────────────────
 
 def main():
@@ -690,6 +728,7 @@ def main():
         test_8_exclusive(ids, group_id)
         group_id = test_9_save_load(ids, group_id)
         test_10_edge_cases(ids, group_id)
+        group_id = test_11_collapse_persist(ids, group_id)
     finally:
         stop_all()
         if not args.no_launch:
