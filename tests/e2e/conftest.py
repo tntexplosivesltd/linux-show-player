@@ -9,5 +9,6 @@ collect_ignore = [
     "test_groups_e2e.py",
     "test_media_playback_e2e.py",
     "test_notifications_e2e.py",
+    "test_session_e2e.py",
     "test_video_e2e.py",
 ]
