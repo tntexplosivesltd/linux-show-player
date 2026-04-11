@@ -134,6 +134,12 @@ class GstMedia(Media):
             self.__reset_media()
 
             self.stopped.emit(self)
+        elif self.state == MediaState.Ready:
+            # Pipeline already in READY (e.g. EOS arrived during a
+            # cue-level fade).  Still reset element state so live
+            # properties (volume, alpha) aren't left at fade values.
+            for element in self.elements:
+                element.stop()
 
     def seek(self, position):
         if self.__seek(position):
