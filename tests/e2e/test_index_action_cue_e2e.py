@@ -37,7 +37,7 @@ def _sorted_cues():
     return sorted(call("cue.list"), key=lambda c: c["index"])
 
 
-def _add_index_action(name, target_index, relative, action=1):
+def _add_index_action(name, target_index, relative, action="Start"):
     """Add an IndexActionCue and return its id."""
     result = call("cue.add", {
         "type": "IndexActionCue",
@@ -88,7 +88,7 @@ def test_1_relative_targets_next_cue(t):
     # Instead place it before tone_B to target tone_B cleanly.
     # Strategy: insert it at position 0 first via add then move.
     iac_id = _add_index_action(
-        "IAC rel+1", target_index=1, relative=True, action=1,
+        "IAC rel+1", target_index=1, relative=True,
     )
 
     # Move the IAC to index 0 so that self.index=0 + target_index=1
@@ -128,7 +128,7 @@ def test_2_absolute_targets_first_cue(t):
     ids = setup_with_tones()
     # Add an absolute IAC: always targets index 0.
     iac_id = _add_index_action(
-        "IAC abs 0", target_index=0, relative=False, action=1,
+        "IAC abs 0", target_index=0, relative=False,
     )
     # IAC is appended at index 4; tone_A is at index 0.
     tone_a_id = ids["tone_A"]
@@ -176,7 +176,7 @@ def test_3_relative_tracks_after_move(t):
     #   tone_A(0), tone_B(1), IAC(2), tone_C(3), tone_D(4)
     # relative=True, target_index=1 → targets index 3 (tone_C).
     iac_id = _add_index_action(
-        "IAC rel move", target_index=1, relative=True, action=1,
+        "IAC rel move", target_index=1, relative=True,
     )
 
     # IAC was appended (index 4 or 5 after tones at 0-3).
@@ -241,7 +241,7 @@ def test_4_out_of_range_no_crash(t):
     ids = setup_with_tones()
     # 4 tones at indices 0-3; target index 999 is well beyond the list.
     iac_id = _add_index_action(
-        "IAC oob", target_index=999, relative=False, action=1,
+        "IAC oob", target_index=999, relative=False,
     )
 
     try:
@@ -269,7 +269,7 @@ def test_5_save_load_preserves_properties(t):
     setup_with_tones()
 
     iac_id = _add_index_action(
-        "IAC save test", target_index=3, relative=False, action=1,
+        "IAC save test", target_index=3, relative=False,
     )
 
     # Verify properties before save

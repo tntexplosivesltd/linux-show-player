@@ -154,7 +154,7 @@ def test_4_post_wait_trigger_after_wait(t, ids):
     call("cue.set_property",
          {"id": A_id, "property": "next_action", "value": "TriggerAfterWait"})
     call("cue.set_property",
-         {"id": A_id, "property": "post_wait", "value": 1.5})
+         {"id": A_id, "property": "post_wait", "value": 3.0})
 
     call("cue.execute", {"id": A_id, "action": "Start"})
     wait_state(A_id, "Running", timeout=3.0)
