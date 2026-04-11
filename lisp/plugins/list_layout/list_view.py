@@ -74,7 +74,7 @@ class CueListView(QTreeWidget):
     # TODO: add ability to show/hide
     # TODO: implement columns (cue-type / target / etc..)
     COLUMNS = [
-        ListColumn("", CueStatusIcons, QHeaderView.Fixed, width=45),
+        ListColumn("", CueStatusIcons, QHeaderView.Fixed, width=75),
         ListColumn("#", IndexWidget, QHeaderView.ResizeToContents),
         ListColumn(
             QT_TRANSLATE_NOOP("ListLayoutHeader", "Cue"),

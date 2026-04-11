@@ -687,14 +687,25 @@ def test_11_collapse_persist(ids, group_id):
     time.sleep(0.5)
 
     call("session.load", {"path": save_path})
-    time.sleep(2)
 
-    cues = call("cue.list")
-    group = next(
-        c for c in sorted(cues, key=lambda c: c["index"])
-        if c["_type_"] == "GroupCue"
-    )
-    gid = group["id"]
+    # Wait for reload to finish — poll until a GroupCue appears
+    gid = None
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        time.sleep(0.5)
+        cues = call("cue.list")
+        group = next(
+            (c for c in sorted(cues, key=lambda c: c["index"])
+             if c["_type_"] == "GroupCue"),
+            None,
+        )
+        if group is not None:
+            gid = group["id"]
+            break
+
+    if gid is None:
+        check("11c: Group found after reload", False)
+        return group_id
 
     check("11c: Collapsed persists after reload",
           cue_prop(gid, "collapsed") is True)
