@@ -297,11 +297,18 @@ class GroupCue(Cue):
             # Fade out current child — temporarily set the
             # fade duration for the crossfade without permanently
             # modifying the child's property (which gets serialized).
+            # Restore via a one-shot stopped handler so the
+            # worker thread has read the value before we reset.
             orig_fadeout = child.fadeout_duration
             if child.fadeout_duration <= 0:
                 child.fadeout_duration = self.crossfade
+
+                def _restore_fadeout(cue, _orig=orig_fadeout):
+                    cue.fadeout_duration = _orig
+                    cue.stopped.disconnect(_restore_fadeout)
+
+                child.stopped.connect(_restore_fadeout)
             child.execute(CueAction.FadeOutStop)
-            child.fadeout_duration = orig_fadeout
 
             # Start next child with fade in
             next_index = index + 1
@@ -319,8 +326,19 @@ class GroupCue(Cue):
                 orig_fadein = next_child.fadein_duration
                 if next_child.fadein_duration <= 0:
                     next_child.fadein_duration = self.crossfade
+
+                    def _restore_fadein(
+                        cue, _orig=orig_fadein
+                    ):
+                        cue.fadein_duration = _orig
+                        cue.started.disconnect(
+                            _restore_fadein
+                        )
+
+                    next_child.started.connect(
+                        _restore_fadein
+                    )
                 next_child.execute(CueAction.FadeInStart)
-                next_child.fadein_duration = orig_fadein
 
                 # Re-arm crossfade for the next transition
                 self._arm_crossfade_if_needed(

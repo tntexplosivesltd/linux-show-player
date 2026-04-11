@@ -418,10 +418,24 @@ def test_6_crossfade(ids, group_id):
     check("6a: Crossfade started B",
           cue_state(B) == "Running")
 
-    time.sleep(1)
+    # 6b: After crossfade completes, fadein_duration should be
+    # restored to its original value (0) via the one-shot
+    # started signal handler — not permanently modified.
+    time.sleep(2.5)
+    check("6b: B fadein_duration restored after crossfade",
+          cue_prop(B, "fadein_duration") == 0)
+    check("6b: B still running after fade-in",
+          cue_state(B) == "Running")
+
     call("cue.seek", {"id": B, "position": 5500})
     time.sleep(1.5)
-    check("6b: Crossfade started C",
+    check("6c: Crossfade started C",
+          cue_state(C) == "Running")
+
+    time.sleep(2.5)
+    check("6c: C fadein_duration restored after crossfade",
+          cue_prop(C, "fadein_duration") == 0)
+    check("6c: C still running after fade-in",
           cue_state(C) == "Running")
 
     stop_all()

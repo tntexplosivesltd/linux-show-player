@@ -252,11 +252,13 @@ class TestResumeFromPause:
 
 
 class TestCrossfadePreservation:
-    def test_crossfade_preserves_child_fadeout_duration(
+    def test_crossfade_sets_fadeout_for_execute(
         self, group, mock_app
     ):
-        """Crossfade should not permanently modify a child's
-        fadeout_duration property (it would be serialized)."""
+        """Crossfade should set fadeout_duration before executing
+        FadeOutStop so the worker thread reads the correct value.
+        The property is restored asynchronously via a one-shot
+        stopped signal handler (tested in E2E)."""
         c1 = _make_child(
             "c1", state=CueState.Running, duration=10000
         )
@@ -276,13 +278,18 @@ class TestCrossfadePreservation:
 
         group._check_crossfade()
 
-        assert c1.fadeout_duration == 0
+        # fadeout_duration is set to crossfade value for the
+        # execute call; restore happens via stopped signal
+        c1.execute.assert_called_once_with(CueAction.FadeOutStop)
+        c1.stopped.connect.assert_called()
 
-    def test_crossfade_preserves_next_child_fadein_duration(
+    def test_crossfade_sets_fadein_for_execute(
         self, group, mock_app
     ):
-        """Crossfade should not permanently modify the next
-        child's fadein_duration property."""
+        """Crossfade should set fadein_duration before executing
+        FadeInStart so the worker thread reads the correct value.
+        The property is restored asynchronously via a one-shot
+        started signal handler (tested in E2E)."""
         c1 = _make_child(
             "c1", state=CueState.Running, duration=10000
         )
@@ -302,7 +309,10 @@ class TestCrossfadePreservation:
 
         group._check_crossfade()
 
-        assert c2.fadein_duration == 0
+        # fadein_duration is set to crossfade value for the
+        # execute call; restore happens via started signal
+        c2.execute.assert_called_once_with(CueAction.FadeInStart)
+        c2.started.connect.assert_called()
 
 
 class TestGroupIdProperty:
