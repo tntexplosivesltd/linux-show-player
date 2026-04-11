@@ -438,7 +438,7 @@ class ListLayout(CueLayout):
 
             standby = self.standby_index()
             if standby >= 0:
-                item = self._view.listView.itemFromIndex(standby)
+                item = self._view.listView.cueItemAt(standby)
                 if item is not None:
                     item.setSelected(True)
         else:
@@ -464,24 +464,32 @@ class ListLayout(CueLayout):
     def _collapse_all_groups(self):
         from lisp.plugins.action_cues.group_cue import GroupCue
 
-        for i in range(
-            self._view.listView.topLevelItemCount()
-        ):
-            item = self._view.listView.topLevelItem(i)
-            if isinstance(item.cue, GroupCue):
-                item.setExpanded(False)
-                item.cue.collapsed = True
+        self._view.listView.blockSignals(True)
+        try:
+            for i in range(
+                self._view.listView.topLevelItemCount()
+            ):
+                item = self._view.listView.topLevelItem(i)
+                if isinstance(item.cue, GroupCue):
+                    item.setExpanded(False)
+                    item.cue.collapsed = True
+        finally:
+            self._view.listView.blockSignals(False)
 
     def _expand_all_groups(self):
         from lisp.plugins.action_cues.group_cue import GroupCue
 
-        for i in range(
-            self._view.listView.topLevelItemCount()
-        ):
-            item = self._view.listView.topLevelItem(i)
-            if isinstance(item.cue, GroupCue):
-                item.setExpanded(True)
-                item.cue.collapsed = False
+        self._view.listView.blockSignals(True)
+        try:
+            for i in range(
+                self._view.listView.topLevelItemCount()
+            ):
+                item = self._view.listView.topLevelItem(i)
+                if isinstance(item.cue, GroupCue):
+                    item.setExpanded(True)
+                    item.cue.collapsed = False
+        finally:
+            self._view.listView.blockSignals(False)
 
     def _double_clicked(self):
         cue = self.standby_cue()
@@ -493,9 +501,9 @@ class ListLayout(CueLayout):
         if self._view.listView.itemAt(event.pos()) is not None:
             cues = list(self.selected_cues())
             if not cues:
-                context_index = self._view.listView.indexAt(event.pos())
-                if context_index.isValid():
-                    cues.append(self._list_model.item(context_index.row()))
+                item = self._view.listView.itemAt(event.pos())
+                if item is not None:
+                    cues.append(item.cue)
                 else:
                     return
 

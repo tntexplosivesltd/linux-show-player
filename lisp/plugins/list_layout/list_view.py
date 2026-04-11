@@ -161,9 +161,12 @@ class CueListView(QTreeWidget):
             )
             stream = QDataStream(data, QIODevice.ReadOnly)
 
-            # Get the starting-item row
-            to_index = self.indexAt(event.pos()).row()
-            if not 0 <= to_index <= len(self._model):
+            # Get the drop target index using item lookup to avoid
+            # child-relative row numbers from QModelIndex.row()
+            drop_item = self.itemAt(event.pos())
+            if drop_item is not None:
+                to_index = drop_item.cue.index
+            else:
                 to_index = len(self._model)
 
             rows = []
@@ -219,10 +222,10 @@ class CueListView(QTreeWidget):
         self.updateHeadersSizes()
 
     def standbyIndex(self):
-        return self.indexFromItem(self.currentItem())
+        return self.cueIndexOf(self.currentItem())
 
     def setStandbyIndex(self, newIndex):
-        item = self.itemFromIndex(newIndex)
+        item = self.cueItemAt(newIndex)
         if item is not None:
             self.setCurrentItem(item)
 
@@ -246,7 +249,7 @@ class CueListView(QTreeWidget):
                 header.setSectionResizeMode(i, QHeaderView.Fixed)
                 header.resizeSection(i, max(contentWidth, stretchWidth))
 
-    def itemFromIndex(self, index):
+    def cueItemAt(self, index):
         """Return the QTreeWidgetItem for a flat model index.
 
         Walks the tree in visual order (top-level items and
@@ -263,7 +266,7 @@ class CueListView(QTreeWidget):
                     return child
         return None
 
-    def indexFromItem(self, item):
+    def cueIndexOf(self, item):
         """Return the flat model index for a QTreeWidgetItem."""
         if item is None:
             return -1
@@ -330,7 +333,7 @@ class CueListView(QTreeWidget):
 
     def __cuePropChanged(self, cue, property_name, _):
         if property_name == "stylesheet":
-            item = self.itemFromIndex(cue.index)
+            item = self.cueItemAt(cue.index)
             if item is not None:
                 self.__updateItemStyle(item)
         if property_name == "name":
@@ -340,7 +343,7 @@ class CueListView(QTreeWidget):
 
     def __cueGroupChanged(self, cue):
         """Reparent item when its group_id changes."""
-        item = self.itemFromIndex(cue.index)
+        item = self.cueItemAt(cue.index)
         if item is None:
             return
 
@@ -438,7 +441,7 @@ class CueListView(QTreeWidget):
             cue.collapsed = False
 
     def __cueMoved(self, before, after):
-        item = self.itemFromIndex(before)
+        item = self.cueItemAt(after)
         if item is None:
             return
 
@@ -481,9 +484,26 @@ class CueListView(QTreeWidget):
 
         if isinstance(cue, GroupCue):
             cue.started.disconnect(self.__groupStarted)
-            self._group_items.pop(cue.id, None)
+            group_item = self._group_items.pop(cue.id, None)
 
-        item = self.itemFromIndex(cue.index)
+            # Reparent children to top-level before removing group
+            if group_item is not None:
+                while group_item.childCount() > 0:
+                    child = group_item.takeChild(0)
+                    # Find correct top-level position by index
+                    pos = 0
+                    for i in range(self.topLevelItemCount()):
+                        if (
+                            self.topLevelItem(i).cue.index
+                            < child.cue.index
+                        ):
+                            pos = i + 1
+                        else:
+                            break
+                    self.insertTopLevelItem(pos, child)
+                    self.__setupItemWidgets(child)
+
+        item = self.cueItemAt(cue.index)
         if item is None:
             return
 
