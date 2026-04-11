@@ -134,6 +134,24 @@ class ListLayout(CueLayout):
         )
         layout_menu.addAction(self.go_key_disabled_while_playing_action)
 
+        self.collapse_all_action = QAction(layout_menu)
+        self.collapse_all_action.setShortcut(
+            QKeySequence("Ctrl+Shift+[")
+        )
+        self.collapse_all_action.triggered.connect(
+            self._collapse_all_groups
+        )
+        layout_menu.addAction(self.collapse_all_action)
+
+        self.expand_all_action = QAction(layout_menu)
+        self.expand_all_action.setShortcut(
+            QKeySequence("Ctrl+Shift+]")
+        )
+        self.expand_all_action.triggered.connect(
+            self._expand_all_groups
+        )
+        layout_menu.addAction(self.expand_all_action)
+
         layout_menu.addSeparator()
 
         self.enable_view_resize_action = QAction(layout_menu)
@@ -156,6 +174,10 @@ class ListLayout(CueLayout):
         self._set_auto_continue(ListLayout.Config["autoContinue"])
         self._set_go_key_disabled_while_playing(
             ListLayout.Config["goKeyDisabledWhilePlaying"]
+        )
+
+        self._view.listView.setAutoExpand(
+            ListLayout.Config.get("autoExpandOnPlay", True)
         )
 
         # Context menu actions
@@ -231,6 +253,12 @@ class ListLayout(CueLayout):
         self.go_key_disabled_while_playing_action.setText(
             translate("ListLayout", "Disable GO Key While Playing")
         )
+        self.collapse_all_action.setText(
+            translate("ListLayout", "Collapse all groups")
+        )
+        self.expand_all_action.setText(
+            translate("ListLayout", "Expand all groups")
+        )
 
     @property
     def model(self):
@@ -293,9 +321,7 @@ class ListLayout(CueLayout):
 
     def selected_cues(self, cue_type=Cue):
         for item in self._view.listView.selectedItems():
-            yield self._list_model.item(
-                self._view.listView.indexOfTopLevelItem(item)
-            )
+            yield item.cue
 
     def finalize(self):
         # Clean layout menu
@@ -309,19 +335,18 @@ class ListLayout(CueLayout):
 
     def select_all(self, cue_type=Cue):
         if self.selection_mode:
-            for index in range(self._view.listView.topLevelItemCount()):
-                if isinstance(self._list_model.item(index), cue_type):
-                    self._view.listView.topLevelItem(index).setSelected(True)
+            for item in self._view.listView.iterAllItems():
+                if isinstance(item.cue, cue_type):
+                    item.setSelected(True)
 
     def deselect_all(self, cue_type=Cue):
-        for index in range(self._view.listView.topLevelItemCount()):
-            if isinstance(self._list_model.item(index), cue_type):
-                self._view.listView.topLevelItem(index).setSelected(False)
+        for item in self._view.listView.iterAllItems():
+            if isinstance(item.cue, cue_type):
+                item.setSelected(False)
 
     def invert_selection(self):
         if self.selection_mode:
-            for index in range(self._view.listView.topLevelItemCount()):
-                item = self._view.listView.topLevelItem(index)
+            for item in self._view.listView.iterAllItems():
                 item.setSelected(not item.isSelected())
 
     def _key_pressed(self, event):
@@ -413,7 +438,9 @@ class ListLayout(CueLayout):
 
             standby = self.standby_index()
             if standby >= 0:
-                self._view.listView.topLevelItem(standby).setSelected(True)
+                item = self._view.listView.cueItemAt(standby)
+                if item is not None:
+                    item.setSelected(True)
         else:
             self.deselect_all()
             self._view.listView.setSelectionMode(CueListView.NoSelection)
@@ -434,6 +461,36 @@ class ListLayout(CueLayout):
         self.enable_view_resize_action.setChecked(enabled)
         self._view.setResizeHandlesEnabled(enabled)
 
+    def _collapse_all_groups(self):
+        from lisp.plugins.action_cues.group_cue import GroupCue
+
+        self._view.listView.blockSignals(True)
+        try:
+            for i in range(
+                self._view.listView.topLevelItemCount()
+            ):
+                item = self._view.listView.topLevelItem(i)
+                if isinstance(item.cue, GroupCue):
+                    item.setExpanded(False)
+                    item.cue.collapsed = True
+        finally:
+            self._view.listView.blockSignals(False)
+
+    def _expand_all_groups(self):
+        from lisp.plugins.action_cues.group_cue import GroupCue
+
+        self._view.listView.blockSignals(True)
+        try:
+            for i in range(
+                self._view.listView.topLevelItemCount()
+            ):
+                item = self._view.listView.topLevelItem(i)
+                if isinstance(item.cue, GroupCue):
+                    item.setExpanded(True)
+                    item.cue.collapsed = False
+        finally:
+            self._view.listView.blockSignals(False)
+
     def _double_clicked(self):
         cue = self.standby_cue()
         if cue is not None:
@@ -444,9 +501,9 @@ class ListLayout(CueLayout):
         if self._view.listView.itemAt(event.pos()) is not None:
             cues = list(self.selected_cues())
             if not cues:
-                context_index = self._view.listView.indexAt(event.pos())
-                if context_index.isValid():
-                    cues.append(self._list_model.item(context_index.row()))
+                item = self._view.listView.itemAt(event.pos())
+                if item is not None:
+                    cues.append(item.cue)
                 else:
                     return
 

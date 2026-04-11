@@ -68,9 +68,6 @@ class NameWidget(QLabel):
         self._item.cue.changed("exclusive").connect(
             self.__update_exclusive, Connection.QtQueued
         )
-        self._item.cue.changed("group_id").connect(
-            self.__update_group, Connection.QtQueued
-        )
 
         self._refresh()
 
@@ -78,9 +75,6 @@ class NameWidget(QLabel):
         name = self._item.cue.name
         if self._item.cue.exclusive:
             name = "* " + name
-        # Indent children of a group
-        if self._item.cue.group_id:
-            name = "    " + name
 
         super().setText(name)
 
@@ -88,9 +82,6 @@ class NameWidget(QLabel):
         self._refresh()
 
     def __update_exclusive(self, value):
-        self._refresh()
-
-    def __update_group(self, value):
         self._refresh()
 
 

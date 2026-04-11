@@ -59,6 +59,9 @@ class TestGroupCueDefaults:
         assert CueAction.Stop in group.CueActions
         assert CueAction.Pause in group.CueActions
 
+    def test_default_collapsed_false(self, group):
+        assert group.collapsed is False
+
 
 class TestResolveChildren:
     def test_resolves_existing_children(self, group, mock_app):
@@ -249,11 +252,13 @@ class TestResumeFromPause:
 
 
 class TestCrossfadePreservation:
-    def test_crossfade_preserves_child_fadeout_duration(
+    def test_crossfade_sets_fadeout_for_execute(
         self, group, mock_app
     ):
-        """Crossfade should not permanently modify a child's
-        fadeout_duration property (it would be serialized)."""
+        """Crossfade should set fadeout_duration before executing
+        FadeOutStop so the worker thread reads the correct value.
+        The property is restored asynchronously via a one-shot
+        stopped signal handler (tested in E2E)."""
         c1 = _make_child(
             "c1", state=CueState.Running, duration=10000
         )
@@ -273,13 +278,18 @@ class TestCrossfadePreservation:
 
         group._check_crossfade()
 
-        assert c1.fadeout_duration == 0
+        # fadeout_duration is set to crossfade value for the
+        # execute call; restore happens via stopped signal
+        c1.execute.assert_called_once_with(CueAction.FadeOutStop)
+        c1.stopped.connect.assert_called()
 
-    def test_crossfade_preserves_next_child_fadein_duration(
+    def test_crossfade_sets_fadein_for_execute(
         self, group, mock_app
     ):
-        """Crossfade should not permanently modify the next
-        child's fadein_duration property."""
+        """Crossfade should set fadein_duration before executing
+        FadeInStart so the worker thread reads the correct value.
+        The property is restored asynchronously via a one-shot
+        started signal handler (tested in E2E)."""
         c1 = _make_child(
             "c1", state=CueState.Running, duration=10000
         )
@@ -299,7 +309,10 @@ class TestCrossfadePreservation:
 
         group._check_crossfade()
 
-        assert c2.fadein_duration == 0
+        # fadein_duration is set to crossfade value for the
+        # execute call; restore happens via started signal
+        c2.execute.assert_called_once_with(CueAction.FadeInStart)
+        c2.started.connect.assert_called()
 
 
 class TestGroupIdProperty:
@@ -316,3 +329,20 @@ class TestGroupIdProperty:
         c.group_id = "some-group-id"
         props = c.properties()
         assert props["group_id"] == "some-group-id"
+
+
+class TestCollapsedProperty:
+    def test_collapsed_default(self, mock_app):
+        g = GroupCue(mock_app)
+        assert g.collapsed is False
+
+    def test_collapsed_serialized(self, mock_app):
+        g = GroupCue(mock_app)
+        g.collapsed = True
+        props = g.properties()
+        assert props["collapsed"] is True
+
+    def test_collapsed_not_in_defaults_when_false(self, mock_app):
+        g = GroupCue(mock_app)
+        props = g.properties(defaults=False)
+        assert "collapsed" not in props

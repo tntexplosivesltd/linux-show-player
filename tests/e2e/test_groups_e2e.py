@@ -418,10 +418,24 @@ def test_6_crossfade(ids, group_id):
     check("6a: Crossfade started B",
           cue_state(B) == "Running")
 
-    time.sleep(1)
+    # 6b: After crossfade completes, fadein_duration should be
+    # restored to its original value (0) via the one-shot
+    # started signal handler — not permanently modified.
+    time.sleep(2.5)
+    check("6b: B fadein_duration restored after crossfade",
+          cue_prop(B, "fadein_duration") == 0)
+    check("6b: B still running after fade-in",
+          cue_state(B) == "Running")
+
     call("cue.seek", {"id": B, "position": 5500})
     time.sleep(1.5)
-    check("6b: Crossfade started C",
+    check("6c: Crossfade started C",
+          cue_state(C) == "Running")
+
+    time.sleep(2.5)
+    check("6c: C fadein_duration restored after crossfade",
+          cue_prop(C, "fadein_duration") == 0)
+    check("6c: C still running after fade-in",
           cue_state(C) == "Running")
 
     stop_all()
@@ -639,6 +653,204 @@ def test_10_edge_cases(ids, group_id):
     stop_all()
 
 
+def test_11_collapse_persist(ids, group_id):
+    print("\n═══ Test 11: Collapse Persistence ═══")
+
+    # Re-discover the current GroupCue (test_10 may have
+    # deleted and re-created groups).
+    cues = call("cue.list")
+    group = next(
+        (c for c in sorted(cues, key=lambda c: c["index"])
+         if c["_type_"] == "GroupCue"),
+        None,
+    )
+    if group is None:
+        check("11: Group exists", False)
+        return group_id
+    group_id = group["id"]
+
+    # 11a: Default collapsed value is False for a fresh group
+    check("11a: Default collapsed is False",
+          cue_prop(group_id, "collapsed") is False)
+
+    # 11b: Set collapsed
+    call("cue.set_property", {
+        "id": group_id, "property": "collapsed",
+        "value": True,
+    })
+    check("11b: Collapsed set to True",
+          cue_prop(group_id, "collapsed") is True)
+
+    # 11c: Save and reload — collapsed persists
+    save_path = "/tmp/lisp_collapse_test_session.lsp"
+    call("session.save", {"path": save_path})
+    time.sleep(0.5)
+
+    call("session.load", {"path": save_path})
+
+    # Wait for reload to finish — poll until a GroupCue appears
+    gid = None
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        time.sleep(0.5)
+        cues = call("cue.list")
+        group = next(
+            (c for c in sorted(cues, key=lambda c: c["index"])
+             if c["_type_"] == "GroupCue"),
+            None,
+        )
+        if group is not None:
+            gid = group["id"]
+            break
+
+    if gid is None:
+        check("11c: Group found after reload", False)
+        return group_id
+
+    check("11c: Collapsed persists after reload",
+          cue_prop(gid, "collapsed") is True)
+
+    # 11d: Can set back to expanded
+    call("cue.set_property", {
+        "id": gid, "property": "collapsed",
+        "value": False,
+    })
+    check("11d: Can set back to expanded",
+          cue_prop(gid, "collapsed") is False)
+
+    # 11e: Collapsed survives undo/redo of group creation
+    # Ungroup (undo-able), then redo — collapsed should be restored
+    call("cue.set_property", {
+        "id": gid, "property": "collapsed",
+        "value": True,
+    })
+    call("layout.context_action", {
+        "action": "Ungroup", "cue_ids": [gid],
+    })
+    time.sleep(0.3)
+    check("11e: Ungroup succeeded",
+          call("cue.count")["count"] < 5)
+
+    call("commands.undo")
+    time.sleep(0.3)
+    check("11e: Redo restores group",
+          call("cue.count")["count"] >= 5)
+
+    # After redo the group should still exist; find it
+    cues = call("cue.list")
+    group_after = next(
+        (c for c in sorted(cues, key=lambda c: c["index"])
+         if c["_type_"] == "GroupCue"),
+        None,
+    )
+    check("11e: Group present after undo",
+          group_after is not None)
+    if group_after:
+        gid = group_after["id"]
+        # collapsed was True before ungroup; undo should restore it
+        check("11e: Collapsed survives undo",
+              cue_prop(gid, "collapsed") is True)
+        # Reset to expanded for downstream tests
+        call("cue.set_property", {
+            "id": gid, "property": "collapsed",
+            "value": False,
+        })
+
+    return gid
+
+
+def test_13_auto_expand_on_play(ids, group_id):
+    """Group should auto-expand when started (collapsed property clears)."""
+    print("\n═══ Test 13: Auto-Expand on Play ═══")
+
+    # Set collapsed
+    call("cue.set_property", {
+        "id": group_id, "property": "collapsed",
+        "value": True,
+    })
+    check("13a: Group collapsed",
+          cue_prop(group_id, "collapsed") is True)
+
+    # Start the group
+    call("cue.execute", {"id": group_id, "action": "Start"})
+    time.sleep(0.5)
+
+    # Auto-expand should have cleared collapsed
+    check("13b: Auto-expanded on play",
+          cue_prop(group_id, "collapsed") is False)
+    check("13c: Group is running",
+          cue_state(group_id) == "Running")
+
+    stop_all()
+
+
+def test_14_move_cue_with_groups(ids, group_id):
+    """Moving cues should work correctly with groups present."""
+    print("\n═══ Test 14: Move Cue With Groups ═══")
+
+    D = ids["tone_D"]
+
+    # Get current positions
+    cues_before = sorted(
+        call("cue.list"), key=lambda c: c["index"]
+    )
+    d_index_before = next(
+        c["index"] for c in cues_before if c["id"] == D
+    )
+
+    # Move D to the front
+    call("layout.move_cue", {
+        "from_index": d_index_before, "to_index": 0,
+    })
+    time.sleep(0.3)
+
+    cues_after = sorted(
+        call("cue.list"), key=lambda c: c["index"]
+    )
+    check("14a: D moved to front",
+          cues_after[0]["id"] == D)
+
+    # Move it back
+    call("layout.move_cue", {
+        "from_index": 0, "to_index": d_index_before,
+    })
+    time.sleep(0.3)
+
+    # Verify group is intact
+    check("14b: Group still has children",
+          len(cue_prop(group_id, "children")) > 0)
+
+
+def test_12_group_delete_children_survive(ids, group_id):
+    """Deleting a group directly should leave children visible."""
+    print("\n═══ Test 12: Group Delete Children Survive ═══")
+
+    A = ids["tone_A"]
+
+    # Get children before deletion
+    children = cue_prop(group_id, "children")
+    total_before = call("cue.count")["count"]
+    check("12 precondition: Group has children",
+          len(children) > 0)
+
+    # Delete the group
+    call("cue.remove", {"id": group_id})
+    time.sleep(0.5)
+
+    # Children should still exist (total - 1 for the group)
+    total_after = call("cue.count")["count"]
+    check("12a: Children survive group deletion",
+          total_after == total_before - 1)
+
+    # Children should be accessible
+    check("12b: Child A still exists",
+          call("cue.state", {"id": A})["state_name"] == "Stop")
+
+    # The group no longer exists; child A should still be reachable
+    check("12c: Child A group_id stale",
+          call("cue.get", {"id": A}) is not None)
+
+
 # ── Main ─────────────────────────────────────────────────────
 
 def main():
@@ -690,6 +902,10 @@ def main():
         test_8_exclusive(ids, group_id)
         group_id = test_9_save_load(ids, group_id)
         test_10_edge_cases(ids, group_id)
+        group_id = test_11_collapse_persist(ids, group_id)
+        test_13_auto_expand_on_play(ids, group_id)
+        test_14_move_cue_with_groups(ids, group_id)
+        test_12_group_delete_children_survive(ids, group_id)
     finally:
         stop_all()
         if not args.no_launch:

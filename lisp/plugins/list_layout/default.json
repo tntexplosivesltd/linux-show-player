@@ -18,5 +18,6 @@
     "pauseCueFade": true,
     "resumeCueFade": true,
     "interruptCueFade": true,
-    "infoPanelFontSize": 12
+    "infoPanelFontSize": 12,
+    "autoExpandOnPlay": true
 }

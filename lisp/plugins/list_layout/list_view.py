@@ -27,8 +27,11 @@ from PyQt5.QtGui import QKeyEvent, QContextMenuEvent, QBrush, QColor
 from PyQt5.QtWidgets import QTreeWidget, QHeaderView, QTreeWidgetItem
 
 from lisp.application import Application
+from lisp.core.signal import Connection
 from lisp.backend import get_backend
 from lisp.command.model import ModelMoveItemsCommand, ModelInsertItemsCommand
+from lisp.cues.cue import CueState
+from lisp.plugins.action_cues.group_cue import GroupCue
 from lisp.core.util import subdict
 from lisp.plugins.list_layout.list_widgets import (
     CueStatusIcons,
@@ -71,7 +74,7 @@ class CueListView(QTreeWidget):
     # TODO: add ability to show/hide
     # TODO: implement columns (cue-type / target / etc..)
     COLUMNS = [
-        ListColumn("", CueStatusIcons, QHeaderView.Fixed, width=45),
+        ListColumn("", CueStatusIcons, QHeaderView.Fixed, width=75),
         ListColumn("#", IndexWidget, QHeaderView.ResizeToContents),
         ListColumn(
             QT_TRANSLATE_NOOP("ListLayoutHeader", "Cue"),
@@ -100,6 +103,8 @@ class CueListView(QTreeWidget):
         super().__init__(parent)
         self.__itemMoving = False
         self.__scrollRangeGuard = False
+        self._group_items = {}  # {group_cue_id: QTreeWidgetItem}
+        self._auto_expand = True
 
         # Watch for model changes
         self._model = listModel
@@ -122,7 +127,7 @@ class CueListView(QTreeWidget):
         self.setDragDropMode(self.InternalMove)
 
         # Set some visual options
-        self.setIndentation(0)
+        self.setIndentation(16)
         self.setAlternatingRowColors(True)
         self.setVerticalScrollMode(self.ScrollPerItem)
 
@@ -131,6 +136,8 @@ class CueListView(QTreeWidget):
         self.currentItemChanged.connect(
             self.__currentItemChanged, Qt.QueuedConnection
         )
+        self.itemCollapsed.connect(self.__itemCollapsed)
+        self.itemExpanded.connect(self.__itemExpanded)
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
@@ -155,9 +162,12 @@ class CueListView(QTreeWidget):
             )
             stream = QDataStream(data, QIODevice.ReadOnly)
 
-            # Get the starting-item row
-            to_index = self.indexAt(event.pos()).row()
-            if not 0 <= to_index <= len(self._model):
+            # Get the drop target index using item lookup to avoid
+            # child-relative row numbers from QModelIndex.row()
+            drop_item = self.itemAt(event.pos())
+            if drop_item is not None:
+                to_index = drop_item.cue.index
+            else:
                 to_index = len(self._model)
 
             rows = []
@@ -213,11 +223,12 @@ class CueListView(QTreeWidget):
         self.updateHeadersSizes()
 
     def standbyIndex(self):
-        return self.indexOfTopLevelItem(self.currentItem())
+        return self.cueIndexOf(self.currentItem())
 
     def setStandbyIndex(self, newIndex):
-        if 0 <= newIndex < self.topLevelItemCount():
-            self.setCurrentItem(self.topLevelItem(newIndex))
+        item = self.cueItemAt(newIndex)
+        if item is not None:
+            self.setCurrentItem(item)
 
     def updateHeadersSizes(self):
         """Some hack to have "stretchable" columns with a minimum size
@@ -239,6 +250,41 @@ class CueListView(QTreeWidget):
                 header.setSectionResizeMode(i, QHeaderView.Fixed)
                 header.resizeSection(i, max(contentWidth, stretchWidth))
 
+    def cueItemAt(self, index):
+        """Return the QTreeWidgetItem for a flat model index.
+
+        Walks the tree in visual order (top-level items and
+        their children) to find the item whose cue.index
+        matches the requested index.
+        """
+        for i in range(self.topLevelItemCount()):
+            top = self.topLevelItem(i)
+            if top.cue.index == index:
+                return top
+            for j in range(top.childCount()):
+                child = top.child(j)
+                if child.cue.index == index:
+                    return child
+        return None
+
+    def cueIndexOf(self, item):
+        """Return the flat model index for a QTreeWidgetItem."""
+        if item is None:
+            return -1
+        return item.cue.index
+
+    def iterAllItems(self):
+        """Yield all items in visual order (groups then children
+        interleaved)."""
+        for i in range(self.topLevelItemCount()):
+            top = self.topLevelItem(i)
+            yield top
+            for j in range(top.childCount()):
+                yield top.child(j)
+
+    def setAutoExpand(self, enabled):
+        self._auto_expand = enabled
+
     def __currentItemChanged(self, current, previous):
         if previous is not None:
             previous.current = False
@@ -255,6 +301,14 @@ class CueListView(QTreeWidget):
                 self.scrollToItem(current, QTreeWidget.PositionAtCenter)
             elif not self.selectedIndexes():
                 current.setSelected(True)
+
+    def __itemCollapsed(self, item):
+        if isinstance(item.cue, GroupCue):
+            item.cue.collapsed = True
+
+    def __itemExpanded(self, item):
+        if isinstance(item.cue, GroupCue):
+            item.cue.collapsed = False
 
     def __updateItemStyle(self, item):
         if item.treeWidget() is not None:
@@ -280,39 +334,212 @@ class CueListView(QTreeWidget):
 
     def __cuePropChanged(self, cue, property_name, _):
         if property_name == "stylesheet":
-            self.__updateItemStyle(self.topLevelItem(cue.index))
+            item = self.cueItemAt(cue.index)
+            if item is not None:
+                self.__updateItemStyle(item)
         if property_name == "name":
             QTimer.singleShot(1, self.updateHeadersSizes)
+        if property_name == "group_id":
+            self.__cueGroupChanged(cue)
+
+    def __cueGroupChanged(self, cue):
+        """Reparent item when its group_id changes."""
+        item = self.cueItemAt(cue.index)
+        if item is None:
+            return
+
+        # Remove from current parent
+        parent = item.parent()
+        if parent is not None:
+            parent.removeChild(item)
+        else:
+            idx = self.indexOfTopLevelItem(item)
+            if idx >= 0:
+                self.takeTopLevelItem(idx)
+
+        # Re-insert under new parent (or top-level)
+        if cue.group_id and cue.group_id in self._group_items:
+            new_parent = self._group_items[cue.group_id]
+            child_pos = 0
+            for j in range(new_parent.childCount()):
+                if new_parent.child(j).cue.index < cue.index:
+                    child_pos = j + 1
+                else:
+                    break
+            new_parent.insertChild(child_pos, item)
+        else:
+            pos = 0
+            for i in range(self.topLevelItemCount()):
+                if self.topLevelItem(i).cue.index < cue.index:
+                    pos = i + 1
+                else:
+                    break
+            self.insertTopLevelItem(pos, item)
+
+        self.__setupItemWidgets(item)
+        self.__updateItemStyle(item)
 
     def __cueAdded(self, cue):
         item = CueTreeWidgetItem(cue)
         item.setFlags(item.flags() & ~Qt.ItemIsDropEnabled)
         cue.property_changed.connect(self.__cuePropChanged)
 
-        self.insertTopLevelItem(cue.index, item)
+        # Block signals to prevent itemExpanded/itemCollapsed
+        # from firing during insertion and overwriting the
+        # persisted collapsed state on the cue.
+        self.blockSignals(True)
+        try:
+            if isinstance(cue, GroupCue):
+                pos = 0
+                for i in range(self.topLevelItemCount()):
+                    if (
+                        self.topLevelItem(i).cue.index
+                        < cue.index
+                    ):
+                        pos = i + 1
+                    else:
+                        break
+                self.insertTopLevelItem(pos, item)
+                self._group_items[cue.id] = item
+                item.setExpanded(not cue.collapsed)
+                cue.started.connect(
+                    self.__groupStarted, Connection.QtQueued
+                )
+            elif (
+                cue.group_id
+                and cue.group_id in self._group_items
+            ):
+                parent = self._group_items[cue.group_id]
+                child_pos = 0
+                for j in range(parent.childCount()):
+                    if (
+                        parent.child(j).cue.index
+                        < cue.index
+                    ):
+                        child_pos = j + 1
+                    else:
+                        break
+                parent.insertChild(child_pos, item)
+            else:
+                pos = 0
+                for i in range(self.topLevelItemCount()):
+                    if (
+                        self.topLevelItem(i).cue.index
+                        < cue.index
+                    ):
+                        pos = i + 1
+                    else:
+                        break
+                self.insertTopLevelItem(pos, item)
+        finally:
+            self.blockSignals(False)
+
         self.__setupItemWidgets(item)
         self.__updateItemStyle(item)
 
-        if self.topLevelItemCount() == 1:
-            # If it's the only item in the view, set it as current
+        total = sum(
+            1 + self.topLevelItem(i).childCount()
+            for i in range(self.topLevelItemCount())
+        )
+        if total == 1:
             self.setCurrentItem(item)
-        else:
-            # Scroll to the last item added
+        elif not (
+            item.parent() is not None
+            and not item.parent().isExpanded()
+        ):
+            # Don't scroll to children of collapsed groups —
+            # scrollToItem would auto-expand the parent.
             self.scrollToItem(item)
 
-        # Ensure that the focus is set
         self.setFocus()
 
+    def __groupStarted(self, cue):
+        if not self._auto_expand:
+            return
+        if not (cue.state & CueState.IsRunning):
+            return
+        if cue.id in self._group_items:
+            item = self._group_items[cue.id]
+            item.setExpanded(True)
+            cue.collapsed = False
+
     def __cueMoved(self, before, after):
-        item = self.takeTopLevelItem(before)
-        self.insertTopLevelItem(after, item)
+        item = self.cueItemAt(after)
+        if item is None:
+            return
+
+        # Remove from current parent
+        parent = item.parent()
+        if parent is not None:
+            parent.removeChild(item)
+        else:
+            idx = self.indexOfTopLevelItem(item)
+            if idx >= 0:
+                self.takeTopLevelItem(idx)
+
+        # Update the cue index on the item before reinsertion
+        # (the model has already updated cue.index)
+
+        # Determine new parent
+        cue = item.cue
+        if cue.group_id and cue.group_id in self._group_items:
+            new_parent = self._group_items[cue.group_id]
+            child_pos = 0
+            for j in range(new_parent.childCount()):
+                if new_parent.child(j).cue.index < cue.index:
+                    child_pos = j + 1
+                else:
+                    break
+            new_parent.insertChild(child_pos, item)
+        else:
+            pos = 0
+            for i in range(self.topLevelItemCount()):
+                if self.topLevelItem(i).cue.index < cue.index:
+                    pos = i + 1
+                else:
+                    break
+            self.insertTopLevelItem(pos, item)
+
         self.__setupItemWidgets(item)
 
     def __cueRemoved(self, cue):
         cue.property_changed.disconnect(self.__cuePropChanged)
-        self.takeTopLevelItem(cue.index)
+
+        if isinstance(cue, GroupCue):
+            cue.started.disconnect(self.__groupStarted)
+            group_item = self._group_items.pop(cue.id, None)
+
+            # Reparent children to top-level before removing group
+            if group_item is not None:
+                while group_item.childCount() > 0:
+                    child = group_item.takeChild(0)
+                    # Find correct top-level position by index
+                    pos = 0
+                    for i in range(self.topLevelItemCount()):
+                        if (
+                            self.topLevelItem(i).cue.index
+                            < child.cue.index
+                        ):
+                            pos = i + 1
+                        else:
+                            break
+                    self.insertTopLevelItem(pos, child)
+                    self.__setupItemWidgets(child)
+
+        item = self.cueItemAt(cue.index)
+        if item is None:
+            return
+
+        parent = item.parent()
+        if parent is not None:
+            parent.removeChild(item)
+        else:
+            idx = self.indexOfTopLevelItem(item)
+            if idx >= 0:
+                self.takeTopLevelItem(idx)
 
     def __modelReset(self):
+        self._group_items.clear()
         self.reset()
         self.clear()
 
