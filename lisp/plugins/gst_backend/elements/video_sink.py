@@ -109,34 +109,60 @@ class VideoSink(GstMediaElement):
     def post_link(self, all_elements):
         """Wire the video branch and remove unused sinks.
 
-        For video+audio pipelines (UriAvInput): wires the video
-        branch, keeps both audio and video sinks.
+        Builds the video chain by finding:
+        1. The input element that provides video_src()
+        2. Any plugin elements that provide video_sink()
+           and video_src() (e.g. VideoAlpha)
+        3. Linking: input -> plugins -> self.video_queue
 
-        For video-only pipelines (ImageInput): wires the video
-        branch and removes the unused audio sink to prevent the
-        pipeline from hanging on an unlinked autoaudiosink.
+        Also detects whether audio is present and removes
+        the audio sink if not (prevents pipeline hang).
         """
-        video_wired = False
+        input_video_src = None
+        video_plugins = []
         has_audio_src = False
 
         for element in all_elements:
             if element is self:
                 continue
-            if not video_wired:
-                video_src = element.video_src()
-                if video_src is not None:
-                    if not video_src.link(self.video_queue):
-                        logger.warning(
-                            "VideoSink: failed to link video "
-                            "source to video queue"
-                        )
-                    video_wired = True
+            # Find the video source (UriAvInput/ImageInput)
+            if input_video_src is None:
+                vs = element.video_src()
+                if vs is not None and not hasattr(
+                    element, "video_sink"
+                ):
+                    input_video_src = vs
+            # Collect video plugins (have both video_sink
+            # and video_src, e.g. VideoAlpha)
+            if (
+                hasattr(element, "video_sink")
+                and element.video_sink() is not None
+                and element.video_src() is not None
+            ):
+                video_plugins.append(element)
             if element.src() is not None:
                 has_audio_src = True
 
-        if not video_wired:
+        if input_video_src is not None:
+            # Build chain: input -> plugins -> video_queue
+            prev_src = input_video_src
+            for plugin in video_plugins:
+                if not prev_src.link(plugin.video_sink()):
+                    logger.warning(
+                        "VideoSink: failed to link %s",
+                        type(plugin).__name__,
+                    )
+                prev_src = plugin.video_src()
+
+            if not prev_src.link(self.video_queue):
+                logger.warning(
+                    "VideoSink: failed to link video "
+                    "source to video queue"
+                )
+        else:
             logger.debug(
-                "VideoSink: no video source found in pipeline"
+                "VideoSink: no video source found in "
+                "pipeline"
             )
 
         if not has_audio_src:

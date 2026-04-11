@@ -40,15 +40,24 @@ class TestVideoSinkConstruction:
         assert element.sink() is element.audio_sink
 
 
+def _mock_input(**kwargs):
+    """Create a mock input element (no video_sink attr)."""
+    mock = MagicMock(spec=["video_src", "src"])
+    mock.video_src.return_value = kwargs.get(
+        "video_src", None
+    )
+    mock.src.return_value = kwargs.get("src", None)
+    return mock
+
+
 class TestVideoSinkPostLink:
     def test_post_link_with_no_video_source(self):
         pipeline = Gst.Pipeline()
         sink = VideoSink(pipeline)
 
-        # Mock elements that have no video_src
-        mock_element = MagicMock()
-        mock_element.video_src.return_value = None
-        mock_element.src.return_value = MagicMock()
+        mock_element = _mock_input(
+            src=MagicMock()
+        )
 
         # Should not raise
         sink.post_link([mock_element, sink])
@@ -57,22 +66,61 @@ class TestVideoSinkPostLink:
         pipeline = Gst.Pipeline()
         sink = VideoSink(pipeline)
 
-        # Create a real videoconvert as the video source
         video_src_element = Gst.ElementFactory.make(
             "videotestsrc", None
         )
         pipeline.add(video_src_element)
 
-        mock_input = MagicMock()
-        mock_input.video_src.return_value = video_src_element
-        mock_input.src.return_value = MagicMock()
+        mock_input = _mock_input(
+            video_src=video_src_element,
+            src=MagicMock(),
+        )
 
-        # post_link should wire video_src -> video_queue
         sink.post_link([mock_input, sink])
 
-        # Verify link was made by checking pad peer
         src_pad = video_src_element.get_static_pad("src")
         assert src_pad.get_peer() is not None
+
+    def test_post_link_chains_video_plugin(self):
+        """VideoAlpha-style plugin is chained between input
+        and video_queue."""
+        pipeline = Gst.Pipeline()
+        sink = VideoSink(pipeline)
+
+        video_src_element = Gst.ElementFactory.make(
+            "videotestsrc", None
+        )
+        pipeline.add(video_src_element)
+
+        # Plugin element with video_sink and video_src
+        plugin_in = Gst.ElementFactory.make(
+            "videoconvert", None
+        )
+        plugin_out = Gst.ElementFactory.make(
+            "videoconvert", None
+        )
+        pipeline.add(plugin_in)
+        pipeline.add(plugin_out)
+        plugin_in.link(plugin_out)
+
+        mock_plugin = MagicMock()
+        mock_plugin.video_sink.return_value = plugin_in
+        mock_plugin.video_src.return_value = plugin_out
+        mock_plugin.src.return_value = None
+
+        mock_input = _mock_input(
+            video_src=video_src_element,
+            src=MagicMock(),
+        )
+
+        sink.post_link([mock_input, mock_plugin, sink])
+
+        # input -> plugin_in
+        src_pad = video_src_element.get_static_pad("src")
+        assert src_pad.get_peer() is not None
+        # plugin_out -> video_queue
+        out_pad = plugin_out.get_static_pad("src")
+        assert out_pad.get_peer() is not None
 
     def test_post_link_removes_audio_when_no_audio_src(self):
         """When no element provides audio (e.g. ImageInput),
@@ -80,20 +128,18 @@ class TestVideoSinkPostLink:
         pipeline = Gst.Pipeline()
         sink = VideoSink(pipeline)
 
-        # Simulate an image input: has video_src but no src
         video_src_element = Gst.ElementFactory.make(
             "videotestsrc", None
         )
         pipeline.add(video_src_element)
 
-        mock_input = MagicMock()
-        mock_input.video_src.return_value = video_src_element
-        mock_input.src.return_value = None
+        mock_input = _mock_input(
+            video_src=video_src_element,
+        )
 
         sink.post_link([mock_input, sink])
 
         assert sink._audio_removed is True
-        # audio_sink should be gone from pipeline
         name = sink.audio_sink.get_name()
         assert pipeline.get_by_name(name) is None
 
@@ -108,9 +154,10 @@ class TestVideoSinkPostLink:
         )
         pipeline.add(video_src_element)
 
-        mock_input = MagicMock()
-        mock_input.video_src.return_value = video_src_element
-        mock_input.src.return_value = MagicMock()
+        mock_input = _mock_input(
+            video_src=video_src_element,
+            src=MagicMock(),
+        )
 
         sink.post_link([mock_input, sink])
 
