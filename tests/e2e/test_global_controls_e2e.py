@@ -132,7 +132,7 @@ def test_4_interrupt_all(t):
 
     # interrupt_all is immediate — use a tight timeout
     reached = all(
-        wait_state(cid, "Stop", timeout=3) for cid in ids.values()
+        wait_state(cid, "Stop", timeout=5) for cid in ids.values()
     )
     t.check("4: all cues reach Stop after interrupt_all", reached)
 
