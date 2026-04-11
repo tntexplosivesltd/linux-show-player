@@ -17,4 +17,5 @@ collect_ignore = [
     "test_video_window_e2e.py",
     "test_wait_chaining_e2e.py",
     "test_seek_cue_e2e.py",
+    "test_index_action_cue_e2e.py",
 ]
