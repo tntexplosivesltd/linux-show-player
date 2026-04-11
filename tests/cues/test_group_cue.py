@@ -59,6 +59,9 @@ class TestGroupCueDefaults:
         assert CueAction.Stop in group.CueActions
         assert CueAction.Pause in group.CueActions
 
+    def test_default_collapsed_false(self, group):
+        assert group.collapsed is False
+
 
 class TestResolveChildren:
     def test_resolves_existing_children(self, group, mock_app):
@@ -316,3 +319,20 @@ class TestGroupIdProperty:
         c.group_id = "some-group-id"
         props = c.properties()
         assert props["group_id"] == "some-group-id"
+
+
+class TestCollapsedProperty:
+    def test_collapsed_default(self, mock_app):
+        g = GroupCue(mock_app)
+        assert g.collapsed is False
+
+    def test_collapsed_serialized(self, mock_app):
+        g = GroupCue(mock_app)
+        g.collapsed = True
+        props = g.properties()
+        assert props["collapsed"] is True
+
+    def test_collapsed_not_in_defaults_when_false(self, mock_app):
+        g = GroupCue(mock_app)
+        props = g.properties(defaults=False)
+        assert "collapsed" not in props

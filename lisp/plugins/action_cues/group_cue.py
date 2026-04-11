@@ -58,6 +58,7 @@ class GroupCue(Cue):
     loop = Property(default=False)
     crossfade = Property(default=0.0)
     icon = Property(default="cue-group")
+    collapsed = Property(default=False)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
