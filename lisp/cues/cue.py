@@ -200,8 +200,9 @@ class Cue(HasProperties):
         if action == CueAction.DoNothing:
             return
 
-        # Block start/resume actions if an exclusive cue is running.
-        # hasattr guard: self.app may be a mock/stub without this attr.
+        # Block start/resume actions if an exclusive cue is running,
+        # or if a video/image cue is already playing.
+        # hasattr guards: self.app may be a mock/stub without these.
         if action in (
             CueAction.Start,
             CueAction.FadeInStart,
@@ -211,6 +212,12 @@ class Cue(HasProperties):
             if (
                 hasattr(self.app, "exclusive_manager")
                 and self.app.exclusive_manager.is_start_blocked(self)
+            ):
+                return False
+            if (
+                hasattr(self.app, "video_exclusive_manager")
+                and self.app.video_exclusive_manager
+                    .is_start_blocked(self)
             ):
                 return False
 

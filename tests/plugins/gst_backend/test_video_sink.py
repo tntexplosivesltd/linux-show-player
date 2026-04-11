@@ -163,6 +163,7 @@ class TestVideoSinkClearDisplay:
             sink.play()
 
         mock_window.show_display.assert_called_once()
+        VideoSink._previous_sink = None
 
 
 class TestVideoSinkOverlay:
@@ -171,12 +172,42 @@ class TestVideoSinkOverlay:
         sink = VideoSink(pipeline)
         assert sink._window_handle == 0
 
-    def test_play_releases_previous_gl_context(self):
-        """When a new VideoSink plays, the previous one's
-        GStreamer sink is set to NULL to release its GL context."""
+    def test_play_sets_previous_sink(self):
+        """play() registers the sink as the active one."""
+        pipeline = Gst.Pipeline()
+        sink = VideoSink(pipeline)
+
+        mock_window = MagicMock()
+        with patch.object(
+            VideoSink, "_video_window",
+            return_value=mock_window,
+        ):
+            sink.play()
+            assert VideoSink._previous_sink is sink
+
+        VideoSink._previous_sink = None
+
+    def test_stop_clears_previous_sink(self):
+        """stop() clears _previous_sink if this is the active
+        sink."""
+        pipeline = Gst.Pipeline()
+        sink = VideoSink(pipeline)
+
+        mock_window = MagicMock()
+        with patch.object(
+            VideoSink, "_video_window",
+            return_value=mock_window,
+        ):
+            sink.play()
+            assert VideoSink._previous_sink is sink
+            sink.stop()
+            assert VideoSink._previous_sink is None
+
+    def test_stop_does_not_clear_other_sink(self):
+        """stop() on a non-active sink leaves _previous_sink
+        intact."""
         pipeline1 = Gst.Pipeline()
         sink1 = VideoSink(pipeline1)
-
         pipeline2 = Gst.Pipeline()
         sink2 = VideoSink(pipeline2)
 
@@ -185,18 +216,11 @@ class TestVideoSinkOverlay:
             VideoSink, "_video_window",
             return_value=mock_window,
         ):
-            sink1.play()
-            assert VideoSink._previous_sink is sink1
-
-            sink1.stop()
             sink2.play()
             assert VideoSink._previous_sink is sink2
+            sink1.stop()
+            assert VideoSink._previous_sink is sink2
 
-        # sink1's video_sink should have been set to NULL
-        state = sink1.video_sink.get_state(0)
-        assert state[1] == Gst.State.NULL
-
-        # Clean up class state for other tests
         VideoSink._previous_sink = None
 
     def test_dispose_disconnects_sync_handler(self):

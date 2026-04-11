@@ -65,6 +65,7 @@ linux-show-player = "lisp.main:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "--ignore=tests/e2e"
 timeout = 10
 markers = [
     "qt: tests requiring a Qt event loop",

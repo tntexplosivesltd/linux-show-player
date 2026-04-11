@@ -30,6 +30,9 @@ from lisp.cues.media_cue import MediaCue
 from lisp.plugins.gst_backend import config, elements, settings
 from lisp.ui.widgets.notification import NotificationLevel
 from lisp.plugins.gst_backend.gi_repository import Gst
+from lisp.plugins.gst_backend.video_exclusive import (
+    VideoExclusiveManager,
+)
 from lisp.plugins.gst_backend.gst_media_cue import (
     GstCueFactory,
     UriAudioCueFactory,
@@ -76,6 +79,12 @@ class GstBackend(Plugin, BaseBackend):
             VideoOutputWindow,
         )
         GstBackend._video_window = VideoOutputWindow(app.window)
+
+        # Block overlapping video/image cue playback.
+        self.app.video_exclusive_manager = (
+            VideoExclusiveManager(self.app)
+        )
+
         # Register GStreamer settings widgets
         AppConfigurationDialog.registerSettingsPage(
             "plugins.gst", GstSettings, GstBackend.Config

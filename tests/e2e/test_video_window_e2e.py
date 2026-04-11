@@ -367,6 +367,98 @@ def test_6_image_then_video_sequence():
     wait_state(video_id, "Stop", timeout=3)
 
 
+def test_7_second_video_blocked_while_first_playing():
+    """Starting a video cue while another is playing should be
+    blocked — the second cue stays stopped."""
+    print(
+        "\n=== Test 7: Second Video Blocked While First "
+        "Playing ==="
+    )
+    clear_cues()
+
+    video_path = os.path.join(MEDIA_DIR, "test_video.webm")
+    call("cue.add_video_from_uri", {"uri": video_path})
+    call("cue.add_video_from_uri", {"uri": video_path})
+    time.sleep(1)
+
+    cues = call("cue.list")
+    check("7a: Two video cues exist", len(cues) == 2)
+    if len(cues) < 2:
+        print("  SKIP: Not enough cues")
+        return
+
+    vid1_id = cues[0]["id"]
+    vid2_id = cues[1]["id"]
+
+    # Start first video (via execute, as the UI does)
+    call("cue.execute", {"id": vid1_id, "action": "Start"})
+    check("7b: First video reaches Running",
+          wait_state(vid1_id, "Running", timeout=5))
+
+    # Try to start the second video — should be blocked
+    call("cue.execute", {"id": vid2_id, "action": "Start"})
+    time.sleep(0.5)
+    check("7c: Second video stays stopped",
+          cue_state(vid2_id) == "Stop")
+
+    # First video should still be running
+    check("7d: First video still running",
+          cue_state(vid1_id) == "Running")
+
+    # Stop the first video, then start the second
+    call("cue.stop", {"id": vid1_id})
+    wait_state(vid1_id, "Stop", timeout=3)
+    time.sleep(0.3)
+
+    call("cue.execute", {"id": vid2_id, "action": "Start"})
+    check("7e: Second video runs after first stopped",
+          wait_state(vid2_id, "Running", timeout=5))
+
+    call("cue.stop", {"id": vid2_id})
+    wait_state(vid2_id, "Stop", timeout=3)
+
+
+def test_8_image_blocked_while_video_playing():
+    """Starting an image cue while a video is playing should be
+    blocked."""
+    print(
+        "\n=== Test 8: Image Blocked While Video Playing ==="
+    )
+    clear_cues()
+
+    video_path = os.path.join(MEDIA_DIR, "test_video.webm")
+    image_path = os.path.join(MEDIA_DIR, "test_image.png")
+
+    call("cue.add_video_from_uri", {"uri": video_path})
+    call("cue.add_image_from_uri", {
+        "uri": image_path, "duration": 3000,
+    })
+    time.sleep(1)
+
+    cues = call("cue.list")
+    check("8a: Video and image cues exist", len(cues) == 2)
+    if len(cues) < 2:
+        print("  SKIP: Not enough cues")
+        return
+
+    video_id = cues[0]["id"]
+    image_id = cues[1]["id"]
+
+    # Start the video (via execute, as the UI does)
+    call("cue.execute", {"id": video_id, "action": "Start"})
+    check("8b: Video reaches Running",
+          wait_state(video_id, "Running", timeout=5))
+
+    # Try to start the image — should be blocked
+    call("cue.execute", {"id": image_id, "action": "Start"})
+    time.sleep(0.5)
+    check("8c: Image stays stopped",
+          cue_state(image_id) == "Stop")
+
+    call("cue.stop", {"id": video_id})
+    wait_state(video_id, "Stop", timeout=3)
+
+
 # -- Main -------------------------------------------------------------
 
 def main():
@@ -397,6 +489,10 @@ def main():
         test_5_render_hidden_after_stop()
         stop_all()
         test_6_image_then_video_sequence()
+        stop_all()
+        test_7_second_video_blocked_while_first_playing()
+        stop_all()
+        test_8_image_blocked_while_video_playing()
         stop_all()
     finally:
         if not args.no_launch:

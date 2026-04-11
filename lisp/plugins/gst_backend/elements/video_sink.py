@@ -68,7 +68,7 @@ class VideoSink(GstMediaElement):
         )
         self.pipeline.add(self.audio_sink)
 
-        # Video path: queue -> overlay-capable video sink
+        # Video path: queue -> overlay-capable video sink.
         self.video_queue = Gst.ElementFactory.make("queue", None)
         self.video_sink = _create_video_sink()
         self.pipeline.add(self.video_queue)
@@ -88,17 +88,6 @@ class VideoSink(GstMediaElement):
         )
 
     def play(self):
-        # If a different VideoSink previously held the GL context
-        # on the shared window, force its GStreamer sink to NULL
-        # to release it.  The old pipeline is already in READY
-        # state at this point, so this is safe.
-        prev = VideoSink._previous_sink
-        if prev is not None and prev is not self:
-            prev.video_sink.set_state(Gst.State.NULL)
-            logger.debug(
-                "VideoSink: released previous GL context"
-            )
-
         VideoSink._previous_sink = self
 
         window = self._video_window()
@@ -106,6 +95,9 @@ class VideoSink(GstMediaElement):
             window.show_display()
 
     def stop(self):
+        if VideoSink._previous_sink is self:
+            VideoSink._previous_sink = None
+
         window = self._video_window()
         if window is not None:
             window.clear_display()
