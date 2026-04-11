@@ -67,6 +67,7 @@ class UriVideoCueFactory(GstCueFactory):
 
     def __call__(self, app, id=None, uri=None):
         cue = super().__call__(app, id=id)
+        cue.icon = "film"
 
         if uri is not None:
             try:
@@ -85,6 +86,7 @@ class UriImageCueFactory(GstCueFactory):
 
     def __call__(self, app, id=None, uri=None):
         cue = super().__call__(app, id=id)
+        cue.icon = "camera"
 
         if uri is not None:
             try:
