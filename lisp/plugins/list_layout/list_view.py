@@ -30,6 +30,7 @@ from lisp.application import Application
 from lisp.core.signal import Connection
 from lisp.backend import get_backend
 from lisp.command.model import ModelMoveItemsCommand, ModelInsertItemsCommand
+from lisp.cues.cue import CueState
 from lisp.plugins.action_cues.group_cue import GroupCue
 from lisp.core.util import subdict
 from lisp.plugins.list_layout.list_widgets import (
@@ -383,42 +384,55 @@ class CueListView(QTreeWidget):
         item.setFlags(item.flags() & ~Qt.ItemIsDropEnabled)
         cue.property_changed.connect(self.__cuePropChanged)
 
-        if isinstance(cue, GroupCue):
-            # Insert group as top-level; count existing
-            # top-level items to find the right position.
-            pos = 0
-            for i in range(self.topLevelItemCount()):
-                if self.topLevelItem(i).cue.index < cue.index:
-                    pos = i + 1
-                else:
-                    break
-            self.insertTopLevelItem(pos, item)
-            self._group_items[cue.id] = item
-            item.setExpanded(not cue.collapsed)
-            # Connect auto-expand on play
-            cue.started.connect(
-                self.__groupStarted, Connection.QtQueued
-            )
-        elif cue.group_id and cue.group_id in self._group_items:
-            # Insert as child of the group item
-            parent = self._group_items[cue.group_id]
-            # Find correct child position by index
-            child_pos = 0
-            for j in range(parent.childCount()):
-                if parent.child(j).cue.index < cue.index:
-                    child_pos = j + 1
-                else:
-                    break
-            parent.insertChild(child_pos, item)
-        else:
-            # Non-grouped cue, insert as top-level
-            pos = 0
-            for i in range(self.topLevelItemCount()):
-                if self.topLevelItem(i).cue.index < cue.index:
-                    pos = i + 1
-                else:
-                    break
-            self.insertTopLevelItem(pos, item)
+        # Block signals to prevent itemExpanded/itemCollapsed
+        # from firing during insertion and overwriting the
+        # persisted collapsed state on the cue.
+        self.blockSignals(True)
+        try:
+            if isinstance(cue, GroupCue):
+                pos = 0
+                for i in range(self.topLevelItemCount()):
+                    if (
+                        self.topLevelItem(i).cue.index
+                        < cue.index
+                    ):
+                        pos = i + 1
+                    else:
+                        break
+                self.insertTopLevelItem(pos, item)
+                self._group_items[cue.id] = item
+                item.setExpanded(not cue.collapsed)
+                cue.started.connect(
+                    self.__groupStarted, Connection.QtQueued
+                )
+            elif (
+                cue.group_id
+                and cue.group_id in self._group_items
+            ):
+                parent = self._group_items[cue.group_id]
+                child_pos = 0
+                for j in range(parent.childCount()):
+                    if (
+                        parent.child(j).cue.index
+                        < cue.index
+                    ):
+                        child_pos = j + 1
+                    else:
+                        break
+                parent.insertChild(child_pos, item)
+            else:
+                pos = 0
+                for i in range(self.topLevelItemCount()):
+                    if (
+                        self.topLevelItem(i).cue.index
+                        < cue.index
+                    ):
+                        pos = i + 1
+                    else:
+                        break
+                self.insertTopLevelItem(pos, item)
+        finally:
+            self.blockSignals(False)
 
         self.__setupItemWidgets(item)
         self.__updateItemStyle(item)
@@ -429,13 +443,22 @@ class CueListView(QTreeWidget):
         )
         if total == 1:
             self.setCurrentItem(item)
-        else:
+        elif not (
+            item.parent() is not None
+            and not item.parent().isExpanded()
+        ):
+            # Don't scroll to children of collapsed groups —
+            # scrollToItem would auto-expand the parent.
             self.scrollToItem(item)
 
         self.setFocus()
 
     def __groupStarted(self, cue):
-        if self._auto_expand and cue.id in self._group_items:
+        if not self._auto_expand:
+            return
+        if not (cue.state & CueState.IsRunning):
+            return
+        if cue.id in self._group_items:
             item = self._group_items[cue.id]
             item.setExpanded(True)
             cue.collapsed = False

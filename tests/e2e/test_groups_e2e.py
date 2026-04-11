@@ -642,6 +642,19 @@ def test_10_edge_cases(ids, group_id):
 def test_11_collapse_persist(ids, group_id):
     print("\n═══ Test 11: Collapse Persistence ═══")
 
+    # Re-discover the current GroupCue (test_10 may have
+    # deleted and re-created groups).
+    cues = call("cue.list")
+    group = next(
+        (c for c in sorted(cues, key=lambda c: c["index"])
+         if c["_type_"] == "GroupCue"),
+        None,
+    )
+    if group is None:
+        check("11: Group exists", False)
+        return group_id
+    group_id = group["id"]
+
     # 11a: Default collapsed value is False for a fresh group
     check("11a: Default collapsed is False",
           cue_prop(group_id, "collapsed") is False)
@@ -657,6 +670,8 @@ def test_11_collapse_persist(ids, group_id):
     # 11c: Save and reload — collapsed persists
     save_path = "/tmp/lisp_collapse_test_session.lsp"
     call("session.save", {"path": save_path})
+    time.sleep(0.5)
+
     call("session.load", {"path": save_path})
     time.sleep(2)
 
