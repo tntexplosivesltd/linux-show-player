@@ -64,6 +64,11 @@ class ListLayoutSettings(QScrollArea, SettingsPage):
         self.selectionMode = QCheckBox(self.defaultBehaviorsGroup)
         self.defaultBehaviorsGroup.layout().addWidget(self.selectionMode)
 
+        self.autoExpandOnPlay = QCheckBox(self.defaultBehaviorsGroup)
+        self.defaultBehaviorsGroup.layout().addWidget(
+            self.autoExpandOnPlay
+        )
+
         self.behaviorsGroup = QGroupBox(self.contentWidget)
         self.behaviorsGroup.setLayout(QGridLayout())
         self.behaviorsGroup.layout().setColumnStretch(0, 1)
@@ -127,6 +132,11 @@ class ListLayoutSettings(QScrollArea, SettingsPage):
         self.selectionMode.setText(
             translate("ListLayout", "Enable selection mode")
         )
+        self.autoExpandOnPlay.setText(
+            translate(
+                "ListLayout", "Auto-expand groups on play"
+            )
+        )
 
         self.behaviorsGroup.setTitle(translate("ListLayout", "Behaviors"))
         self.useWaveformSeek.setText(
@@ -156,6 +166,9 @@ class ListLayoutSettings(QScrollArea, SettingsPage):
         self.useWaveformSeek.setChecked(settings["show"]["waveformSlider"])
         self.autoNext.setChecked(settings["autoContinue"])
         self.selectionMode.setChecked(settings["selectionMode"])
+        self.autoExpandOnPlay.setChecked(
+            settings.get("autoExpandOnPlay", True)
+        )
 
         self.goKeyDisabledWhilePlaying.setChecked(
             settings["goKeyDisabledWhilePlaying"]
@@ -181,6 +194,7 @@ class ListLayoutSettings(QScrollArea, SettingsPage):
             },
             "autoContinue": self.autoNext.isChecked(),
             "selectionMode": self.selectionMode.isChecked(),
+            "autoExpandOnPlay": self.autoExpandOnPlay.isChecked(),
             "goKey": self.goKeyEdit.keySequence().toString(
                 QKeySequence.NativeText
             ),
