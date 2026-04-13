@@ -8,24 +8,24 @@ PR #333's TODO list included 8 items. The main video plan (`02-video-support.md`
 
 ---
 
-## Item 1: Hide Mouse Cursor During Playback
+## Item 1: Hide Mouse Cursor During Playback ✅
 
 **Effort**: Trivial — single-method addition to `VideoOutputWindow`.
 
 **File**: `lisp/plugins/gst_backend/gst_video_window.py`
 
-In the `VideoOutputWindow` created by Phase 3 Step 3.1:
-- Call `self.setCursor(QCursor(Qt.BlankCursor))` when entering fullscreen or starting playback
-- Restore with `self.setCursor(QCursor(Qt.ArrowCursor))` when exiting fullscreen or showing controls
-- The codebase already uses `QCursor` in `gst_backend.py` for wait cursors, so the import pattern is established
+In `VideoOutputWindow._apply_fullscreen()`:
+- `setCursor(QCursor(Qt.BlankCursor))` when entering fullscreen
+- `setCursor(QCursor(Qt.ArrowCursor))` when exiting fullscreen
+- Cursor blanking is per-widget — only affects the projection window, not other windows
 
 No settings page needed — cursor should always be hidden during fullscreen projection.
 
 ---
 
-## Item 2: Video Parameters (Brightness, Contrast, Saturation, Hue)
+## Item 2: Video Parameters (Brightness, Contrast, Saturation, Hue) — Deferred
 
-**Effort**: Moderate — new element + settings page, following the exact `VideoAlpha` pattern.
+Most projectors have these controls built in. Low value relative to effort.
 
 ### Step 2.1: Create VideoBalance element
 
@@ -67,9 +67,9 @@ Add `VideoBalance` to the `video_pipeline` before `VideoSink`:
 
 ---
 
-## Item 3: Image Transform (Keystone Correction)
+## Item 3: Image Transform (Keystone Correction) — Deferred
 
-**Effort**: High — requires perspective transform element with a usable UI for adjusting corners.
+High effort, niche use case.
 
 ### Step 3.1: Evaluate GStreamer transform options
 
@@ -107,39 +107,39 @@ Recommend approach 1 (`perspectiveTransform`) if available in the target GStream
 
 ---
 
-## Item 4: Video Audition Window
+## Item 4: Video Monitor Window ✅
 
-**Effort**: Moderate — extends `VideoOutputWindow` with a secondary windowed mode.
+**Effort**: Moderate.
 
-### Step 4.1: Add audition mode to VideoOutputWindow
+Inspired by Show Cue Systems' "monitor window" feature: a small floating window on the operator's primary screen that mirrors the projection output, providing a confidence monitor when the operator can't see the projection surface.
+
+### Implementation
+
+**Approach**: A separate `VideoMonitorWindow` (not a mode switch on the existing window). The GStreamer pipeline uses a `tee` element in VideoSink to split the video stream to both the projection sink and a monitor sink simultaneously. The projection window is unaffected.
 
 **File**: `lisp/plugins/gst_backend/gst_video_window.py`
+- New `VideoMonitorWindow` class: titled window, `Qt.WindowStaysOnTopHint`, 640x360 default, black background, native render widget for VideoOverlay. Close hides instead of destroying.
 
-The Phase 3 `VideoOutputWindow` is a fullscreen projection window on an external display. Audition mode adds a smaller, resizable window on the operator's display for previewing video without projecting.
-
-- Add `set_mode(mode)` method: `PROJECTION` (existing fullscreen behavior) or `AUDITION` (windowed, resizable, with title bar, on primary display)
-- In audition mode: restore window frame hints, set a reasonable default size (640x360), show on primary `QScreen`
-- Toggle via a toolbar button or keyboard shortcut in the main window
-
-### Step 4.2: Add audition toggle to UI
+**File**: `lisp/plugins/gst_backend/elements/video_sink.py`
+- Pipeline: `video_queue → tee → proj_queue → video_sink` (projection) + `monitor_queue → monitor_sink` (monitor)
+- `_find_owner_sink()` walks the GStreamer parent chain to route `prepare-window-handle` sync messages to the correct window — needed because bin-based sinks like `glimagesink` post the message from an internal child element, not the bin itself.
+- `play()`/`stop()` call `show_display()`/`clear_display()` on the monitor when visible.
 
 **File**: `lisp/plugins/gst_backend/gst_backend.py`
-
-- Add a menu item or toolbar action: "Video Audition" (toggle)
-- When enabled, video output renders in the audition window instead of (or alongside) the projection window
-- Could also be a right-click action on individual video cues: "Preview in audition window"
+- `_monitor_window` singleton, created alongside the projection window.
+- Checkable "Video Monitor" action in the Tools menu toggles visibility.
 
 ### Tests
 
-- Unit: `set_mode(AUDITION)` removes frameless hint, restores title bar
-- Unit: `set_mode(PROJECTION)` restores frameless fullscreen behavior
-- Manual: toggle audition during playback, verify video appears in small window
+- Unit: `VideoMonitorWindow` has title bar (no FramelessWindowHint), stays-on-top, 640x360, valid window handle, close hides
+- Unit: `_find_owner_sink` — direct match, bin child match, unknown element returns None
+- Unit: `play()`/`stop()` call monitor `show_display`/`clear_display` when visible, skip when hidden
 
 ---
 
-## Item 5: Video Thumbnails
+## Item 5: Video Thumbnails — Deferred
 
-**Effort**: Moderate — thumbnail extraction + layout widget changes.
+Broad scope (touches both layout plugins, GStreamer utils, settings). Useful UX improvement for video workflows but low priority.
 
 ### Step 5.1: Add thumbnail extraction utility
 
@@ -197,31 +197,15 @@ Add a `show_thumbnails` boolean setting (default `true` for video-capable setups
 
 ## File Summary
 
-### New Files
-| File | Purpose |
-|---|---|
-| `lisp/plugins/gst_backend/elements/video_balance.py` | Brightness/contrast/saturation/hue adjustment |
-| `lisp/plugins/gst_backend/elements/keystone.py` | Perspective correction for projection |
-| `lisp/plugins/gst_backend/settings/video_balance.py` | VideoBalance settings page |
-| `lisp/plugins/gst_backend/settings/keystone.py` | Keystone corner adjustment UI |
-
-### Modified Files
+### Modified Files (Items 1 & 4)
 | File | Change |
 |---|---|
-| `lisp/plugins/gst_backend/gst_video_window.py` | Cursor hiding, audition mode |
-| `lisp/plugins/gst_backend/gst_backend.py` | Audition toggle UI |
-| `lisp/plugins/gst_backend/gst_utils.py` | Thumbnail extraction function |
-| `lisp/plugins/gst_backend/default.json` | Add VideoBalance to video_pipeline |
-| `lisp/plugins/list_layout/list_widgets.py` | Thumbnail widget |
-| `lisp/plugins/list_layout/list_view.py` | Thumbnail column |
-| `lisp/plugins/cart_layout/cue_widget.py` | Thumbnail display |
+| `lisp/plugins/gst_backend/gst_video_window.py` | Cursor hiding in fullscreen, new `VideoMonitorWindow` class |
+| `lisp/plugins/gst_backend/elements/video_sink.py` | Tee + monitor sink pipeline, `_find_owner_sink()` parent-chain walk |
+| `lisp/plugins/gst_backend/gst_backend.py` | Monitor window singleton, Tools menu toggle |
 
----
-
-## Suggested Priority Order
-
-1. **Hide mouse cursor** — trivial, immediate UX win
-2. **Video parameters** — follows established element pattern, common user need
-3. **Video thumbnails** — significant UX improvement for video workflows
-4. **Video audition window** — useful for operators, moderate effort
-5. **Keystone correction** — high effort, niche use case, consider deferring
+### Test Files
+| File | Tests |
+|---|---|
+| `tests/plugins/gst_backend/test_video_output_window.py` | +12 (2 cursor, 10 monitor window) |
+| `tests/plugins/gst_backend/test_video_sink.py` | +11 (5 monitor display, 6 find_owner_sink) |
