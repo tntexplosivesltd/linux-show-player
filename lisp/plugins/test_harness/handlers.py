@@ -675,6 +675,47 @@ def register_all(dispatcher, app, signal_manager):
             else False,
         }
 
+    # --- Playback monitor ---
+
+    def handle_playback_monitor_state(params):
+        """Query the playback monitor window state."""
+        from lisp.plugins import get_plugin
+
+        try:
+            plugin = get_plugin("PlaybackMonitor")
+        except Exception:
+            return {"loaded": False}
+
+        window = plugin._window
+        if window is None:
+            return {
+                "loaded": True,
+                "visible": False,
+            }
+
+        cue = window._tracked_cue
+        return {
+            "loaded": True,
+            "visible": window.isVisible(),
+            "cue_name": window._name_label.text(),
+            "elapsed": window._elapsed_display.text(),
+            "remaining": window._remaining_display.text(),
+            "tracked_cue_id": cue.id if cue else None,
+        }
+
+    def handle_playback_monitor_toggle(params):
+        """Toggle the playback monitor window."""
+        from lisp.plugins import get_plugin
+
+        plugin = get_plugin("PlaybackMonitor")
+        plugin._toggle_window()
+        window = plugin._window
+        return {
+            "visible": (
+                window.isVisible() if window else False
+            ),
+        }
+
     # --- Register all methods ---
 
     methods = {
@@ -740,6 +781,9 @@ def register_all(dispatcher, app, signal_manager):
         "plugin.is_loaded": handle_plugin_is_loaded,
         # Video window
         "video_window.state": handle_video_window_state,
+        # Playback monitor
+        "playback_monitor.state": handle_playback_monitor_state,
+        "playback_monitor.toggle": handle_playback_monitor_toggle,
     }
 
     for method_name, handler in methods.items():
