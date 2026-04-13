@@ -166,6 +166,16 @@ class GstMedia(Media):
         super().update_properties(properties)
 
     def __reset_media(self):
+        # Image pipelines use a timer-based EOS that bypasses the
+        # SEGMENT_DONE loop mechanism, so looping has no effect.
+        # Detect by checking if the source element has no audio
+        # output (src() returns None).
+        try:
+            if self.elements[0].src() is None:
+                self.__loop = 0
+                return
+        except (IndexError, AttributeError):
+            pass
         self.__loop = self.loop
 
     def __segment_stop_position(self):

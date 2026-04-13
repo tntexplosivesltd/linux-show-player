@@ -109,6 +109,33 @@ class TestImagePipelineCreation:
         assert media.duration == 5000
 
 
+class TestImageLoopDisabled:
+    """Image pipelines force loop=0 since imagefreeze uses
+    timer-based EOS which bypasses SEGMENT_DONE looping."""
+
+    def test_image_pipeline_resets_loop_to_zero(self):
+        media = GstMedia()
+        media.pipe = ("ImageInput", "VideoSink")
+        media.loop = 3
+        # __reset_media is called on stop; simulate it
+        media._GstMedia__reset_media()
+        assert media._GstMedia__loop == 0
+
+    def test_audio_pipeline_preserves_loop(self):
+        media = GstMedia()
+        media.pipe = ("UriInput", "AutoSink")
+        media.loop = 3
+        media._GstMedia__reset_media()
+        assert media._GstMedia__loop == 3
+
+    def test_video_pipeline_preserves_loop(self):
+        media = GstMedia()
+        media.pipe = ("UriAvInput", "VideoSink")
+        media.loop = 2
+        media._GstMedia__reset_media()
+        assert media._GstMedia__loop == 2
+
+
 class TestProductionVideoPipeline:
     """Test the full default video pipeline from default.json."""
 

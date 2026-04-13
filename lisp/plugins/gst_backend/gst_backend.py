@@ -257,17 +257,26 @@ class GstBackend(Plugin, BaseBackend):
 
     def add_cue_from_urls(self, urls):
         extensions = self.supported_extensions()
-        extensions = extensions["audio"] + extensions["video"]
-        files = []
+        audio_files = []
+        video_files = []
+        image_files = []
 
         for url in urls:
-            # Get the file extension without the leading dot
             extension = os.path.splitext(url.fileName())[-1][1:]
-            # If is a supported audio/video file keep it
-            if extension in extensions:
-                files.append(url.path())
+            path = url.path()
+            if extension in extensions["image"]:
+                image_files.append(path)
+            elif extension in extensions["video"]:
+                video_files.append(path)
+            elif extension in extensions["audio"]:
+                audio_files.append(path)
 
-        self.add_cue_from_files(files)
+        if audio_files:
+            self.add_cue_from_files(audio_files)
+        if video_files:
+            self.add_video_cue_from_files(video_files)
+        if image_files:
+            self.add_image_cue_from_files(image_files)
 
     def add_cue_from_files(self, files):
         QApplication.setOverrideCursor(QCursor(Qt.WaitCursor))

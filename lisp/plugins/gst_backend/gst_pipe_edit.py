@@ -29,19 +29,41 @@ from PyQt5.QtWidgets import (
     QListWidgetItem,
 )
 
+from lisp.backend.media_element import MediaType
 from lisp.plugins.gst_backend import elements
 from lisp.ui.icons import IconTheme
 from lisp.ui.ui_utils import translate
 
 
+def _media_type_compatible(element_type, pipeline_type):
+    """Check if an element's MediaType is compatible with a pipeline.
+
+    - Audio pipeline: Audio and AudioAndVideo elements
+    - Video pipeline (images): Video and AudioAndVideo elements
+    - AudioAndVideo pipeline: all elements
+    - None (unknown): all elements
+    """
+    if pipeline_type is None:
+        return True
+    if element_type == MediaType.AudioAndVideo:
+        return True
+    if pipeline_type == MediaType.AudioAndVideo:
+        return True
+    if element_type == pipeline_type:
+        return True
+    return False
+
+
 class GstPipeEdit(QWidget):
-    def __init__(self, pipe, app_mode=False, **kwargs):
+    def __init__(self, pipe, app_mode=False, media_type=None,
+                 **kwargs):
         super().__init__(**kwargs)
         self.setLayout(QGridLayout())
         self.layout().setAlignment(Qt.AlignTop)
         self.layout().setContentsMargins(0, 0, 0, 0)
 
         self._app_mode = app_mode
+        self._media_type = media_type
 
         # Input selection
         self.inputBox = QComboBox(self)
@@ -111,7 +133,12 @@ class GstPipeEdit(QWidget):
         else:
             inputs_by_name = {}
             for key, input in elements.inputs().items():
-                inputs_by_name[translate("MediaElementName", input.Name)] = key
+                if _media_type_compatible(
+                    input.MediaType, self._media_type
+                ):
+                    inputs_by_name[
+                        translate("MediaElementName", input.Name)
+                    ] = key
 
             for name in sorted(inputs_by_name):
                 self.inputBox.addItem(name, inputs_by_name[name])
@@ -121,7 +148,12 @@ class GstPipeEdit(QWidget):
     def __init_outputs(self):
         outputs_by_name = {}
         for key, output in elements.outputs().items():
-            outputs_by_name[translate("MediaElementName", output.Name)] = key
+            if _media_type_compatible(
+                output.MediaType, self._media_type
+            ):
+                outputs_by_name[
+                    translate("MediaElementName", output.Name)
+                ] = key
 
         for name in sorted(outputs_by_name):
             self.outputBox.addItem(name, outputs_by_name[name])
@@ -144,12 +176,19 @@ class GstPipeEdit(QWidget):
     def __init_available_plugins(self, pipe):
         self.availableList.clear()
 
-        for plugin in elements.plugins():
-            if plugin not in pipe:
+        for plugin_name, plugin_class in elements.plugins().items():
+            if plugin_name not in pipe:
+                if not _media_type_compatible(
+                    plugin_class.MediaType, self._media_type
+                ):
+                    continue
                 item = QListWidgetItem(
-                    translate("MediaElementName", elements.plugin_name(plugin))
+                    translate(
+                        "MediaElementName",
+                        plugin_class.Name,
+                    )
                 )
-                item.setData(Qt.UserRole, plugin)
+                item.setData(Qt.UserRole, plugin_name)
                 self.availableList.addItem(item)
 
     def __add_plugin(self):
@@ -162,7 +201,8 @@ class GstPipeEdit(QWidget):
 
 
 class GstPipeEditDialog(QDialog):
-    def __init__(self, pipe, app_mode=False, **kwargs):
+    def __init__(self, pipe, app_mode=False, media_type=None,
+                 **kwargs):
         super().__init__(**kwargs)
         self.setWindowTitle(translate("GstPipelineEdit", "Edit Pipeline"))
         self.setWindowModality(Qt.ApplicationModal)
@@ -172,7 +212,10 @@ class GstPipeEditDialog(QDialog):
         self.setLayout(QVBoxLayout())
 
         # GstPipeEdit
-        self.pipeEdit = GstPipeEdit(pipe, app_mode=app_mode, parent=self)
+        self.pipeEdit = GstPipeEdit(
+            pipe, app_mode=app_mode, media_type=media_type,
+            parent=self,
+        )
         self.layout().addWidget(self.pipeEdit)
 
         # Confirm/Cancel buttons

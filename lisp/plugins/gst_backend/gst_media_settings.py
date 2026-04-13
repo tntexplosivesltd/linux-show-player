@@ -26,6 +26,7 @@ from PyQt5.QtWidgets import (
     QSizePolicy,
 )
 
+from lisp.plugins.gst_backend import elements
 from lisp.plugins.gst_backend.gst_pipe_edit import GstPipeEditDialog
 from lisp.plugins.gst_backend.settings import pages_by_element
 from lisp.ui.settings.pages import SettingsPage
@@ -120,8 +121,19 @@ class GstMediaSettings(SettingsPage):
         # Backup the settings
         self._settings = self.getSettings()["media"]
 
+        # Derive the pipeline's media type from its input element
+        pipe = self._settings.get("pipe", ())
+        media_type = None
+        if pipe:
+            all_elements = elements.all_elements()
+            input_class = all_elements.get(pipe[0])
+            if input_class is not None:
+                media_type = input_class.MediaType
+
         # Show the dialog
-        dialog = GstPipeEditDialog(self._settings.get("pipe", ()), parent=self)
+        dialog = GstPipeEditDialog(
+            pipe, media_type=media_type, parent=self
+        )
 
         if dialog.exec() == dialog.Accepted:
             # Reset the view
