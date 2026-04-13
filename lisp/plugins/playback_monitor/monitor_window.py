@@ -249,20 +249,20 @@ class PlaybackMonitorWindow(QWidget):
 
     def _update_fonts(self):
         h = self.height()
-        # name 5%, primary-label 4%, primary 55%,
-        # secondary-label 3%, secondary 10%
+        # name 5%, primary-label 8%, primary 50%,
+        # secondary-label 6%, secondary 10%
         self._fit_font(
             self._name_label, int(h * 0.05), bold=False
         )
         self._fit_font(
-            self._primary_label, int(h * 0.04), bold=False
+            self._primary_label, int(h * 0.08), bold=False
         )
         self._fit_font(
-            self._primary_display, int(h * 0.55), bold=True
+            self._primary_display, int(h * 0.50), bold=True
         )
         self._fit_font(
             self._secondary_label,
-            int(h * 0.03),
+            int(h * 0.06),
             bold=False,
         )
         self._fit_font(
