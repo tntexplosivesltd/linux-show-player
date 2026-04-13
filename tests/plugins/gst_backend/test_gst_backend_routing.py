@@ -99,3 +99,31 @@ class TestAddCueFromUrlsRouting:
         backend.add_cue_from_files.assert_not_called()
         backend.add_video_cue_from_files.assert_not_called()
         backend.add_image_cue_from_files.assert_not_called()
+
+    def test_uppercase_extension_routed_correctly(self):
+        backend = self._make_backend()
+        backend.add_cue_from_urls([
+            self._make_url("PHOTO.JPG"),
+            self._make_url("VIDEO.MP4"),
+            self._make_url("TRACK.WAV"),
+        ])
+
+        backend.add_cue_from_files.assert_called_once_with(
+            ["/tmp/TRACK.WAV"]
+        )
+        backend.add_video_cue_from_files.assert_called_once_with(
+            ["/tmp/VIDEO.MP4"]
+        )
+        backend.add_image_cue_from_files.assert_called_once_with(
+            ["/tmp/PHOTO.JPG"]
+        )
+
+    def test_mixed_case_extension_routed(self):
+        backend = self._make_backend()
+        backend.add_cue_from_urls([
+            self._make_url("photo.Png"),
+        ])
+
+        backend.add_image_cue_from_files.assert_called_once_with(
+            ["/tmp/photo.Png"]
+        )

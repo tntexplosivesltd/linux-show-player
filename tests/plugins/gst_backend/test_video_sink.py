@@ -2,6 +2,8 @@
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from lisp.backend.media_element import ElementType, MediaType
 from lisp.plugins.gst_backend.gi_repository import Gst
 from lisp.plugins.gst_backend.elements.video_sink import (
@@ -402,32 +404,38 @@ class TestFindOwnerSink:
         pipeline = Gst.Pipeline()
         sink = VideoSink(pipeline)
 
-        if isinstance(sink.video_sink, Gst.Bin):
-            child = self._first_bin_child(sink.video_sink)
-            if child is not None:
-                mock_window = MagicMock()
-                with patch.object(
-                    VideoSink, "_video_window",
-                    return_value=mock_window,
-                ):
-                    result = sink._find_owner_sink(child)
-                assert result is mock_window
+        if not isinstance(sink.video_sink, Gst.Bin):
+            pytest.skip("video_sink is not a GstBin")
+        child = self._first_bin_child(sink.video_sink)
+        if child is None:
+            pytest.skip("video_sink bin has no children")
+
+        mock_window = MagicMock()
+        with patch.object(
+            VideoSink, "_video_window",
+            return_value=mock_window,
+        ):
+            result = sink._find_owner_sink(child)
+        assert result is mock_window
 
     def test_child_of_bin_matches_monitor_sink(self):
         """Same test for the monitor sink branch."""
         pipeline = Gst.Pipeline()
         sink = VideoSink(pipeline)
 
-        if isinstance(sink.monitor_sink, Gst.Bin):
-            child = self._first_bin_child(sink.monitor_sink)
-            if child is not None:
-                mock_window = MagicMock()
-                with patch.object(
-                    VideoSink, "_monitor_window",
-                    return_value=mock_window,
-                ):
-                    result = sink._find_owner_sink(child)
-                assert result is mock_window
+        if not isinstance(sink.monitor_sink, Gst.Bin):
+            pytest.skip("monitor_sink is not a GstBin")
+        child = self._first_bin_child(sink.monitor_sink)
+        if child is None:
+            pytest.skip("monitor_sink bin has no children")
+
+        mock_window = MagicMock()
+        with patch.object(
+            VideoSink, "_monitor_window",
+            return_value=mock_window,
+        ):
+            result = sink._find_owner_sink(child)
+        assert result is mock_window
 
     def test_unknown_element_returns_none(self):
         pipeline = Gst.Pipeline()

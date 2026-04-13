@@ -128,13 +128,14 @@ class GstBackend(Plugin, BaseBackend):
             shortcut="CTRL+SHIFT+I",
         )
 
-        # Video monitor toggle in Tools menu
+        # Video monitor toggle in Tools menu (non-checkable,
+        # same pattern as PlaybackMonitor to avoid desync when
+        # the user closes the window via the title bar).
         self._monitor_action = QAction(
             translate("GstBackend", "Video Monitor"),
             self.app.window,
         )
-        self._monitor_action.setCheckable(True)
-        self._monitor_action.toggled.connect(
+        self._monitor_action.triggered.connect(
             self.__toggle_monitor_window
         )
         self.app.window.menuTools.addAction(self._monitor_action)
@@ -281,7 +282,9 @@ class GstBackend(Plugin, BaseBackend):
         image_files = []
 
         for url in urls:
-            extension = os.path.splitext(url.fileName())[-1][1:]
+            extension = os.path.splitext(
+                url.fileName()
+            )[-1][1:].lower()
             path = url.path()
             if extension in extensions["image"]:
                 image_files.append(path)
@@ -439,12 +442,20 @@ class GstBackend(Plugin, BaseBackend):
 
         window.hide()
 
-    def __toggle_monitor_window(self, checked):
+    def __toggle_monitor_window(self):
         monitor = GstBackend.monitor_window()
         if monitor is None:
             return
 
-        if checked:
-            monitor.show()
+        if monitor.isVisible():
+            monitor.close()
         else:
-            monitor.hide()
+            monitor.show()
+            monitor.raise_()
+
+            # If a cue is already playing, the monitor missed
+            # the play() call — show its render surface now.
+            from lisp.plugins.gst_backend.elements.video_sink \
+                import VideoSink
+            if VideoSink._previous_sink is not None:
+                monitor.show_display()
