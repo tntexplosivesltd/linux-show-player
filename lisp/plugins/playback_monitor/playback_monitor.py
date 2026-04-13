@@ -29,6 +29,7 @@ from lisp.ui.ui_utils import translate
 class PlaybackMonitor(Plugin):
     Name = "Playback Monitor"
     Authors = ("Linux Show Player Contributors",)
+    OptDepends = ("GstBackend",)
     Description = (
         "Standalone window showing elapsed and remaining time"
     )
