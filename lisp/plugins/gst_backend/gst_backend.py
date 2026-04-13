@@ -19,7 +19,7 @@ import os.path
 
 from PyQt5.QtCore import Qt, QT_TRANSLATE_NOOP
 from PyQt5.QtGui import QCursor
-from PyQt5.QtWidgets import QFileDialog, QApplication
+from PyQt5.QtWidgets import QAction, QFileDialog, QApplication
 
 from lisp import backend
 from lisp.backend.backend import Backend as BaseBackend
@@ -61,11 +61,17 @@ class GstBackend(Plugin, BaseBackend):
     )
 
     _video_window = None
+    _monitor_window = None
 
     @classmethod
     def video_window(cls):
         """Return the singleton VideoOutputWindow, or None."""
         return cls._video_window
+
+    @classmethod
+    def monitor_window(cls):
+        """Return the singleton VideoMonitorWindow, or None."""
+        return cls._monitor_window
 
     def __init__(self, app):
         super().__init__(app)
@@ -73,12 +79,14 @@ class GstBackend(Plugin, BaseBackend):
         # Initialize GStreamer
         Gst.init([])
 
-        # Create the shared video output window.
+        # Create the shared video output and monitor windows.
         # Import here to avoid circular imports at module level.
         from lisp.plugins.gst_backend.gst_video_window import (
+            VideoMonitorWindow,
             VideoOutputWindow,
         )
         GstBackend._video_window = VideoOutputWindow(app.window)
+        GstBackend._monitor_window = VideoMonitorWindow(app.window)
         self.__apply_video_config()
 
         # Block overlapping video/image cue playback.
@@ -119,6 +127,17 @@ class GstBackend(Plugin, BaseBackend):
             category=QT_TRANSLATE_NOOP("CueCategory", "Media cues"),
             shortcut="CTRL+SHIFT+I",
         )
+
+        # Video monitor toggle in Tools menu
+        self._monitor_action = QAction(
+            translate("GstBackend", "Video Monitor"),
+            self.app.window,
+        )
+        self._monitor_action.setCheckable(True)
+        self._monitor_action.toggled.connect(
+            self.__toggle_monitor_window
+        )
+        self.app.window.menuTools.addAction(self._monitor_action)
 
         # Load elements and their settings-widgets
         elements.load()
@@ -419,3 +438,13 @@ class GstBackend(Plugin, BaseBackend):
                 return
 
         window.hide()
+
+    def __toggle_monitor_window(self, checked):
+        monitor = GstBackend.monitor_window()
+        if monitor is None:
+            return
+
+        if checked:
+            monitor.show()
+        else:
+            monitor.hide()

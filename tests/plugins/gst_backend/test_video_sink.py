@@ -34,6 +34,21 @@ class TestVideoSinkConstruction:
         element = VideoSink(pipeline)
         assert element.video_queue is not None
 
+    def test_creates_video_tee(self):
+        pipeline = Gst.Pipeline()
+        element = VideoSink(pipeline)
+        assert element.video_tee is not None
+
+    def test_creates_monitor_sink(self):
+        pipeline = Gst.Pipeline()
+        element = VideoSink(pipeline)
+        assert element.monitor_sink is not None
+
+    def test_creates_monitor_queue(self):
+        pipeline = Gst.Pipeline()
+        element = VideoSink(pipeline)
+        assert element.monitor_queue is not None
+
     def test_sink_returns_audio_sink(self):
         pipeline = Gst.Pipeline()
         element = VideoSink(pipeline)
@@ -193,6 +208,9 @@ class TestVideoSinkClearDisplay:
         with patch.object(
             VideoSink, "_video_window",
             return_value=mock_window,
+        ), patch.object(
+            VideoSink, "_monitor_window",
+            return_value=None,
         ):
             sink.stop()
 
@@ -206,19 +224,71 @@ class TestVideoSinkClearDisplay:
         with patch.object(
             VideoSink, "_video_window",
             return_value=mock_window,
+        ), patch.object(
+            VideoSink, "_monitor_window",
+            return_value=None,
         ):
             sink.play()
 
         mock_window.show_display.assert_called_once()
         VideoSink._previous_sink = None
 
-
-class TestVideoSinkOverlay:
-    def test_initial_window_handle_is_zero(self):
+    def test_play_calls_monitor_show_display(self):
         pipeline = Gst.Pipeline()
         sink = VideoSink(pipeline)
-        assert sink._window_handle == 0
 
+        mock_monitor = MagicMock()
+        mock_monitor.isVisible.return_value = True
+        with patch.object(
+            VideoSink, "_video_window",
+            return_value=MagicMock(),
+        ), patch.object(
+            VideoSink, "_monitor_window",
+            return_value=mock_monitor,
+        ):
+            sink.play()
+
+        mock_monitor.show_display.assert_called_once()
+        VideoSink._previous_sink = None
+
+    def test_stop_calls_monitor_clear_display(self):
+        pipeline = Gst.Pipeline()
+        sink = VideoSink(pipeline)
+
+        mock_monitor = MagicMock()
+        mock_monitor.isVisible.return_value = True
+        with patch.object(
+            VideoSink, "_video_window",
+            return_value=MagicMock(),
+        ), patch.object(
+            VideoSink, "_monitor_window",
+            return_value=mock_monitor,
+        ):
+            sink.play()
+            sink.stop()
+
+        mock_monitor.clear_display.assert_called_once()
+
+    def test_play_skips_hidden_monitor(self):
+        pipeline = Gst.Pipeline()
+        sink = VideoSink(pipeline)
+
+        mock_monitor = MagicMock()
+        mock_monitor.isVisible.return_value = False
+        with patch.object(
+            VideoSink, "_video_window",
+            return_value=MagicMock(),
+        ), patch.object(
+            VideoSink, "_monitor_window",
+            return_value=mock_monitor,
+        ):
+            sink.play()
+
+        mock_monitor.show_display.assert_not_called()
+        VideoSink._previous_sink = None
+
+
+class TestVideoSinkOverlay:
     def test_play_sets_previous_sink(self):
         """play() registers the sink as the active one."""
         pipeline = Gst.Pipeline()
@@ -228,6 +298,9 @@ class TestVideoSinkOverlay:
         with patch.object(
             VideoSink, "_video_window",
             return_value=mock_window,
+        ), patch.object(
+            VideoSink, "_monitor_window",
+            return_value=None,
         ):
             sink.play()
             assert VideoSink._previous_sink is sink
@@ -244,6 +317,9 @@ class TestVideoSinkOverlay:
         with patch.object(
             VideoSink, "_video_window",
             return_value=mock_window,
+        ), patch.object(
+            VideoSink, "_monitor_window",
+            return_value=None,
         ):
             sink.play()
             assert VideoSink._previous_sink is sink
@@ -262,6 +338,9 @@ class TestVideoSinkOverlay:
         with patch.object(
             VideoSink, "_video_window",
             return_value=mock_window,
+        ), patch.object(
+            VideoSink, "_monitor_window",
+            return_value=None,
         ):
             sink2.play()
             assert VideoSink._previous_sink is sink2
@@ -275,3 +354,91 @@ class TestVideoSinkOverlay:
         sink = VideoSink(pipeline)
         # Should not raise
         sink.dispose()
+
+
+class TestFindOwnerSink:
+    """Test _find_owner_sink parent-chain walking.
+
+    Bin-based sinks like glimagesink post prepare-window-handle
+    from an internal child element.  _find_owner_sink walks up
+    the parent chain to match back to our stored sink reference.
+    """
+
+    def test_direct_match_video_sink(self):
+        pipeline = Gst.Pipeline()
+        sink = VideoSink(pipeline)
+
+        mock_window = MagicMock()
+        with patch.object(
+            VideoSink, "_video_window",
+            return_value=mock_window,
+        ):
+            result = sink._find_owner_sink(sink.video_sink)
+        assert result is mock_window
+
+    def test_direct_match_monitor_sink(self):
+        pipeline = Gst.Pipeline()
+        sink = VideoSink(pipeline)
+
+        mock_window = MagicMock()
+        with patch.object(
+            VideoSink, "_monitor_window",
+            return_value=mock_window,
+        ):
+            result = sink._find_owner_sink(sink.monitor_sink)
+        assert result is mock_window
+
+    def _first_bin_child(self, gst_bin):
+        """Get the first child element of a GstBin."""
+        it = gst_bin.iterate_elements()
+        ok, child = it.next()
+        if ok == Gst.IteratorResult.OK:
+            return child
+        return None
+
+    def test_child_of_bin_matches_video_sink(self):
+        """Simulate glimagesink: message.src is a child element
+        inside the bin, not the bin itself."""
+        pipeline = Gst.Pipeline()
+        sink = VideoSink(pipeline)
+
+        if isinstance(sink.video_sink, Gst.Bin):
+            child = self._first_bin_child(sink.video_sink)
+            if child is not None:
+                mock_window = MagicMock()
+                with patch.object(
+                    VideoSink, "_video_window",
+                    return_value=mock_window,
+                ):
+                    result = sink._find_owner_sink(child)
+                assert result is mock_window
+
+    def test_child_of_bin_matches_monitor_sink(self):
+        """Same test for the monitor sink branch."""
+        pipeline = Gst.Pipeline()
+        sink = VideoSink(pipeline)
+
+        if isinstance(sink.monitor_sink, Gst.Bin):
+            child = self._first_bin_child(sink.monitor_sink)
+            if child is not None:
+                mock_window = MagicMock()
+                with patch.object(
+                    VideoSink, "_monitor_window",
+                    return_value=mock_window,
+                ):
+                    result = sink._find_owner_sink(child)
+                assert result is mock_window
+
+    def test_unknown_element_returns_none(self):
+        pipeline = Gst.Pipeline()
+        sink = VideoSink(pipeline)
+
+        unrelated = Gst.ElementFactory.make(
+            "fakesink", None
+        )
+        assert sink._find_owner_sink(unrelated) is None
+
+    def test_none_element_returns_none(self):
+        pipeline = Gst.Pipeline()
+        sink = VideoSink(pipeline)
+        assert sink._find_owner_sink(None) is None

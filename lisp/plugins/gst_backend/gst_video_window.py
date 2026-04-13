@@ -18,6 +18,7 @@
 import logging
 
 from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QCursor
 from PyQt5.QtWidgets import QMainWindow, QWidget, QApplication
 
 logger = logging.getLogger(__name__)
@@ -119,8 +120,10 @@ class VideoOutputWindow(QMainWindow):
 
     def _apply_fullscreen(self):
         if self._fullscreen:
+            self.setCursor(QCursor(Qt.BlankCursor))
             self.showFullScreen()
         else:
+            self.setCursor(QCursor(Qt.ArrowCursor))
             self.showNormal()
         self._sync_render_geometry()
 
@@ -137,3 +140,61 @@ class VideoOutputWindow(QMainWindow):
     def closeEvent(self, event):
         """Block close while video/image cues exist."""
         event.ignore()
+
+
+class VideoMonitorWindow(QMainWindow):
+    """Small floating window that mirrors the projection output.
+
+    Provides a confidence monitor on the operator's primary screen
+    so they can see what's being projected without line-of-sight to
+    the projection surface.  GStreamer renders into this window via
+    a second VideoOverlay sink fed by a tee in the VideoSink pipeline.
+
+    Closing the window hides it (the menu toggle re-shows it).
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(
+            parent,
+            Qt.Window | Qt.WindowStaysOnTopHint,
+        )
+        self.setWindowTitle("LiSP Video Monitor")
+        self.resize(640, 360)
+
+        central = QWidget(self)
+        central.setStyleSheet("background-color: black;")
+        self.setCentralWidget(central)
+
+        self._render_widget = QWidget(central)
+        self._render_widget.setAttribute(Qt.WA_NativeWindow)
+        self._render_widget.setAttribute(
+            Qt.WA_DontCreateNativeAncestors
+        )
+
+    def window_handle(self):
+        """Return the native window ID for GStreamer VideoOverlay."""
+        return int(self._render_widget.winId())
+
+    def clear_display(self):
+        """Hide the render surface, showing the black background."""
+        self._render_widget.hide()
+
+    def show_display(self):
+        """Show the render surface for GStreamer output."""
+        self._render_widget.show()
+        self._sync_render_geometry()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._sync_render_geometry()
+
+    def _sync_render_geometry(self):
+        """Keep the render widget filling the central widget."""
+        central = self.centralWidget()
+        if central is not None:
+            self._render_widget.setGeometry(central.rect())
+
+    def closeEvent(self, event):
+        """Hide instead of close so the window can be re-shown."""
+        event.ignore()
+        self.hide()

@@ -1,9 +1,10 @@
-"""Tests for VideoOutputWindow."""
+"""Tests for VideoOutputWindow and VideoMonitorWindow."""
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication
 
 from lisp.plugins.gst_backend.gst_video_window import (
+    VideoMonitorWindow,
     VideoOutputWindow,
 )
 
@@ -116,3 +117,96 @@ class TestVideoOutputWindowBehavior:
         assert window._render_widget.testAttribute(
             Qt.WA_NativeWindow
         )
+
+    def test_fullscreen_hides_cursor(self, qtbot):
+        window = VideoOutputWindow()
+        qtbot.addWidget(window)
+        window.show()
+        qtbot.waitExposed(window)
+        window.set_fullscreen(True)
+        assert window.cursor().shape() == Qt.BlankCursor
+
+    def test_normal_restores_cursor(self, qtbot):
+        window = VideoOutputWindow()
+        qtbot.addWidget(window)
+        window.show()
+        qtbot.waitExposed(window)
+        window.set_fullscreen(True)
+        window.set_fullscreen(False)
+        assert window.cursor().shape() == Qt.ArrowCursor
+
+
+class TestVideoMonitorWindowCreation:
+    def test_creates_window(self, qtbot):
+        window = VideoMonitorWindow()
+        qtbot.addWidget(window)
+        assert window is not None
+
+    def test_has_title_bar(self, qtbot):
+        """Monitor window should NOT have FramelessWindowHint."""
+        window = VideoMonitorWindow()
+        qtbot.addWidget(window)
+        assert not (window.windowFlags() & Qt.FramelessWindowHint)
+
+    def test_stays_on_top(self, qtbot):
+        window = VideoMonitorWindow()
+        qtbot.addWidget(window)
+        assert window.windowFlags() & Qt.WindowStaysOnTopHint
+
+    def test_default_size(self, qtbot):
+        window = VideoMonitorWindow()
+        qtbot.addWidget(window)
+        assert window.width() == 640
+        assert window.height() == 360
+
+    def test_window_handle_returns_nonzero(self, qtbot):
+        window = VideoMonitorWindow()
+        qtbot.addWidget(window)
+        handle = window.window_handle()
+        assert isinstance(handle, int)
+        assert handle != 0
+
+    def test_central_widget_has_black_background(self, qtbot):
+        window = VideoMonitorWindow()
+        qtbot.addWidget(window)
+        assert "black" in window.centralWidget().styleSheet()
+
+    def test_render_widget_is_native(self, qtbot):
+        window = VideoMonitorWindow()
+        qtbot.addWidget(window)
+        assert window._render_widget.testAttribute(
+            Qt.WA_NativeWindow
+        )
+
+
+class TestVideoMonitorWindowBehavior:
+    def test_close_hides_instead_of_closing(self, qtbot):
+        window = VideoMonitorWindow()
+        qtbot.addWidget(window)
+        window.show()
+        qtbot.waitExposed(window)
+
+        window.close()
+        assert not window.isVisible()
+
+    def test_clear_display_hides_render_widget(self, qtbot):
+        window = VideoMonitorWindow()
+        qtbot.addWidget(window)
+        window.show()
+        qtbot.waitExposed(window)
+
+        window.show_display()
+        assert window._render_widget.isVisible()
+
+        window.clear_display()
+        assert not window._render_widget.isVisible()
+
+    def test_show_display_shows_render_widget(self, qtbot):
+        window = VideoMonitorWindow()
+        qtbot.addWidget(window)
+        window.show()
+        qtbot.waitExposed(window)
+
+        window.clear_display()
+        window.show_display()
+        assert window._render_widget.isVisible()

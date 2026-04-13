@@ -68,19 +68,39 @@ class VideoSink(GstMediaElement):
         )
         self.pipeline.add(self.audio_sink)
 
-        # Video path: queue -> overlay-capable video sink.
+        # Video path: queue -> tee -> projection + monitor branches.
+        # The tee duplicates video buffers so both the projection
+        # window and the operator's monitor window can render
+        # independently.
         self.video_queue = Gst.ElementFactory.make("queue", None)
+        self.video_tee = Gst.ElementFactory.make("tee", None)
+
+        # Projection branch
+        self.proj_queue = Gst.ElementFactory.make("queue", None)
         self.video_sink = _create_video_sink()
-        self.pipeline.add(self.video_queue)
-        self.pipeline.add(self.video_sink)
-        self.video_queue.link(self.video_sink)
+
+        # Monitor branch
+        self.monitor_queue = Gst.ElementFactory.make("queue", None)
+        self.monitor_sink = _create_video_sink()
+
+        for elem in (
+            self.video_queue, self.video_tee,
+            self.proj_queue, self.video_sink,
+            self.monitor_queue, self.monitor_sink,
+        ):
+            self.pipeline.add(elem)
+
+        self.video_queue.link(self.video_tee)
+        self.video_tee.link(self.proj_queue)
+        self.proj_queue.link(self.video_sink)
+        self.video_tee.link(self.monitor_queue)
+        self.monitor_queue.link(self.monitor_sink)
 
         self._audio_removed = False
         self._video_removed = False
-        self._window_handle = 0
 
         # Install a synchronous bus handler so we can set the
-        # window handle before the sink opens its own window.
+        # window handle before each sink opens its own window.
         bus = self.pipeline.get_bus()
         bus.enable_sync_message_emission()
         self._sync_handler = bus.connect(
@@ -94,6 +114,10 @@ class VideoSink(GstMediaElement):
         if window is not None:
             window.show_display()
 
+        monitor = self._monitor_window()
+        if monitor is not None and monitor.isVisible():
+            monitor.show_display()
+
     def stop(self):
         if VideoSink._previous_sink is self:
             VideoSink._previous_sink = None
@@ -101,6 +125,10 @@ class VideoSink(GstMediaElement):
         window = self._video_window()
         if window is not None:
             window.clear_display()
+
+        monitor = self._monitor_window()
+        if monitor is not None and monitor.isVisible():
+            monitor.clear_display()
 
     def sink(self):
         """Audio sink -- connected by the linear chain."""
@@ -179,7 +207,11 @@ class VideoSink(GstMediaElement):
             bus.disconnect(self._sync_handler)
         if not self._video_removed:
             self.pipeline.remove(self.video_queue)
+            self.pipeline.remove(self.video_tee)
+            self.pipeline.remove(self.proj_queue)
             self.pipeline.remove(self.video_sink)
+            self.pipeline.remove(self.monitor_queue)
+            self.pipeline.remove(self.monitor_sink)
         if not self._audio_removed:
             self.pipeline.remove(self.audio_sink)
 
@@ -190,16 +222,33 @@ class VideoSink(GstMediaElement):
         )
         return GstBackend.video_window()
 
+    @staticmethod
+    def _monitor_window():
+        from lisp.plugins.gst_backend.gst_backend import (
+            GstBackend,
+        )
+        return GstBackend.monitor_window()
+
+    def _find_owner_sink(self, element):
+        """Walk up from element to find which top-level sink it
+        belongs to.  Bin-based sinks like glimagesink post
+        prepare-window-handle from an internal child, not from
+        the bin we stored."""
+        while element is not None:
+            if element == self.video_sink:
+                return self._video_window()
+            if element == self.monitor_sink:
+                return self._monitor_window()
+            element = element.get_parent()
+        return None
+
     def __on_sync_message(self, bus, message):
-        """Handle prepare-window-handle from the video sink.
+        """Handle prepare-window-handle from video sinks.
 
-        This runs in the GStreamer streaming thread, before the
-        sink creates its own window.  Setting the handle here
-        ensures GStreamer renders into our VideoOutputWindow.
-
-        Always fetches the current handle from the window
-        (not cached) because the render widget may have been
-        recreated since the last call.
+        This runs in the GStreamer streaming thread, before each
+        sink creates its own window.  We route the projection
+        sink to VideoOutputWindow and the monitor sink to
+        VideoMonitorWindow.
         """
         if message.get_structure() is None:
             return
@@ -207,14 +256,14 @@ class VideoSink(GstMediaElement):
                 "prepare-window-handle":
             return
 
-        window = self._video_window()
-        if window is not None:
-            self._window_handle = window.window_handle()
+        window = self._find_owner_sink(message.src)
 
-        if self._window_handle != 0:
-            message.src.set_window_handle(self._window_handle)
-            logger.debug(
-                "VideoSink: set window handle %d on %s",
-                self._window_handle,
-                message.src.get_name(),
-            )
+        if window is not None:
+            handle = window.window_handle()
+            if handle != 0:
+                message.src.set_window_handle(handle)
+                logger.debug(
+                    "VideoSink: set window handle %d on %s",
+                    handle,
+                    message.src.get_name(),
+                )
