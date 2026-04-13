@@ -88,7 +88,10 @@ class PlaybackMonitorWindow(QWidget):
         self._name_label.setTextFormat(Qt.PlainText)
         layout.addWidget(self._name_label, 0)
 
-        # Primary time (large)
+        # Spacer pushes primary group to vertical centre
+        layout.addStretch(1)
+
+        # Primary label + display (grouped together)
         self._primary_label = QLabel(
             self._primary_label_text()
         )
@@ -97,9 +100,12 @@ class PlaybackMonitorWindow(QWidget):
 
         self._primary_display = QLabel("00:00")
         self._primary_display.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self._primary_display, 1)
+        layout.addWidget(self._primary_display, 0)
 
-        # Secondary time (small)
+        # Spacer pushes secondary group to bottom
+        layout.addStretch(1)
+
+        # Secondary label + display (grouped at bottom)
         self._secondary_label = QLabel(
             self._secondary_label_text()
         )
