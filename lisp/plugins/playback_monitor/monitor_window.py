@@ -16,7 +16,7 @@
 # along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QFont
+from PyQt5.QtGui import QFont, QFontMetrics
 from PyQt5.QtWidgets import (
     QAction,
     QLabel,
@@ -165,25 +165,42 @@ class PlaybackMonitorWindow(QWidget):
 
     def _update_fonts(self):
         h = self.height()
+        # Budget: name 6%, sub-labels 4% each, time 35% each,
+        # margins+spacing eat the remaining 16%.
+        self._fit_font(
+            self._name_label, int(h * 0.06), bold=False
+        )
+        self._fit_font(
+            self._elapsed_label, int(h * 0.04), bold=False
+        )
+        self._fit_font(
+            self._remaining_label, int(h * 0.04), bold=False
+        )
+        self._fit_font(
+            self._elapsed_display, int(h * 0.35), bold=True
+        )
+        self._fit_font(
+            self._remaining_display, int(h * 0.35), bold=True
+        )
 
-        name_size = max(10, int(h * 0.06))
-        time_size = max(20, int(h * 0.25))
-        label_size = max(8, int(h * 0.04))
-
-        name_font = QFont()
-        name_font.setPointSize(name_size)
-        self._name_label.setFont(name_font)
-
-        time_font = QFont()
-        time_font.setPointSize(time_size)
-        time_font.setBold(True)
-        self._elapsed_display.setFont(time_font)
-        self._remaining_display.setFont(time_font)
-
-        label_font = QFont()
-        label_font.setPointSize(label_size)
-        self._elapsed_label.setFont(label_font)
-        self._remaining_label.setFont(label_font)
+    @staticmethod
+    def _fit_font(label, target_px, bold=False):
+        """Set the largest point size whose height fits target_px."""
+        if target_px < 8:
+            return
+        font = QFont()
+        font.setBold(bold)
+        # Binary search for the largest fitting point size
+        lo, hi = 6, target_px
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            font.setPointSize(mid)
+            if QFontMetrics(font).height() <= target_px:
+                lo = mid
+            else:
+                hi = mid - 1
+        font.setPointSize(lo)
+        label.setFont(font)
 
     def contextMenuEvent(self, event):
         menu = QMenu(self)
