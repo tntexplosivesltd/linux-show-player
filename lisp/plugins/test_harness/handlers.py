@@ -698,8 +698,8 @@ def register_all(dispatcher, app, signal_manager):
             "loaded": True,
             "visible": window.isVisible(),
             "cue_name": window._name_label.text(),
-            "elapsed": window._elapsed_display.text(),
-            "remaining": window._remaining_display.text(),
+            "elapsed": window.elapsed_text,
+            "remaining": window.remaining_text,
             "tracked_cue_id": cue.id if cue else None,
         }
 

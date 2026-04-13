@@ -43,7 +43,9 @@ class PlaybackMonitor(Plugin):
         self._action.setText(
             translate("PlaybackMonitor", "Playback Monitor")
         )
-        self._action.setShortcut(QKeySequence("Ctrl+M"))
+        self._action.setShortcut(
+            QKeySequence("Ctrl+Shift+M")
+        )
         self._action.triggered.connect(self._toggle_window)
         app.window.menuTools.addAction(self._action)
 

@@ -1,7 +1,7 @@
 """E2E tests for the Playback Monitor plugin.
 
 Verifies the monitor window opens, tracks playing cues, switches
-when a new cue starts, and freezes on stop.
+when a new cue starts, freezes on stop, and remaining changes.
 """
 
 import time
@@ -23,12 +23,18 @@ def run_tests(t):
     # ── Test 1: Plugin is loaded ──────────────────────────────
     print("\n=== Test 1: Plugin loaded ===")
     state = call("playback_monitor.state")
-    t.check("1: plugin is loaded", state.get("loaded") is True)
+    t.check(
+        "1: plugin is loaded",
+        state.get("loaded") is True,
+    )
 
     # ── Test 2: Toggle window open ────────────────────────────
     print("\n=== Test 2: Toggle window open ===")
     result = call("playback_monitor.toggle")
-    t.check("2: window visible after toggle", result.get("visible"))
+    t.check(
+        "2: window visible after toggle",
+        result.get("visible"),
+    )
 
     state = call("playback_monitor.state")
     t.check("2: state shows visible", state.get("visible"))
@@ -78,6 +84,17 @@ def run_tests(t):
         state.get("remaining") not in ("00:00", "--:--"),
     )
 
+    # ── Test 3b: Remaining actually changes ───────────────────
+    print("\n=== Test 3b: Remaining changes over time ===")
+    remaining_1 = state.get("remaining")
+    time.sleep(2)
+    state2 = call("playback_monitor.state")
+    remaining_2 = state2.get("remaining")
+    t.check(
+        "3b: remaining decreased",
+        remaining_2 != remaining_1,
+    )
+
     # ── Test 4: Start second cue, monitor switches ────────────
     print("\n=== Test 4: Switch to second cue ===")
     call("cue.add_from_uri", {
@@ -111,13 +128,17 @@ def run_tests(t):
     time.sleep(0.3)
     state_after_stop = call("playback_monitor.state")
     frozen_elapsed = state_after_stop.get("elapsed")
+    frozen_remaining = state_after_stop.get("remaining")
 
-    # Wait a bit more and check it hasn't changed
     time.sleep(0.5)
     state_later = call("playback_monitor.state")
     t.check(
-        "5: display is frozen (not resetting or counting)",
+        "5: elapsed is frozen",
         state_later.get("elapsed") == frozen_elapsed,
+    )
+    t.check(
+        "5: remaining is frozen",
+        state_later.get("remaining") == frozen_remaining,
     )
     t.check(
         "5: frozen elapsed is not 00:00",

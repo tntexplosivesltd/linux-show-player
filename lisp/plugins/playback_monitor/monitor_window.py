@@ -33,8 +33,8 @@ from lisp.ui.ui_utils import translate
 def format_monitor_time(milliseconds):
     """Format milliseconds as MM:SS, or HH:MM:SS when >= 1 hour.
 
-    Milliseconds are truncated (not rounded). Negative values return
-    00:00.
+    Milliseconds are truncated (not rounded). Negative values
+    return 00:00.
     """
     ms = max(0, int(milliseconds))
     total_seconds = ms // 1000
@@ -46,7 +46,17 @@ def format_monitor_time(milliseconds):
 
 
 class PlaybackMonitorWindow(QWidget):
+    """Resizable window showing elapsed/remaining time.
+
+    Displays one time value large (primary) and the other small
+    (secondary).  Click anywhere to swap which is primary.
+    """
+
     closed = pyqtSignal()
+
+    # True  = elapsed is primary (large)
+    # False = remaining is primary (large)
+    _elapsed_primary = True
 
     def __init__(self, config, **kwargs):
         super().__init__(**kwargs)
@@ -62,38 +72,43 @@ class PlaybackMonitorWindow(QWidget):
             flags |= Qt.WindowStaysOnTopHint
         self.setWindowFlags(flags)
         self.setMinimumSize(300, 200)
+        self.setCursor(Qt.PointingHandCursor)
+
+        self._elapsed_primary = config.get(
+            "elapsedPrimary", True
+        )
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setContentsMargins(10, 6, 10, 6)
+        layout.setSpacing(2)
 
-        # Cue name (small, at top)
+        # Cue name (small, at top, elided)
         self._name_label = QLabel("\u2014")
         self._name_label.setAlignment(Qt.AlignCenter)
+        self._name_label.setTextFormat(Qt.PlainText)
         layout.addWidget(self._name_label, 0)
 
-        # "Elapsed" sub-label
-        self._elapsed_label = QLabel(
-            translate("PlaybackMonitor", "Elapsed")
+        # Primary time (large)
+        self._primary_label = QLabel(
+            self._primary_label_text()
         )
-        self._elapsed_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self._elapsed_label, 0)
+        self._primary_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self._primary_label, 0)
 
-        # Elapsed time display
-        self._elapsed_display = QLabel("00:00")
-        self._elapsed_display.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self._elapsed_display, 1)
+        self._primary_display = QLabel("00:00")
+        self._primary_display.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self._primary_display, 1)
 
-        # "Remaining" sub-label
-        self._remaining_label = QLabel(
-            translate("PlaybackMonitor", "Remaining")
+        # Secondary time (small)
+        self._secondary_label = QLabel(
+            self._secondary_label_text()
         )
-        self._remaining_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self._remaining_label, 0)
+        self._secondary_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self._secondary_label, 0)
 
-        # Remaining time display
-        self._remaining_display = QLabel("00:00")
-        self._remaining_display.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self._remaining_display, 1)
+        self._secondary_display = QLabel("00:00")
+        self._secondary_display.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self._secondary_display, 0)
 
         # Restore saved geometry
         x = config.get("geometry.x", -1)
@@ -106,10 +121,14 @@ class PlaybackMonitorWindow(QWidget):
 
         self._update_fonts()
 
+    # -- Public API used by the plugin --------------------------
+
     def track_cue(self, cue):
         """Switch to tracking a new cue."""
         if self._cue_time is not None:
-            self._cue_time.notify.disconnect(self._time_updated)
+            self._cue_time.notify.disconnect(
+                self._time_updated
+            )
 
         self._tracked_cue = cue
         self._cue_time = CueTime(cue)
@@ -118,26 +137,56 @@ class PlaybackMonitorWindow(QWidget):
         )
         self._name_label.setText(cue.name)
 
-        # Indefinite cues (duration <= 0) won't receive CueTime
-        # updates, so set remaining to placeholder immediately.
         if cue.duration <= 0:
-            self._remaining_display.setText("--:--")
+            self._set_times("00:00", "--:--")
 
     def reset(self):
         """Return to idle state."""
         if self._cue_time is not None:
-            self._cue_time.notify.disconnect(self._time_updated)
+            self._cue_time.notify.disconnect(
+                self._time_updated
+            )
         self._tracked_cue = None
         self._cue_time = None
         self._name_label.setText("\u2014")
-        self._elapsed_display.setText("00:00")
-        self._remaining_display.setText("00:00")
+        self._set_times("00:00", "00:00")
+
+    # -- Internal helpers ---------------------------------------
+
+    def _primary_label_text(self):
+        if self._elapsed_primary:
+            return translate("PlaybackMonitor", "Elapsed")
+        return translate("PlaybackMonitor", "Remaining")
+
+    def _secondary_label_text(self):
+        if self._elapsed_primary:
+            return translate("PlaybackMonitor", "Remaining")
+        return translate("PlaybackMonitor", "Elapsed")
+
+    def _set_times(self, elapsed_str, remaining_str):
+        if self._elapsed_primary:
+            self._primary_display.setText(elapsed_str)
+            self._secondary_display.setText(remaining_str)
+        else:
+            self._primary_display.setText(remaining_str)
+            self._secondary_display.setText(elapsed_str)
+
+    @property
+    def elapsed_text(self):
+        if self._elapsed_primary:
+            return self._primary_display.text()
+        return self._secondary_display.text()
+
+    @property
+    def remaining_text(self):
+        if self._elapsed_primary:
+            return self._secondary_display.text()
+        return self._primary_display.text()
 
     def _time_updated(self, time):
         if not self.isVisible():
             return
 
-        # If time equals duration or is negative, treat as zero
         cue = self._tracked_cue
         if cue is None:
             return
@@ -147,17 +196,46 @@ class PlaybackMonitorWindow(QWidget):
         ) or time < 0:
             time = 0
 
-        self._elapsed_display.setText(
-            format_monitor_time(time)
-        )
+        elapsed_str = format_monitor_time(time)
 
         if cue.duration > 0:
             remaining = cue.duration - time
-            self._remaining_display.setText(
-                format_monitor_time(max(0, remaining))
+            remaining_str = format_monitor_time(
+                max(0, remaining)
             )
         else:
-            self._remaining_display.setText("--:--")
+            remaining_str = "--:--"
+
+        self._set_times(elapsed_str, remaining_str)
+
+    # -- Click to swap primary/secondary ------------------------
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._elapsed_primary = not self._elapsed_primary
+            self._config.set(
+                "elapsedPrimary", self._elapsed_primary
+            )
+            self._config.write()
+
+            self._primary_label.setText(
+                self._primary_label_text()
+            )
+            self._secondary_label.setText(
+                self._secondary_label_text()
+            )
+
+            # Swap the displayed values
+            old_primary = self._primary_display.text()
+            old_secondary = self._secondary_display.text()
+            self._primary_display.setText(old_secondary)
+            self._secondary_display.setText(old_primary)
+
+            self._update_fonts()
+        else:
+            super().mousePressEvent(event)
+
+    # -- Font scaling -------------------------------------------
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -165,32 +243,35 @@ class PlaybackMonitorWindow(QWidget):
 
     def _update_fonts(self):
         h = self.height()
-        # Budget: name 6%, sub-labels 4% each, time 35% each,
-        # margins+spacing eat the remaining 16%.
+        # name 5%, primary-label 4%, primary 55%,
+        # secondary-label 3%, secondary 10%
         self._fit_font(
-            self._name_label, int(h * 0.06), bold=False
+            self._name_label, int(h * 0.05), bold=False
         )
         self._fit_font(
-            self._elapsed_label, int(h * 0.04), bold=False
+            self._primary_label, int(h * 0.04), bold=False
         )
         self._fit_font(
-            self._remaining_label, int(h * 0.04), bold=False
+            self._primary_display, int(h * 0.55), bold=True
         )
         self._fit_font(
-            self._elapsed_display, int(h * 0.35), bold=True
+            self._secondary_label,
+            int(h * 0.03),
+            bold=False,
         )
         self._fit_font(
-            self._remaining_display, int(h * 0.35), bold=True
+            self._secondary_display,
+            int(h * 0.10),
+            bold=True,
         )
 
     @staticmethod
     def _fit_font(label, target_px, bold=False):
-        """Set the largest point size whose height fits target_px."""
+        """Set the largest point size that fits target_px."""
         if target_px < 8:
             return
         font = QFont()
         font.setBold(bold)
-        # Binary search for the largest fitting point size
         lo, hi = 6, target_px
         while lo < hi:
             mid = (lo + hi + 1) // 2
@@ -202,6 +283,8 @@ class PlaybackMonitorWindow(QWidget):
         font.setPointSize(lo)
         label.setFont(font)
 
+    # -- Context menu -------------------------------------------
+
     def contextMenuEvent(self, event):
         menu = QMenu(self)
 
@@ -211,7 +294,9 @@ class PlaybackMonitorWindow(QWidget):
         )
         always_on_top.setCheckable(True)
         always_on_top.setChecked(
-            bool(self.windowFlags() & Qt.WindowStaysOnTopHint)
+            bool(
+                self.windowFlags() & Qt.WindowStaysOnTopHint
+            )
         )
         always_on_top.triggered.connect(
             self._toggle_always_on_top
@@ -231,7 +316,6 @@ class PlaybackMonitorWindow(QWidget):
             flags &= ~Qt.WindowStaysOnTopHint
         self.setWindowFlags(flags)
 
-        # setWindowFlags hides the widget, so restore state
         self.resize(size)
         self.move(pos)
         if was_visible:
