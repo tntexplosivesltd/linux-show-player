@@ -707,7 +707,10 @@ def register_all(dispatcher, app, signal_manager):
         """Toggle the playback monitor window."""
         from lisp.plugins import get_plugin
 
-        plugin = get_plugin("PlaybackMonitor")
+        try:
+            plugin = get_plugin("PlaybackMonitor")
+        except Exception:
+            return {"error": "PlaybackMonitor not loaded"}
         plugin._toggle_window()
         window = plugin._window
         return {

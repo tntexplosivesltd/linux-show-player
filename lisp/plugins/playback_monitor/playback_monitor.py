@@ -102,6 +102,8 @@ class PlaybackMonitor(Plugin):
             self._window.reset()
 
     def finalize(self):
+        self._disconnect_all_cues()
+        self.app.window.menuTools.removeAction(self._action)
         if self._window is not None:
             self._window.close()
             self._window = None

@@ -54,10 +54,6 @@ class PlaybackMonitorWindow(QWidget):
 
     closed = pyqtSignal()
 
-    # True  = elapsed is primary (large)
-    # False = remaining is primary (large)
-    _elapsed_primary = True
-
     def __init__(self, config, **kwargs):
         super().__init__(**kwargs)
         self._config = config
