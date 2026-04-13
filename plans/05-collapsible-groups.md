@@ -1,6 +1,6 @@
-# Collapsible Groups Implementation Plan
+# Collapsible Groups Implementation Plan ✅ Complete
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Make group cues in the list layout collapsible, using native QTreeWidget parent/child hierarchy with per-group persistent state and auto-expand on play.
 
@@ -34,7 +34,7 @@
 - Modify: `lisp/plugins/action_cues/group_cue.py:56-60`
 - Test: `tests/cues/test_group_cue.py`
 
-- [ ] **Step 1: Write failing tests for the `collapsed` property**
+- [x] **Step 1: Write failing tests for the `collapsed` property**
 
 Add to `tests/cues/test_group_cue.py` inside `TestGroupCueDefaults`:
 
@@ -63,13 +63,13 @@ class TestCollapsedProperty:
         assert "collapsed" not in props
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `poetry run pytest tests/cues/test_group_cue.py::TestGroupCueDefaults::test_default_collapsed_false tests/cues/test_group_cue.py::TestCollapsedProperty -v`
 
 Expected: FAIL — `AttributeError: 'GroupCue' object has no attribute 'collapsed'`
 
-- [ ] **Step 3: Add the `collapsed` property**
+- [x] **Step 3: Add the `collapsed` property**
 
 In `lisp/plugins/action_cues/group_cue.py`, add after line 60 (`icon = Property(default="cue-group")`):
 
@@ -77,13 +77,13 @@ In `lisp/plugins/action_cues/group_cue.py`, add after line 60 (`icon = Property(
     collapsed = Property(default=False)
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `poetry run pytest tests/cues/test_group_cue.py -v`
 
 Expected: ALL PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add lisp/plugins/action_cues/group_cue.py tests/cues/test_group_cue.py
@@ -98,7 +98,7 @@ git commit -m "Add collapsed property to GroupCue for persistent collapse state"
 - Modify: `lisp/plugins/list_layout/default.json`
 - Modify: `lisp/plugins/list_layout/settings.py`
 
-- [ ] **Step 1: Add config default**
+- [x] **Step 1: Add config default**
 
 In `lisp/plugins/list_layout/default.json`, add after `"infoPanelFontSize": 12` (line 21), before the closing `}`:
 
@@ -109,7 +109,7 @@ In `lisp/plugins/list_layout/default.json`, add after `"infoPanelFontSize": 12` 
 
 (Note: add a comma after `12` and the new line.)
 
-- [ ] **Step 2: Add checkbox to settings page**
+- [x] **Step 2: Add checkbox to settings page**
 
 In `lisp/plugins/list_layout/settings.py`, add inside `__init__` after `self.selectionMode` (line 65):
 
@@ -144,7 +144,7 @@ In `getSettings`, add to the returned dict after `"selectionMode"` (line 183):
             "autoExpandOnPlay": self.autoExpandOnPlay.isChecked(),
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add lisp/plugins/list_layout/default.json lisp/plugins/list_layout/settings.py
@@ -158,7 +158,7 @@ git commit -m "Add autoExpandOnPlay config setting to list layout"
 **Files:**
 - Modify: `lisp/plugins/list_layout/list_widgets.py:59-94`
 
-- [ ] **Step 1: Remove the 4-space indent from NameWidget**
+- [x] **Step 1: Remove the 4-space indent from NameWidget**
 
 In `lisp/plugins/list_layout/list_widgets.py`, replace the `_refresh` method (lines 77-85):
 
@@ -204,7 +204,7 @@ Old (lines 93-94):
 
 Remove those 2 lines.
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add lisp/plugins/list_layout/list_widgets.py
@@ -220,7 +220,7 @@ This is the main change. The view becomes hierarchy-aware.
 **Files:**
 - Modify: `lisp/plugins/list_layout/list_view.py`
 
-- [ ] **Step 1: Add imports and tree item lookup helper**
+- [x] **Step 1: Add imports and tree item lookup helper**
 
 At the top of `list_view.py`, add to the imports:
 
@@ -272,7 +272,7 @@ Add a helper method to `CueListView` after `updateHeadersSizes` (after line 240)
                 yield top.child(j)
 ```
 
-- [ ] **Step 2: Enable indentation**
+- [x] **Step 2: Enable indentation**
 
 In `__init__`, change line 125:
 
@@ -286,7 +286,7 @@ New:
         self.setIndentation(16)
 ```
 
-- [ ] **Step 3: Add `_group_items` dict and collapse signal connections**
+- [x] **Step 3: Add `_group_items` dict and collapse signal connections**
 
 In `__init__`, after `self.__scrollRangeGuard = False` (line 102), add:
 
@@ -314,7 +314,7 @@ Add the signal handler methods after `__currentItemChanged` (after line 258):
             item.cue.collapsed = False
 ```
 
-- [ ] **Step 4: Add `setAutoExpand` method**
+- [x] **Step 4: Add `setAutoExpand` method**
 
 Add after the collapse/expand handlers:
 
@@ -323,7 +323,7 @@ Add after the collapse/expand handlers:
         self._auto_expand = enabled
 ```
 
-- [ ] **Step 5: Rewrite `__cueAdded` for parent-aware insertion**
+- [x] **Step 5: Rewrite `__cueAdded` for parent-aware insertion**
 
 Replace `__cueAdded` (lines 287-304):
 
@@ -385,7 +385,7 @@ Replace `__cueAdded` (lines 287-304):
         self.setFocus()
 ```
 
-- [ ] **Step 6: Add `__groupStarted` handler**
+- [x] **Step 6: Add `__groupStarted` handler**
 
 After the new `__cueAdded`:
 
@@ -397,7 +397,7 @@ After the new `__cueAdded`:
             cue.collapsed = False
 ```
 
-- [ ] **Step 7: Rewrite `__cueMoved`**
+- [x] **Step 7: Rewrite `__cueMoved`**
 
 Replace `__cueMoved` (lines 306-309):
 
@@ -442,7 +442,7 @@ Replace `__cueMoved` (lines 306-309):
         self.__setupItemWidgets(item)
 ```
 
-- [ ] **Step 8: Rewrite `__cueRemoved`**
+- [x] **Step 8: Rewrite `__cueRemoved`**
 
 Replace `__cueRemoved` (lines 311-313):
 
@@ -467,7 +467,7 @@ Replace `__cueRemoved` (lines 311-313):
                 self.takeTopLevelItem(idx)
 ```
 
-- [ ] **Step 9: Rewrite `standbyIndex` and `setStandbyIndex`**
+- [x] **Step 9: Rewrite `standbyIndex` and `setStandbyIndex`**
 
 Replace `standbyIndex` (lines 215-216) and `setStandbyIndex` (lines 218-220):
 
@@ -481,7 +481,7 @@ Replace `standbyIndex` (lines 215-216) and `setStandbyIndex` (lines 218-220):
             self.setCurrentItem(item)
 ```
 
-- [ ] **Step 10: Fix `__cuePropChanged` for non-top-level items**
+- [x] **Step 10: Fix `__cuePropChanged` for non-top-level items**
 
 Replace `__cuePropChanged` (lines 281-285):
 
@@ -534,7 +534,7 @@ Replace `__cuePropChanged` (lines 281-285):
         self.__updateItemStyle(item)
 ```
 
-- [ ] **Step 11: Fix `__modelReset` to clear group tracking**
+- [x] **Step 11: Fix `__modelReset` to clear group tracking**
 
 Replace `__modelReset` (lines 315-317):
 
@@ -545,7 +545,7 @@ Replace `__modelReset` (lines 315-317):
         self.clear()
 ```
 
-- [ ] **Step 12: Commit**
+- [x] **Step 12: Commit**
 
 ```bash
 git add lisp/plugins/list_layout/list_view.py
@@ -559,7 +559,7 @@ git commit -m "Make CueListView hierarchy-aware for collapsible groups"
 **Files:**
 - Modify: `lisp/plugins/list_layout/layout.py`
 
-- [ ] **Step 1: Fix `selected_cues`**
+- [x] **Step 1: Fix `selected_cues`**
 
 Replace `selected_cues` (lines 294-298):
 
@@ -569,7 +569,7 @@ Replace `selected_cues` (lines 294-298):
             yield item.cue
 ```
 
-- [ ] **Step 2: Fix `select_all`, `deselect_all`, `invert_selection`**
+- [x] **Step 2: Fix `select_all`, `deselect_all`, `invert_selection`**
 
 Replace `select_all` (lines 310-314):
 
@@ -599,7 +599,7 @@ Replace `invert_selection` (lines 321-325):
                 item.setSelected(not item.isSelected())
 ```
 
-- [ ] **Step 3: Fix `_set_selection_mode` for child items**
+- [x] **Step 3: Fix `_set_selection_mode` for child items**
 
 In `_set_selection_mode` (line 416), replace the `topLevelItem` reference:
 
@@ -619,7 +619,7 @@ New:
                     item.setSelected(True)
 ```
 
-- [ ] **Step 4: Add collapse/expand all menu actions**
+- [x] **Step 4: Add collapse/expand all menu actions**
 
 In `__init__`, after the `layout_menu.addSeparator()` block (after line 137), before `self.enable_view_resize_action` (line 139), add:
 
@@ -645,7 +645,7 @@ In `__init__`, after the `layout_menu.addSeparator()` block (after line 137), be
         layout_menu.addSeparator()
 ```
 
-- [ ] **Step 5: Add the handler methods and `autoExpandOnPlay` wiring**
+- [x] **Step 5: Add the handler methods and `autoExpandOnPlay` wiring**
 
 Add after `_set_view_resize_enabled` (after line 435):
 
@@ -673,7 +673,7 @@ Add after `_set_view_resize_enabled` (after line 435):
                 item.cue.collapsed = False
 ```
 
-- [ ] **Step 6: Wire `autoExpandOnPlay` config to the view**
+- [x] **Step 6: Wire `autoExpandOnPlay` config to the view**
 
 In `__init__`, after the existing `_set_go_key_disabled_while_playing` load (after line 159), add:
 
@@ -683,7 +683,7 @@ In `__init__`, after the existing `_set_go_key_disabled_while_playing` load (aft
         )
 ```
 
-- [ ] **Step 7: Add translations for new menu actions**
+- [x] **Step 7: Add translations for new menu actions**
 
 In `retranslate`, add after the existing entries:
 
@@ -696,7 +696,7 @@ In `retranslate`, add after the existing entries:
         )
 ```
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add lisp/plugins/list_layout/layout.py
@@ -710,7 +710,7 @@ git commit -m "Update ListLayout for tree hierarchy and add collapse/expand all"
 **Files:**
 - Modify: `lisp/plugins/list_layout/view.py:132-139`
 
-- [ ] **Step 1: Fix `__listViewCurrentChanged` to handle child items**
+- [x] **Step 1: Fix `__listViewCurrentChanged` to handle child items**
 
 Replace `__listViewCurrentChanged` (lines 132-139):
 
@@ -725,7 +725,7 @@ Replace `__listViewCurrentChanged` (lines 132-139):
 
 This removes the `indexOfTopLevelItem` → `listModel.item(index)` lookup. Since `CueTreeWidgetItem` already stores a reference to the cue, we access it directly.
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add lisp/plugins/list_layout/view.py
@@ -739,7 +739,7 @@ git commit -m "Fix info panel to read cue directly from tree item"
 **Files:**
 - Modify: `tests/e2e/test_groups_e2e.py`
 
-- [ ] **Step 1: Add collapse/expand persistence test**
+- [x] **Step 1: Add collapse/expand persistence test**
 
 Add a new test function after `test_9_save_load`:
 
@@ -782,7 +782,7 @@ def test_11_collapse_persist(ids, group_id):
     return gid
 ```
 
-- [ ] **Step 2: Wire the new test into `main()`**
+- [x] **Step 2: Wire the new test into `main()`**
 
 In the `try` block in `main()` (around line 693), add after the `test_10_edge_cases` call:
 
@@ -792,7 +792,7 @@ In the `try` block in `main()` (around line 693), add after the `test_10_edge_ca
 
 Also update the `conftest.py` ignore list — add the new test is in the same file, so no change needed there.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add tests/e2e/test_groups_e2e.py
@@ -803,19 +803,19 @@ git commit -m "Add E2E tests for collapse state persistence"
 
 ### Task 8: Manual Smoke Test
 
-- [ ] **Step 1: Run the full unit test suite**
+- [x] **Step 1: Run the full unit test suite**
 
 Run: `poetry run pytest tests/ -v`
 
 Expected: ALL PASS
 
-- [ ] **Step 2: Run the E2E test suite**
+- [x] **Step 2: Run the E2E test suite**
 
 Run: `poetry run python tests/e2e/test_groups_e2e.py`
 
 Expected: ALL PASS (including new test_11)
 
-- [ ] **Step 3: Manual smoke test**
+- [x] **Step 3: Manual smoke test**
 
 Start LiSP: `poetry run linux-show-player -l debug`
 
@@ -832,7 +832,7 @@ Verify:
 10. Ungroup → children return to top-level, no crash
 11. GO button skips child cues (same as before)
 
-- [ ] **Step 4: Final commit if any fixes needed**
+- [x] **Step 4: Final commit if any fixes needed**
 
 ```bash
 git add -u
