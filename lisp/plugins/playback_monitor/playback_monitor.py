@@ -60,16 +60,12 @@ class PlaybackMonitor(Plugin):
             self._window = PlaybackMonitorWindow(
                 PlaybackMonitor.Config
             )
-            self._window.closed.connect(self._window_closed)
             self._window.show()
         elif self._window.isVisible():
             self._window.close()
         else:
             self._window.show()
             self._window.raise_()
-
-    def _window_closed(self):
-        pass
 
     def _cue_added(self, cue):
         cue.started.connect(
@@ -88,13 +84,18 @@ class PlaybackMonitor(Plugin):
         ):
             self._window.track_cue(cue)
 
-    def _model_reset(self):
+    def _disconnect_all_cues(self):
+        for cue in self._tracked_cues.values():
+            cue.started.disconnect(self._cue_started)
         self._tracked_cues.clear()
+
+    def _model_reset(self):
+        self._disconnect_all_cues()
         if self._window is not None:
             self._window.reset()
 
     def _session_reset(self):
-        self._tracked_cues.clear()
+        self._disconnect_all_cues()
         if self._window is not None:
             self._window.reset()
 

@@ -118,6 +118,11 @@ class PlaybackMonitorWindow(QWidget):
         )
         self._name_label.setText(cue.name)
 
+        # Indefinite cues (duration <= 0) won't receive CueTime
+        # updates, so set remaining to placeholder immediately.
+        if cue.duration <= 0:
+            self._remaining_display.setText("--:--")
+
     def reset(self):
         """Return to idle state."""
         if self._cue_time is not None:
