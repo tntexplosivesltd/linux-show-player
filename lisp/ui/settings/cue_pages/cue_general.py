@@ -407,28 +407,28 @@ class CueTimingPage(CueSettingsPage):
         self.preWaitGroup.setLayout(QHBoxLayout())
         self.layout().addWidget(self.preWaitGroup)
 
+        self.preWaitLabel = QLabel(self.preWaitGroup)
+        self.preWaitLabel.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+        self.preWaitGroup.layout().addWidget(self.preWaitLabel, 1)
+
         self.preWaitEdit = QTimeEdit(self.preWaitGroup)
         self.preWaitEdit.setDisplayFormat("HH:mm:ss.zzz")
         self.preWaitEdit.setCurrentSection(QDateTimeEdit.SecondSection)
         self.preWaitGroup.layout().addWidget(self.preWaitEdit)
-
-        self.preWaitLabel = QLabel(self.preWaitGroup)
-        self.preWaitLabel.setAlignment(Qt.AlignCenter)
-        self.preWaitGroup.layout().addWidget(self.preWaitLabel)
 
         # Post wait
         self.postWaitGroup = QGroupBox(self)
         self.postWaitGroup.setLayout(QHBoxLayout())
         self.layout().addWidget(self.postWaitGroup)
 
+        self.postWaitLabel = QLabel(self.postWaitGroup)
+        self.postWaitLabel.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+        self.postWaitGroup.layout().addWidget(self.postWaitLabel, 1)
+
         self.postWaitEdit = QTimeEdit(self.postWaitGroup)
         self.postWaitEdit.setDisplayFormat("HH:mm:ss.zzz")
         self.postWaitEdit.setCurrentSection(QDateTimeEdit.SecondSection)
         self.postWaitGroup.layout().addWidget(self.postWaitEdit)
-
-        self.postWaitLabel = QLabel(self.postWaitGroup)
-        self.postWaitLabel.setAlignment(Qt.AlignCenter)
-        self.postWaitGroup.layout().addWidget(self.postWaitLabel)
 
         # Next action
         self.nextActionGroup = QGroupBox(self)

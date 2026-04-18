@@ -57,15 +57,15 @@ class TimecodeSettings(CueSettingsPage):
         self.useHoursCheck.setChecked(True)
         self.groupBox.layout().addWidget(self.useHoursCheck, 1, 0)
 
+        self.trackLabel = QLabel(self.groupBox)
+        self.trackLabel.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+        self.groupBox.layout().addWidget(self.trackLabel, 2, 0)
+
         self.trackSpin = QSpinBox(self)
         self.trackSpin.setMinimum(0)
         self.trackSpin.setMaximum(99)
         self.useHoursCheck.stateChanged.connect(self.trackSpin.setEnabled)
-        self.groupBox.layout().addWidget(self.trackSpin, 2, 0)
-
-        self.trackLabel = QLabel(self.groupBox)
-        self.trackLabel.setAlignment(Qt.AlignCenter)
-        self.groupBox.layout().addWidget(self.trackLabel, 2, 1)
+        self.groupBox.layout().addWidget(self.trackSpin, 2, 1)
 
         self.layout().addSpacing(50)
 

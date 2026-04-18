@@ -46,36 +46,42 @@ class DbMeterSettings(SettingsPage):
         self.layout().addWidget(self.groupBox)
 
         # Time (sec/100) between two levels
+        self.intervalLabel = QLabel(self.groupBox)
+        self.intervalLabel.setAlignment(
+            QtCore.Qt.AlignVCenter | QtCore.Qt.AlignLeft
+        )
+        self.groupBox.layout().addWidget(self.intervalLabel, 0, 0)
+
         self.intervalSpin = QSpinBox(self.groupBox)
         self.intervalSpin.setRange(1, 1000)
         self.intervalSpin.setMaximum(1000)
         self.intervalSpin.setValue(33)
-        self.groupBox.layout().addWidget(self.intervalSpin, 0, 0)
-
-        self.intervalLabel = QLabel(self.groupBox)
-        self.intervalLabel.setAlignment(QtCore.Qt.AlignCenter)
-        self.groupBox.layout().addWidget(self.intervalLabel, 0, 1)
+        self.groupBox.layout().addWidget(self.intervalSpin, 0, 1)
 
         # Peak ttl (sec/100)
+        self.ttlLabel = QLabel(self.groupBox)
+        self.ttlLabel.setAlignment(
+            QtCore.Qt.AlignVCenter | QtCore.Qt.AlignLeft
+        )
+        self.groupBox.layout().addWidget(self.ttlLabel, 1, 0)
+
         self.ttlSpin = QSpinBox(self.groupBox)
         self.ttlSpin.setSingleStep(10)
         self.ttlSpin.setRange(10, 10000)
         self.ttlSpin.setValue(1000)
-        self.groupBox.layout().addWidget(self.ttlSpin, 1, 0)
-
-        self.ttlLabel = QLabel(self.groupBox)
-        self.ttlLabel.setAlignment(QtCore.Qt.AlignCenter)
-        self.groupBox.layout().addWidget(self.ttlLabel, 1, 1)
+        self.groupBox.layout().addWidget(self.ttlSpin, 1, 1)
 
         # Peak falloff (unit per time)
+        self.falloffLabel = QLabel(self.groupBox)
+        self.falloffLabel.setAlignment(
+            QtCore.Qt.AlignVCenter | QtCore.Qt.AlignLeft
+        )
+        self.groupBox.layout().addWidget(self.falloffLabel, 2, 0)
+
         self.falloffSpin = QSpinBox(self.groupBox)
         self.falloffSpin.setRange(1, 100)
         self.falloffSpin.setValue(20)
-        self.groupBox.layout().addWidget(self.falloffSpin, 2, 0)
-
-        self.falloffLabel = QLabel(self.groupBox)
-        self.falloffLabel.setAlignment(QtCore.Qt.AlignCenter)
-        self.groupBox.layout().addWidget(self.falloffLabel, 2, 1)
+        self.groupBox.layout().addWidget(self.falloffSpin, 2, 1)
 
         self.retranslateUi()
 

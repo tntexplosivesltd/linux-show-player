@@ -57,11 +57,10 @@ class AudioDynamicSettings(SettingsPage):
         self.modeComboBox.addItem(
             translate("AudioDynamicSettings", "Expander"), "expander"
         )
-        self.groupBox.layout().addWidget(self.modeComboBox, 0, 0, 1, 1)
-
         self.modeLabel = QLabel(self.groupBox)
-        self.modeLabel.setAlignment(QtCore.Qt.AlignCenter)
-        self.groupBox.layout().addWidget(self.modeLabel, 0, 1, 1, 1)
+        self.modeLabel.setAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignLeft)
+        self.groupBox.layout().addWidget(self.modeLabel, 0, 0, 1, 1)
+        self.groupBox.layout().addWidget(self.modeComboBox, 0, 1, 1, 1)
 
         # AudioDynamic characteristic
         self.chComboBox = QComboBox(self.groupBox)
@@ -71,30 +70,31 @@ class AudioDynamicSettings(SettingsPage):
         self.chComboBox.addItem(
             translate("AudioDynamicSettings", "Hard Knee"), "hard-knee"
         )
-        self.groupBox.layout().addWidget(self.chComboBox, 1, 0, 1, 1)
-
         self.chLabel = QLabel(self.groupBox)
-        self.chLabel.setAlignment(QtCore.Qt.AlignCenter)
-        self.groupBox.layout().addWidget(self.chLabel, 1, 1, 1, 1)
+        self.chLabel.setAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignLeft)
+        self.groupBox.layout().addWidget(self.chLabel, 1, 0, 1, 1)
+        self.groupBox.layout().addWidget(self.chComboBox, 1, 1, 1, 1)
 
         # AudioDynamic ratio
-        self.ratioSpin = QDoubleSpinBox(self.groupBox)
-        self.groupBox.layout().addWidget(self.ratioSpin, 2, 0, 1, 1)
-
         self.ratioLabel = QLabel(self.groupBox)
-        self.ratioLabel.setAlignment(QtCore.Qt.AlignCenter)
-        self.groupBox.layout().addWidget(self.ratioLabel, 2, 1, 1, 1)
+        self.ratioLabel.setAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignLeft)
+        self.groupBox.layout().addWidget(self.ratioLabel, 2, 0, 1, 1)
+
+        self.ratioSpin = QDoubleSpinBox(self.groupBox)
+        self.groupBox.layout().addWidget(self.ratioSpin, 2, 1, 1, 1)
 
         # AudioDynamic threshold
+        self.thresholdLabel = QLabel(self.groupBox)
+        self.thresholdLabel.setAlignment(
+            QtCore.Qt.AlignVCenter | QtCore.Qt.AlignLeft
+        )
+        self.groupBox.layout().addWidget(self.thresholdLabel, 3, 0, 1, 1)
+
         self.thresholdSpin = QDoubleSpinBox(self.groupBox)
         self.thresholdSpin.setMaximum(0)
         self.thresholdSpin.setMinimum(-100)
         self.thresholdSpin.setSingleStep(1)
-        self.groupBox.layout().addWidget(self.thresholdSpin, 3, 0, 1, 1)
-
-        self.thresholdLabel = QLabel(self.groupBox)
-        self.thresholdLabel.setAlignment(QtCore.Qt.AlignCenter)
-        self.groupBox.layout().addWidget(self.thresholdLabel, 3, 1, 1, 1)
+        self.groupBox.layout().addWidget(self.thresholdSpin, 3, 1, 1, 1)
 
         self.retranslateUi()
 

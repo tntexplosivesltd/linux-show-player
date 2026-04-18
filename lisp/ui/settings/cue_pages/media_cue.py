@@ -43,41 +43,41 @@ class MediaCueSettings(SettingsPage):
         self.startGroup.setLayout(QHBoxLayout())
         self.layout().addWidget(self.startGroup)
 
+        self.startLabel = QLabel(self.startGroup)
+        self.startLabel.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+        self.startGroup.layout().addWidget(self.startLabel, 1)
+
         self.startEdit = QTimeEdit(self.startGroup)
         self.startEdit.setDisplayFormat("HH:mm:ss.zzz")
         self.startEdit.setCurrentSection(QDateTimeEdit.SecondSection)
         self.startGroup.layout().addWidget(self.startEdit)
-
-        self.startLabel = QLabel(self.startGroup)
-        self.startLabel.setAlignment(Qt.AlignCenter)
-        self.startGroup.layout().addWidget(self.startLabel)
 
         # Stop time
         self.stopGroup = QGroupBox(self)
         self.stopGroup.setLayout(QHBoxLayout())
         self.layout().addWidget(self.stopGroup)
 
+        self.stopLabel = QLabel(self.stopGroup)
+        self.stopLabel.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+        self.stopGroup.layout().addWidget(self.stopLabel, 1)
+
         self.stopEdit = QTimeEdit(self.stopGroup)
         self.stopEdit.setDisplayFormat("HH:mm:ss.zzz")
         self.stopEdit.setCurrentSection(QDateTimeEdit.SecondSection)
         self.stopGroup.layout().addWidget(self.stopEdit)
-
-        self.stopLabel = QLabel(self.stopGroup)
-        self.stopLabel.setAlignment(Qt.AlignCenter)
-        self.stopGroup.layout().addWidget(self.stopLabel)
 
         # Loop
         self.loopGroup = QGroupBox(self)
         self.loopGroup.setLayout(QHBoxLayout())
         self.layout().addWidget(self.loopGroup)
 
+        self.loopLabel = QLabel(self.loopGroup)
+        self.loopLabel.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+        self.loopGroup.layout().addWidget(self.loopLabel, 1)
+
         self.spinLoop = QSpinBox(self.loopGroup)
         self.spinLoop.setRange(-1, 1_000_000)
         self.loopGroup.layout().addWidget(self.spinLoop)
-
-        self.loopLabel = QLabel(self.loopGroup)
-        self.loopLabel.setAlignment(Qt.AlignCenter)
-        self.loopGroup.layout().addWidget(self.loopLabel)
 
         self.retranslateUi()
 
