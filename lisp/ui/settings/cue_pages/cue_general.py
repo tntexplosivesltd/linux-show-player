@@ -21,12 +21,13 @@ from PyQt5.QtWidgets import (
     QCheckBox,
     QDateTimeEdit,
     QDialog,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
-    QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QTextEdit,
     QTimeEdit,
@@ -55,28 +56,21 @@ class CueGeneralSettingsPage(CueSettingsPage):
 
     def __init__(self, cueType, **kwargs):
         super().__init__(cueType=cueType, **kwargs)
-        self.setLayout(QVBoxLayout())
-        self.layout().setContentsMargins(0, 0, 0, 0)
-
         self.iconSelectorDialog = None
 
-        # Scroll area hosting every group box — nine group boxes do not
-        # fit within the dialog's 800x510 default without scrolling.
-        self.scrollArea = QScrollArea(self)
-        self.scrollArea.setWidgetResizable(True)
-        self.scrollArea.setFrameShape(QScrollArea.NoFrame)
-        self.layout().addWidget(self.scrollArea)
+        # QLab-style 3-column grid: identity | behaviour | appearance+fade.
+        # Each column owns flat group-boxes so existing tests that touch
+        # `xxxGroup.isCheckable()`/`isEnabled()` still work, but the chrome
+        # disappears so the inspector reads as a single dense form.
+        grid = QGridLayout(self)
+        grid.setContentsMargins(8, 8, 8, 8)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(6)
 
-        self.scrollContents = QWidget(self.scrollArea)
-        self.scrollContents.setLayout(QVBoxLayout())
-        self.scrollArea.setWidget(self.scrollContents)
-
-        contents = self.scrollContents.layout()
-
-        # 1. Cue Name and Icon
-        self.cueNameGroup = QGroupBox(self.scrollContents)
+        # ---- Column 0: identity --------------------------------------
+        self.cueNameGroup = self._makeFlatGroup()
         self.cueNameGroup.setLayout(QHBoxLayout())
-        contents.addWidget(self.cueNameGroup)
+        self.cueNameGroup.layout().setContentsMargins(0, 14, 0, 0)
 
         self.cueIconPreview = QLabel(self.cueNameGroup)
         self.cueNameGroup.layout().addWidget(self.cueIconPreview)
@@ -86,12 +80,16 @@ class CueGeneralSettingsPage(CueSettingsPage):
         self.cueNameGroup.layout().addWidget(self.cueIconButton)
 
         self.cueNameEdit = QLineEdit(self.cueNameGroup)
-        self.cueNameGroup.layout().addWidget(self.cueNameEdit)
+        self.cueNameGroup.layout().addWidget(self.cueNameEdit, 1)
 
-        # 2. Description/Note
-        self.cueDescriptionGroup = QGroupBox(self.scrollContents)
+        grid.addWidget(self.cueNameGroup, 0, 0)
+
+        self.cueDescriptionGroup = self._makeFlatGroup()
         self.cueDescriptionGroup.setLayout(QHBoxLayout())
-        contents.addWidget(self.cueDescriptionGroup)
+        self.cueDescriptionGroup.layout().setContentsMargins(0, 14, 0, 0)
+        self.cueDescriptionGroup.setSizePolicy(
+            QSizePolicy.Expanding, QSizePolicy.Expanding
+        )
 
         self.cueDescriptionEdit = QTextEdit(self.cueDescriptionGroup)
         self.cueDescriptionEdit.setAcceptRichText(False)
@@ -100,35 +98,13 @@ class CueGeneralSettingsPage(CueSettingsPage):
         )
         self.cueDescriptionGroup.layout().addWidget(self.cueDescriptionEdit)
 
-        # 3. Color
-        self.colorGroup = QGroupBox(self.scrollContents)
-        self.colorGroup.setLayout(QHBoxLayout())
-        contents.addWidget(self.colorGroup)
+        # Description fills column 0 from row 1 to the bottom of the grid.
+        grid.addWidget(self.cueDescriptionGroup, 1, 0, -1, 1)
 
-        self.colorBButton = ColorButton(self.colorGroup)
-        self.colorFButton = ColorButton(self.colorGroup)
-        self.colorGroup.layout().addWidget(self.colorBButton)
-        self.colorGroup.layout().addWidget(self.colorFButton)
-
-        # 4. Set Font Size
-        self.fontSizeGroup = QGroupBox(self.scrollContents)
-        self.fontSizeGroup.setLayout(QHBoxLayout())
-        contents.addWidget(self.fontSizeGroup)
-
-        self.fontSizeSpin = QSpinBox(self.fontSizeGroup)
-        self.fontSizeSpin.setValue(QLabel().fontInfo().pointSize())
-        self.fontSizeGroup.layout().addWidget(self.fontSizeSpin)
-
-        # Appearance warning — sits beneath the visual-affecting groups.
-        self.warning = QLabel(self.scrollContents)
-        self.warning.setAlignment(Qt.AlignCenter)
-        self.warning.setStyleSheet("color: #FFA500; font-weight: bold")
-        contents.addWidget(self.warning)
-
-        # 5. Start action
-        self.startActionGroup = QGroupBox(self.scrollContents)
+        # ---- Column 1: behaviour -------------------------------------
+        self.startActionGroup = self._makeFlatGroup()
         self.startActionGroup.setLayout(QHBoxLayout())
-        contents.addWidget(self.startActionGroup)
+        self.startActionGroup.layout().setContentsMargins(0, 14, 0, 0)
 
         self.startActionCombo = CueActionComboBox(
             {CueAction.Start, CueAction.FadeInStart}.intersection(
@@ -142,12 +118,13 @@ class CueGeneralSettingsPage(CueSettingsPage):
 
         self.startActionLabel = QLabel(self.startActionGroup)
         self.startActionLabel.setAlignment(Qt.AlignCenter)
-        self.startActionGroup.layout().addWidget(self.startActionLabel)
+        self.startActionGroup.layout().addWidget(self.startActionLabel, 1)
 
-        # 6. Stop action
-        self.stopActionGroup = QGroupBox(self.scrollContents)
+        grid.addWidget(self.startActionGroup, 0, 1)
+
+        self.stopActionGroup = self._makeFlatGroup()
         self.stopActionGroup.setLayout(QHBoxLayout())
-        contents.addWidget(self.stopActionGroup)
+        self.stopActionGroup.layout().setContentsMargins(0, 14, 0, 0)
 
         self.stopActionCombo = CueActionComboBox(
             {
@@ -167,44 +144,103 @@ class CueGeneralSettingsPage(CueSettingsPage):
 
         self.stopActionLabel = QLabel(self.stopActionGroup)
         self.stopActionLabel.setAlignment(Qt.AlignCenter)
-        self.stopActionGroup.layout().addWidget(self.stopActionLabel)
+        self.stopActionGroup.layout().addWidget(self.stopActionLabel, 1)
 
-        # 7. Fade In
-        self.fadeInGroup = QGroupBox(self.scrollContents)
+        grid.addWidget(self.stopActionGroup, 1, 1)
+
+        # Spacer keeps behaviour rows pinned to the top of column 1 so
+        # they stay aligned with column 0/2 above the column-1 stretch.
+        grid.setRowStretch(2, 1)
+
+        # ---- Column 2: appearance + fade + exclusive -----------------
+        self.colorGroup = self._makeFlatGroup()
+        self.colorGroup.setLayout(QHBoxLayout())
+        self.colorGroup.layout().setContentsMargins(0, 14, 0, 0)
+
+        self.colorBButton = ColorButton(self.colorGroup)
+        self.colorFButton = ColorButton(self.colorGroup)
+        self.colorGroup.layout().addWidget(self.colorBButton)
+        self.colorGroup.layout().addWidget(self.colorFButton)
+
+        grid.addWidget(self.colorGroup, 0, 2)
+
+        self.fontSizeGroup = self._makeFlatGroup()
+        self.fontSizeGroup.setLayout(QHBoxLayout())
+        self.fontSizeGroup.layout().setContentsMargins(0, 14, 0, 0)
+
+        self.fontSizeSpin = QSpinBox(self.fontSizeGroup)
+        self.fontSizeSpin.setValue(QLabel().fontInfo().pointSize())
+        self.fontSizeGroup.layout().addWidget(self.fontSizeSpin)
+        self.fontSizeGroup.layout().addStretch(1)
+
+        grid.addWidget(self.fontSizeGroup, 1, 2)
+
+        # Warning sits between the appearance pair and the fade trio so
+        # it stays visually attached to the colour/font controls it
+        # qualifies, not the fade controls below it.
+        self.warning = QLabel(self)
+        self.warning.setAlignment(Qt.AlignCenter)
+        self.warning.setWordWrap(True)
+        self.warning.setStyleSheet("color: #FFA500; font-weight: bold")
+        grid.addWidget(self.warning, 2, 2)
+
+        self.fadeInGroup = self._makeFlatGroup()
         self.fadeInGroup.setEnabled(CueAction.FadeInStart in cueType.CueActions)
         self.fadeInGroup.setLayout(QHBoxLayout())
-        contents.addWidget(self.fadeInGroup)
+        self.fadeInGroup.layout().setContentsMargins(0, 14, 0, 0)
 
         self.fadeInEdit = FadeEdit(
             self.fadeInGroup, mode=FadeComboBox.Mode.FadeIn
         )
         self.fadeInGroup.layout().addWidget(self.fadeInEdit)
 
-        # 8. Fade Out
-        self.fadeOutGroup = QGroupBox(self.scrollContents)
+        grid.addWidget(self.fadeInGroup, 3, 2)
+
+        self.fadeOutGroup = self._makeFlatGroup()
         self.fadeOutGroup.setEnabled(
             CueAction.FadeOutPause in cueType.CueActions
             or CueAction.FadeOutStop in cueType.CueActions
         )
         self.fadeOutGroup.setLayout(QHBoxLayout())
-        contents.addWidget(self.fadeOutGroup)
+        self.fadeOutGroup.layout().setContentsMargins(0, 14, 0, 0)
 
         self.fadeOutEdit = FadeEdit(
             self.fadeOutGroup, mode=FadeComboBox.Mode.FadeOut
         )
         self.fadeOutGroup.layout().addWidget(self.fadeOutEdit)
 
-        # 9. Exclusive
-        self.exclusiveGroup = QGroupBox(self.scrollContents)
+        grid.addWidget(self.fadeOutGroup, 4, 2)
+
+        self.exclusiveGroup = self._makeFlatGroup()
         self.exclusiveGroup.setLayout(QVBoxLayout())
-        contents.addWidget(self.exclusiveGroup)
+        self.exclusiveGroup.layout().setContentsMargins(0, 14, 0, 0)
 
         self.exclusiveCheckBox = QCheckBox(self.exclusiveGroup)
         self.exclusiveGroup.layout().addWidget(self.exclusiveCheckBox)
 
-        contents.addStretch()
+        grid.addWidget(self.exclusiveGroup, 5, 2)
+
+        # Even the three columns; col 0 (identity) gets a touch more
+        # because the description editor benefits from the extra width.
+        grid.setColumnStretch(0, 3)
+        grid.setColumnStretch(1, 2)
+        grid.setColumnStretch(2, 2)
 
         self.retranslateUi()
+
+    @staticmethod
+    def _makeFlatGroup():
+        """Create a borderless QGroupBox so titles still render but the
+        chrome disappears — the page reads like a flat form while the
+        opt-in checkable mechanic used for multi-edit keeps working."""
+        group = QGroupBox()
+        group.setFlat(True)
+        group.setStyleSheet(
+            "QGroupBox { border: 0; margin-top: 14px; padding: 0; }"
+            "QGroupBox::title { subcontrol-origin: margin;"
+            " subcontrol-position: top left; padding: 0; }"
+        )
+        return group
 
     def retranslateUi(self):
         self.cueNameGroup.setTitle(
