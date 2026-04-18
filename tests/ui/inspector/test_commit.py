@@ -231,6 +231,33 @@ def test_combo_change_commits(engine_and_page):
     assert stack.do.call_count == 1
 
 
+def test_commit_requested_signal_triggers_flush(engine_and_page):
+    """Pages can ask the engine to commit via the inherited
+    ``commit_requested`` signal — covers modal sub-dialogs (e.g. the
+    icon picker) where the underlying widget never receives a
+    focus-out event."""
+    engine, page, stack = engine_and_page
+    engine.bind(page, [_make_cue()])
+
+    page.line.setText("changed via modal dialog")
+    page.commit_requested.emit()
+
+    assert stack.do.call_count == 1
+    command = stack.do.call_args.args[0]
+    assert isinstance(command, UpdateCueCommand)
+
+
+def test_commit_requested_with_no_change_is_noop(engine_and_page):
+    engine, page, stack = engine_and_page
+    engine.bind(page, [_make_cue()])
+
+    # No edit; emitting the signal should not synthesise a phantom
+    # update command.
+    page.commit_requested.emit()
+
+    stack.do.assert_not_called()
+
+
 def test_focus_out_with_no_change_emits_nothing(qtbot, engine_and_page):
     engine, page, stack = engine_and_page
     engine.bind(page, [_make_cue()])

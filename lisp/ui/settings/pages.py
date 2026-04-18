@@ -15,7 +15,7 @@
 # You should have received a copy of the GNU General Public License
 # along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
-from PyQt5.QtCore import QModelIndex, Qt
+from PyQt5.QtCore import QModelIndex, Qt, pyqtSignal
 from PyQt5.QtWidgets import QWidget, QTabWidget, QVBoxLayout, QGroupBox
 
 from lisp.core.util import dict_merge
@@ -28,6 +28,14 @@ class SettingsPage(QWidget):
     # not override get 1000, placing them after all canonically-ordered
     # tabs with an alphabetical-by-Name tiebreaker.
     SortOrder = 1000
+
+    # Pages emit this whenever an edit happens that bypasses the engine's
+    # focus/value-changed listeners — e.g. a modal sub-dialog (icon
+    # picker) where the field's underlying widget never receives a
+    # focus-out event. The InspectorCommitEngine connects to it during
+    # bind and treats it as an immediate flush request. Harmless for the
+    # legacy CueSettingsDialog, which reads getSettings() on Apply.
+    commit_requested = pyqtSignal()
 
     def loadSettings(self, settings):
         """Load existing settings value into the widget

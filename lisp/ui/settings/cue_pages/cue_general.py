@@ -304,6 +304,10 @@ class CueGeneralSettingsPage(CueSettingsPage):
         if self.iconSelectorDialog.exec() == QDialog.Accepted:
             self.iconName = self.iconSelectorDialog.getSelectedIcon("led")
             self.updateIconPreview()
+            # The picker is modal, so the icon button never receives a
+            # focus-out — without this nudge the inspector engine would
+            # only commit when the user next clicks elsewhere.
+            self.commit_requested.emit()
 
     def updateIconPreview(self):
         self.cueIconButton.setIcon(IconTheme.get(self.iconName))

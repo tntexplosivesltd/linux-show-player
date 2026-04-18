@@ -214,6 +214,15 @@ class InspectorCommitEngine:
 
     def _install_widget_connections(self, page: QWidget) -> None:
         """Hook widgets whose edits don't naturally trigger focus-out."""
+        # Pages can request an explicit commit via commit_requested
+        # whenever they finish a sub-dialog or other non-widget edit.
+        commit_requested = getattr(page, "commit_requested", None)
+        if commit_requested is not None:
+            commit_requested.connect(self._flush_slot)
+            self._widget_connections.append(
+                (commit_requested, self._flush_slot)
+            )
+
         for child in page.findChildren(QWidget):
             if isinstance(child, QAbstractSlider):
                 child.sliderReleased.connect(self._flush_slot)
