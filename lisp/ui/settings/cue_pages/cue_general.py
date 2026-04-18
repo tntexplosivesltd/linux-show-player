@@ -210,10 +210,13 @@ class CueGeneralSettingsPage(CueSettingsPage):
 
         grid.addWidget(self.exclusiveGroup, 3, 2)
 
-        # Behaviour controls are compact; identity (with its description
-        # editor) deserves the extra width; appearance stays narrow.
-        grid.setColumnStretch(0, 2)
-        grid.setColumnStretch(1, 3)
+        # Behaviour controls are compact (combos + spinboxes), identity
+        # owns the description editor and gets the lion's share, and
+        # appearance stays modest. Col-0 stretch is 1 because nothing
+        # in it benefits from extra horizontal space — wider just means
+        # more whitespace inside the start/stop combos.
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 4)
         grid.setColumnStretch(2, 2)
 
         self.retranslateUi()
