@@ -402,3 +402,56 @@ class TestPlaylistShuffle:
         group.__start__(fade=False)
 
         assert group.children == ["c1", "c2", "c3"]
+
+    def test_shuffle_on_session_load(self, group, mock_app):
+        """_shuffle_on_load should shuffle children of playlist
+        groups with shuffle=True."""
+        from lisp.plugins.action_cues import ActionCues
+
+        ids = [f"c{i}" for i in range(10)]
+        children = {cid: _make_child(cid) for cid in ids}
+        mock_app.cue_model.get = lambda cid: children.get(cid)
+
+        group.children = list(ids)
+        group.group_mode = "playlist"
+        group.shuffle = True
+
+        # Put the group in the cue model
+        mock_app.cue_model.__iter__ = lambda self: iter([group])
+
+        ActionCues._shuffle_on_load(mock_app)
+
+        assert group.children != ids
+
+    def test_no_shuffle_on_load_when_parallel(
+        self, group, mock_app
+    ):
+        """Parallel groups should not be shuffled on load."""
+        from lisp.plugins.action_cues import ActionCues
+
+        group.children = ["c1", "c2", "c3"]
+        group.group_mode = "parallel"
+        group.shuffle = True
+
+        mock_app.cue_model.__iter__ = lambda self: iter([group])
+
+        ActionCues._shuffle_on_load(mock_app)
+
+        assert group.children == ["c1", "c2", "c3"]
+
+    def test_no_shuffle_on_load_when_shuffle_false(
+        self, group, mock_app
+    ):
+        """Playlist groups with shuffle=False should not be
+        shuffled on load."""
+        from lisp.plugins.action_cues import ActionCues
+
+        group.children = ["c1", "c2", "c3"]
+        group.group_mode = "playlist"
+        group.shuffle = False
+
+        mock_app.cue_model.__iter__ = lambda self: iter([group])
+
+        ActionCues._shuffle_on_load(mock_app)
+
+        assert group.children == ["c1", "c2", "c3"]
