@@ -39,16 +39,6 @@ class TestUriAvInputConstruction:
         element = UriAvInput(pipeline)
         assert element.video_src() is element.video_scale
 
-    def test_has_audio_false_before_playback(self):
-        pipeline = Gst.Pipeline()
-        element = UriAvInput(pipeline)
-        assert element.has_audio() is False
-
-    def test_has_video_false_before_playback(self):
-        pipeline = Gst.Pipeline()
-        element = UriAvInput(pipeline)
-        assert element.has_video() is False
-
     def test_dispose_disconnects_handlers(self):
         pipeline = Gst.Pipeline()
         element = UriAvInput(pipeline)

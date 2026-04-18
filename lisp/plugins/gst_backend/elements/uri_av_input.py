@@ -117,22 +117,6 @@ class UriAvInput(GstSrcElement):
         """Video source -- feeds the video branch via post_link."""
         return self.video_scale
 
-    def has_audio(self):
-        """Check if the decoded stream contains audio pads."""
-        for pad in self.decoder.pads:
-            caps = pad.get_current_caps()
-            if caps and caps.to_string().startswith("audio"):
-                return True
-        return False
-
-    def has_video(self):
-        """Check if the decoded stream contains video pads."""
-        for pad in self.decoder.pads:
-            caps = pad.get_current_caps()
-            if caps and caps.to_string().startswith("video"):
-                return True
-        return False
-
     def __on_pad_added(self, decodebin, pad):
         caps = pad.get_current_caps()
         if caps is None:

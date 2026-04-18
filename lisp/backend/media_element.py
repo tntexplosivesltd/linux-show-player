@@ -36,7 +36,6 @@ class MediaType(Enum):
     Audio = 0
     Video = 1
     AudioAndVideo = 2
-    Unknown = 3
 
 
 class MediaElement(HasProperties):

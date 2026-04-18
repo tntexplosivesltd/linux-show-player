@@ -1,4 +1,4 @@
-# Video, Image & Slideshow Support for Linux Show Player
+# Video, Image & Slideshow Support for Linux Show Player ✅ Complete
 
 ## Context
 
@@ -104,11 +104,11 @@ class UriVideoCueFactory(GstCueFactory):
 "video_pipeline": ["Volume", "DbMeter", "VideoSink"]
 ```
 
-### Step 1.8: Add `MediaType.Unknown` to media_element.py
+### Step 1.8: ~~Add `MediaType.Unknown` to media_element.py~~ (later removed)
 
 **File**: `lisp/backend/media_element.py`
 
-Add `Unknown = 3` to the `MediaType` enum (needed by UriAVInput before pad detection runs).
+Originally added `Unknown = 3` to the `MediaType` enum, intended for use by UriAVInput before pad detection ran. The final implementation sets `UriAvInput.MediaType = MediaType.AudioAndVideo` statically and classifies individual pads inside `__on_pad_added`, so `Unknown` is never needed. Removed as part of Phase 1 review L5 cleanup.
 
 ### Phase 1 Tests
 

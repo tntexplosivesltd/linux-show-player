@@ -203,8 +203,9 @@ class VideoSink(GstMediaElement):
 
     def dispose(self):
         bus = self.pipeline.get_bus()
-        if bus is not None:
+        if bus is not None and self._sync_handler is not None:
             bus.disconnect(self._sync_handler)
+            self._sync_handler = None
         if not self._video_removed:
             self.pipeline.remove(self.video_queue)
             self.pipeline.remove(self.video_tee)
@@ -212,8 +213,10 @@ class VideoSink(GstMediaElement):
             self.pipeline.remove(self.video_sink)
             self.pipeline.remove(self.monitor_queue)
             self.pipeline.remove(self.monitor_sink)
+            self._video_removed = True
         if not self._audio_removed:
             self.pipeline.remove(self.audio_sink)
+            self._audio_removed = True
 
     @staticmethod
     def _video_window():

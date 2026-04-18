@@ -32,11 +32,12 @@ from PyQt5.QtWidgets import (
 )
 
 from lisp.application import Application
+from lisp.backend import get_backend
 from lisp.core.session_uri import SessionURI
 from lisp.plugins.gst_backend import GstBackend
 from lisp.plugins.gst_backend.elements.uri_av_input import UriAvInput
 from lisp.ui.settings.pages import SettingsPage
-from lisp.ui.ui_utils import translate
+from lisp.ui.ui_utils import qfile_filters, translate
 
 
 class UriAvInputSettings(SettingsPage):
@@ -143,11 +144,12 @@ class UriAvInputSettings(SettingsPage):
         if not os.path.exists(directory):
             directory = Application().session.dir()
 
+        video_exts = get_backend().supported_extensions().get("video", [])
         path, _ = QFileDialog.getOpenFileName(
             self,
             translate("UriAvInputSettings", "Choose file"),
             directory,
-            translate("UriAvInputSettings", "All files") + " (*)",
+            qfile_filters({"video": video_exts}, anyfile=True),
         )
 
         if os.path.exists(path):

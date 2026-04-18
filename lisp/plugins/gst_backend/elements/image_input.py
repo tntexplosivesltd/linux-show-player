@@ -42,6 +42,10 @@ class ImageInput(GstSrcElement):
     Since imagefreeze produces an infinite stream and does not respect
     GStreamer seek stop positions, a timer sends EOS to the pipeline
     when the configured duration elapses.
+
+    Note: `MediaCue.start_time` has no effect on image cues — a still
+    frame has no seekable position. Image display duration is controlled
+    exclusively by this element's `duration` property (via the EOS timer).
     """
 
     MediaType = MediaType.Video

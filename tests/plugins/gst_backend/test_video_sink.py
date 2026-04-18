@@ -358,6 +358,85 @@ class TestVideoSinkOverlay:
         sink.dispose()
 
 
+class TestVideoSinkDispose:
+    """Cover the conditional branches in VideoSink.dispose()."""
+
+    def test_dispose_removes_full_video_branch(self):
+        pipeline = Gst.Pipeline()
+        sink = VideoSink(pipeline)
+
+        video_queue_name = sink.video_queue.get_name()
+        video_tee_name = sink.video_tee.get_name()
+        proj_queue_name = sink.proj_queue.get_name()
+        video_sink_name = sink.video_sink.get_name()
+        monitor_queue_name = sink.monitor_queue.get_name()
+        monitor_sink_name = sink.monitor_sink.get_name()
+
+        sink.dispose()
+
+        for name in (
+            video_queue_name, video_tee_name, proj_queue_name,
+            video_sink_name, monitor_queue_name, monitor_sink_name,
+        ):
+            assert pipeline.get_by_name(name) is None
+
+    def test_dispose_removes_audio_sink_when_not_already_removed(self):
+        pipeline = Gst.Pipeline()
+        sink = VideoSink(pipeline)
+        audio_sink_name = sink.audio_sink.get_name()
+        assert sink._audio_removed is False
+
+        sink.dispose()
+
+        assert pipeline.get_by_name(audio_sink_name) is None
+
+    def test_dispose_skips_audio_sink_when_already_removed(self):
+        """post_link() may have removed the audio sink already
+        (image-only pipeline).  dispose() must not attempt a
+        second removal."""
+        pipeline = Gst.Pipeline()
+        sink = VideoSink(pipeline)
+        # Simulate post_link() outcome for an image pipeline.
+        pipeline.remove(sink.audio_sink)
+        sink._audio_removed = True
+
+        # Should not raise even though audio_sink is already gone.
+        sink.dispose()
+
+    def test_dispose_skips_video_branch_when_marked_removed(self):
+        pipeline = Gst.Pipeline()
+        sink = VideoSink(pipeline)
+        video_queue_name = sink.video_queue.get_name()
+
+        # Simulate a scenario where the video branch has been
+        # removed externally (e.g. a future post_link path that
+        # trims it out).  dispose() must honour the flag.
+        pipeline.remove(sink.video_queue)
+        pipeline.remove(sink.video_tee)
+        pipeline.remove(sink.proj_queue)
+        pipeline.remove(sink.video_sink)
+        pipeline.remove(sink.monitor_queue)
+        pipeline.remove(sink.monitor_sink)
+        sink._video_removed = True
+
+        # Should not raise.
+        sink.dispose()
+        assert pipeline.get_by_name(video_queue_name) is None
+
+    def test_dispose_is_idempotent(self):
+        """Calling dispose twice must not raise.
+
+        The second call finds the bus disconnected and the elements
+        already removed; guards inside dispose() should make this a
+        no-op rather than an error."""
+        pipeline = Gst.Pipeline()
+        sink = VideoSink(pipeline)
+
+        sink.dispose()
+        # Second dispose should not raise.
+        sink.dispose()
+
+
 class TestFindOwnerSink:
     """Test _find_owner_sink parent-chain walking.
 
