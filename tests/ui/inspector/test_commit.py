@@ -340,3 +340,88 @@ def test_commit_contains_only_changed_keys(engine_and_page):
     # __new attribute (name-mangled under the class).
     new_props = command._UpdateCueCommand__new
     assert new_props == {"section": {"name": "renamed"}}
+
+
+# ---------------------------------------------------------------------------
+# suppressing_commits — guards against re-entrant flushes during external
+# settings refresh (undo/redo, RPC edits).
+# ---------------------------------------------------------------------------
+
+
+class TestSuppressingCommits:
+    def test_flush_is_noop_while_suppressed(self, engine_and_page):
+        engine, page, stack = engine_and_page
+        engine.bind(page, [_make_cue()])
+
+        with engine.suppressing_commits():
+            page.line.setText("x")
+            engine.flush()
+            # Widget setters during loadSettings would also call
+            # flush() via their connected signals — simulate that.
+            page.check.setChecked(True)
+
+        stack.do.assert_not_called()
+
+    def test_snapshot_refreshed_after_suppression_exits(
+        self, engine_and_page
+    ):
+        engine, page, stack = engine_and_page
+        engine.bind(page, [_make_cue()])
+
+        with engine.suppressing_commits():
+            page.line.setText("external-value")
+
+        # New snapshot means a subsequent no-op flush doesn't
+        # emit a command.
+        engine.flush()
+        stack.do.assert_not_called()
+
+        # But a fresh user edit on top of the refreshed snapshot
+        # still commits normally.
+        page.line.setText("user-edit")
+        engine.flush()
+        assert stack.do.call_count == 1
+
+    def test_nested_suppression_requires_full_unwind(
+        self, engine_and_page
+    ):
+        engine, page, stack = engine_and_page
+        engine.bind(page, [_make_cue()])
+
+        with engine.suppressing_commits():
+            with engine.suppressing_commits():
+                page.line.setText("inner")
+                engine.flush()
+                stack.do.assert_not_called()
+            # Still suppressed: outer context still active.
+            page.line.setText("outer")
+            engine.flush()
+            stack.do.assert_not_called()
+
+        # Fully unwound — commits resume.
+        page.line.setText("after")
+        engine.flush()
+        assert stack.do.call_count == 1
+
+    def test_suppression_counter_resets_on_exception(
+        self, engine_and_page
+    ):
+        engine, page, stack = engine_and_page
+        engine.bind(page, [_make_cue()])
+
+        with pytest.raises(RuntimeError):
+            with engine.suppressing_commits():
+                raise RuntimeError("boom")
+
+        # Counter must have decremented even though the block
+        # raised — otherwise the engine would be permanently deaf.
+        page.line.setText("after-exc")
+        engine.flush()
+        assert stack.do.call_count == 1
+
+    def test_suppression_without_bound_page_is_safe(self):
+        engine = InspectorCommitEngine(commands_stack=MagicMock())
+        # No bind() — exercising the `_page is None` branch on
+        # the exit path where snapshot refresh would otherwise run.
+        with engine.suppressing_commits():
+            pass

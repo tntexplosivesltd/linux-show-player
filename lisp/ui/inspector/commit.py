@@ -45,6 +45,7 @@ wire those callers in).
 """
 
 import copy
+from contextlib import contextmanager
 from typing import Optional, Sequence
 
 from PyQt5.QtWidgets import (
@@ -113,6 +114,10 @@ class InspectorCommitEngine:
         # disconnect them precisely without blanket-disconnecting
         # the underlying widgets (other subscribers may exist).
         self._widget_connections: list = []
+        # Counter (not bool) so nested suppressions compose — the
+        # panel may re-load settings during a tab switch while an
+        # outer undo/RPC refresh is already suppressing.
+        self._suppress_count: int = 0
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -159,6 +164,8 @@ class InspectorCommitEngine:
         """
         if self._page is None or not self._cues:
             return
+        if self._suppress_count:
+            return
 
         current = self._page.getSettings()
         diff = _dict_diff(self._snapshot, current)
@@ -182,6 +189,24 @@ class InspectorCommitEngine:
     # Public alias so plugin-authored widgets can explicitly request
     # a commit without importing anything more specific.
     request_flush = flush
+
+    @contextmanager
+    def suppressing_commits(self):
+        """Disable `flush()` within the block; refresh snapshot on exit.
+
+        Wrap external `loadSettings()` calls (undo/redo, RPC edits)
+        in this so the widget setters' change signals don't cause
+        the engine to push a command reversing the external edit.
+        """
+        self._suppress_count += 1
+        try:
+            yield
+        finally:
+            self._suppress_count -= 1
+            if self._suppress_count == 0 and self._page is not None:
+                # Re-snapshot so subsequent user edits diff against
+                # the post-refresh state, not the pre-refresh one.
+                self._snapshot = copy.deepcopy(self._page.getSettings())
 
     # ------------------------------------------------------------------
     # Wiring
