@@ -25,6 +25,7 @@ In the list layout, groups can be collapsed and expanded by clicking the arrow n
     * *Playlist:* Play children sequentially, one after another. Designed for pre-show/intermission music.
 * **Crossfade:** *(Playlist mode only)* Crossfade duration in seconds between consecutive tracks. When the current child has this much time remaining, the next child starts with a fade-in while the current one fades out.
 * **Loop:** *(Playlist mode only)* When the last child finishes, loop back to the first child.
+* **Shuffle:** *(Playlist mode only)* Randomize the order of children each time the group is freshly started or the session is loaded. Useful for pre-show music playlists where you want a different running order each performance. The shuffled order is visible in the cue list. Pausing and resuming preserves the current order, as does looping.
 
 ### Behavior
 
