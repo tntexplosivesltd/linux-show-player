@@ -86,6 +86,9 @@ class KeyboardSettings(SettingsPage):
         return {"keyboard": self.keyboardModel.rows}
 
     def loadSettings(self, settings):
+        # Re-callable: the inspector reloads settings on every external
+        # refresh, so the model has to be rebuilt rather than appended to.
+        self.keyboardModel.reset()
         for key, action in settings.get("keyboard", []):
             self.keyboardModel.appendRow(key, action)
 

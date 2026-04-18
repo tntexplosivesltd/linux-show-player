@@ -139,6 +139,9 @@ class MidiSettings(SettingsPage):
         return {"midi": entries}
 
     def loadSettings(self, settings):
+        # Re-callable: the inspector reloads settings on every external
+        # refresh, so the model has to be rebuilt rather than appended to.
+        self.midiModel.reset()
         for entry in settings.get("midi", ()):
             try:
                 self.midiModel.appendMessage(midi_from_str(entry[0]), entry[1])

@@ -306,6 +306,9 @@ class OscSettings(SettingsPage):
         return {"osc": entries}
 
     def loadSettings(self, settings):
+        # Re-callable: the inspector reloads settings on every external
+        # refresh, so the model has to be rebuilt rather than appended to.
+        self.oscModel.reset()
         for entry in settings.get("osc", ()):
             try:
                 message = Osc.message_from_key(entry[0])

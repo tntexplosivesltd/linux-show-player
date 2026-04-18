@@ -126,6 +126,15 @@ class CollectionCueSettings(SettingsPage):
         self.setGroupEnabled(self.collectionGroup, enabled)
 
     def loadSettings(self, settings):
+        # Re-callable: the inspector reloads settings on every external
+        # refresh, so the model and the cue-select dialog must be reset
+        # to a known baseline before re-adding the configured targets
+        # (otherwise targets accumulate and remove_cue raises KeyError).
+        self.collectionModel.reset()
+        self.cueDialog.reset()
+        self.cueDialog.add_cues(Application().cue_model)
+        self.delButton.setEnabled(False)
+
         for target_id, action in settings.get("targets", []):
             target = Application().cue_model.get(target_id)
             if target is not None:

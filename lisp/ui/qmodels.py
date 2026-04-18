@@ -63,6 +63,16 @@ class SimpleTableModel(QAbstractTableModel):
             return True
         return False
 
+    def reset(self):
+        """Drop every row and notify views in a single batch.
+
+        Subclasses with parallel storage (e.g. SimpleCueListModel.rows_cc)
+        must override and clear their extra state under the same
+        beginResetModel/endResetModel guard."""
+        self.beginResetModel()
+        self.rows.clear()
+        self.endResetModel()
+
     def rowCount(self, parent=QModelIndex()):
         return len(self.rows)
 
@@ -127,6 +137,12 @@ class SimpleCueListModel(SimpleTableModel):
     def removeRow(self, row, parent=None):
         if super().removeRow(row):
             self.rows_cc.pop(row)
+
+    def reset(self):
+        self.beginResetModel()
+        self.rows.clear()
+        self.rows_cc.clear()
+        self.endResetModel()
 
     def data(self, index, role=Qt.DisplayRole):
         if role == CueClassRole and index.isValid:

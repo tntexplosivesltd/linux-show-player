@@ -92,7 +92,14 @@ class TriggersSettings(SettingsPage):
         self.setGroupEnabled(self.triggerGroup, enabled)
 
     def loadSettings(self, settings):
-        # Remove the edited cue from the list of possible targets
+        # Re-callable: the inspector reloads settings on every external
+        # refresh and on selection-change between cues, so the model and
+        # the cue-select dialog must be rebuilt to a known baseline before
+        # re-adding rows / re-applying the self-exclude.
+        self.triggersModel.reset()
+        self.cueSelectDialog.reset()
+        self.cueSelectDialog.add_cues(Application().cue_model)
+
         edited_cue = Application().cue_model.get(settings.get("id"))
         if edited_cue:
             self.cueSelectDialog.remove_cue(edited_cue)
