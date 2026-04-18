@@ -456,6 +456,118 @@ class TestPlaylistShuffle:
 
         assert group.children == ["c1", "c2", "c3"]
 
+    def test_shuffle_on_load_mixed_groups(self, mock_app):
+        """Only playlist+shuffle groups are shuffled; parallel
+        and shuffle=False groups in the same session are left
+        alone."""
+        from lisp.plugins.action_cues import ActionCues
+
+        ids = [f"c{i}" for i in range(10)]
+
+        shuffled_group = GroupCue(mock_app)
+        shuffled_group.children = list(ids)
+        shuffled_group.group_mode = "playlist"
+        shuffled_group.shuffle = True
+
+        parallel_group = GroupCue(mock_app)
+        parallel_group.children = list(ids)
+        parallel_group.group_mode = "parallel"
+        parallel_group.shuffle = True  # flag ignored in parallel
+
+        no_shuffle_group = GroupCue(mock_app)
+        no_shuffle_group.children = list(ids)
+        no_shuffle_group.group_mode = "playlist"
+        no_shuffle_group.shuffle = False
+
+        groups = [shuffled_group, parallel_group, no_shuffle_group]
+        mock_app.cue_model.__iter__ = lambda self: iter(groups)
+
+        ActionCues._shuffle_on_load(mock_app)
+
+        assert shuffled_group.children != ids
+        assert parallel_group.children == ids
+        assert no_shuffle_group.children == ids
+
+    def test_shuffle_on_load_single_child(self, group, mock_app):
+        """Single-child group should be skipped (len > 1 guard)
+        — no crash, no spurious mutation."""
+        from lisp.plugins.action_cues import ActionCues
+
+        group.children = ["c1"]
+        group.group_mode = "playlist"
+        group.shuffle = True
+
+        mock_app.cue_model.__iter__ = lambda self: iter([group])
+
+        ActionCues._shuffle_on_load(mock_app)
+
+        assert group.children == ["c1"]
+
+    def test_shuffle_on_load_empty_children(
+        self, group, mock_app
+    ):
+        """Empty-children group should be skipped, no crash."""
+        from lisp.plugins.action_cues import ActionCues
+
+        group.children = []
+        group.group_mode = "playlist"
+        group.shuffle = True
+
+        mock_app.cue_model.__iter__ = lambda self: iter([group])
+
+        ActionCues._shuffle_on_load(mock_app)
+
+        assert group.children == []
+
+    def test_shuffle_on_load_ignores_non_group_cues(
+        self, group, mock_app
+    ):
+        """Non-GroupCue entries in cue_model must be skipped
+        without AttributeError on missing .group_mode etc."""
+        from lisp.plugins.action_cues import ActionCues
+
+        ids = [f"c{i}" for i in range(10)]
+        group.children = list(ids)
+        group.group_mode = "playlist"
+        group.shuffle = True
+
+        # Plain Mock with no group_mode/shuffle attrs — would
+        # crash if _shuffle_on_load did not isinstance-check.
+        non_group = MagicMock(spec=[])
+        mock_app.cue_model.__iter__ = lambda self: iter(
+            [non_group, group, non_group]
+        )
+
+        ActionCues._shuffle_on_load(mock_app)
+
+        assert group.children != ids
+
+    def test_shuffle_on_load_multiple_shuffle_groups(
+        self, mock_app
+    ):
+        """Every playlist+shuffle group gets shuffled
+        independently — loop does not short-circuit."""
+        from lisp.plugins.action_cues import ActionCues
+
+        ids = [f"c{i}" for i in range(10)]
+
+        g1 = GroupCue(mock_app)
+        g1.children = list(ids)
+        g1.group_mode = "playlist"
+        g1.shuffle = True
+
+        g2 = GroupCue(mock_app)
+        g2.children = list(ids)
+        g2.group_mode = "playlist"
+        g2.shuffle = True
+
+        mock_app.cue_model.__iter__ = lambda self: iter([g1, g2])
+
+        ActionCues._shuffle_on_load(mock_app)
+
+        assert g1.children != ids
+        assert g2.children != ids
+
     def test_loop_does_not_reshuffle(self, group, mock_app):
         """Loop wrap-around must NOT re-shuffle — spec requirement.
 
