@@ -35,9 +35,13 @@ class ActionCues(Plugin):
             app.cue_factory.register_factory(cue_class.__name__, cue_class)
             app.window.registerSimpleCueMenu(cue_class, cue_class.Category)
 
-        app.session_loaded.connect(
+        # Stored as an instance attribute so the weakref inside
+        # Signal.connect() does not GC it immediately — see
+        # lisp/core/signal.py for the weakref warning on lambdas.
+        self._on_session_loaded = (
             lambda _session: ActionCues._shuffle_on_load(app)
         )
+        app.session_loaded.connect(self._on_session_loaded)
 
     @staticmethod
     def _shuffle_on_load(app):

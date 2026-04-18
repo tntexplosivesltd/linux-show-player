@@ -455,3 +455,88 @@ class TestPlaylistShuffle:
         ActionCues._shuffle_on_load(mock_app)
 
         assert group.children == ["c1", "c2", "c3"]
+
+    def test_loop_does_not_reshuffle(self, group, mock_app):
+        """Loop wrap-around must NOT re-shuffle — spec requirement.
+
+        _start_playlist is not called on loop; _play_child_at
+        only resets index to 0. Verify the order is stable across
+        a wrap, so the same shuffled sequence replays on loop.
+        """
+        ids = [f"c{i}" for i in range(10)]
+        children = {cid: _make_child(cid) for cid in ids}
+        mock_app.cue_model.get = lambda cid: children.get(cid)
+        group.children = list(ids)
+        group.group_mode = "playlist"
+        group.shuffle = True
+        group.loop = True
+
+        # Fresh start — triggers shuffle
+        group.__start__(fade=False)
+        shuffled_order = list(group.children)
+        assert shuffled_order != ids
+
+        # Simulate loop wrap: _play_child_at with index past end
+        group._play_child_at(
+            len(shuffled_order),
+            group._resolve_children(),
+            fade=False,
+        )
+
+        # Children order unchanged — loop reused same shuffle
+        assert group.children == shuffled_order
+
+    def test_shuffle_serialization_round_trip(self, mock_app):
+        """Shuffle Property should serialize and deserialize."""
+        g = GroupCue(mock_app)
+        g.shuffle = True
+        props = g.properties()
+        assert props["shuffle"] is True
+
+        g2 = GroupCue(mock_app)
+        g2.update_properties(props)
+        assert g2.shuffle is True
+
+    def test_shuffle_not_in_defaults_when_false(self, mock_app):
+        g = GroupCue(mock_app)
+        props = g.properties(defaults=False)
+        assert "shuffle" not in props
+
+    def test_session_loaded_signal_triggers_shuffle(self, mock_app):
+        """The plugin must retain a strong reference to its session
+        handler, or the weakref in Signal.connect would GC it and
+        shuffle-on-load would silently never fire.
+        """
+        import gc
+        from lisp.core.signal import Signal
+
+        mock_app.session_loaded = Signal()
+        mock_app.cue_factory = MagicMock()
+        mock_app.window = MagicMock()
+
+        g = GroupCue(mock_app)
+        g.children = [f"c{i}" for i in range(10)]
+        g.group_mode = "playlist"
+        g.shuffle = True
+        mock_app.cue_model.__iter__ = lambda self: iter([g])
+
+        # Importing ActionCues triggers module load; instantiate it
+        # so __init__ runs and connects the signal.
+        from lisp.plugins.action_cues import ActionCues
+
+        # Patch load_classes so __init__ does not re-register cues.
+        with patch("lisp.plugins.action_cues.load_classes",
+                   return_value=iter([])):
+            plugin = ActionCues(mock_app)
+
+        # Force a GC cycle — if the handler was weakly held, this
+        # would collect the bare lambda and make the next emit
+        # a silent no-op.
+        gc.collect()
+
+        original = list(g.children)
+        mock_app.session_loaded.emit(None)
+
+        assert g.children != original
+        # Silence unused-var warning while keeping plugin alive
+        assert plugin is not None

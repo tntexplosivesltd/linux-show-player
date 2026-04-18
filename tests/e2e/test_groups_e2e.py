@@ -920,12 +920,16 @@ def test_15_playlist_shuffle(ids, group_id):
         check("15d: Group found after reload", False)
         return group_id
 
-    # Shuffle on load may produce the same order (unlikely).
-    # Just verify the property persisted and group still works.
+    # Shuffle on load may produce the same order (probability
+    # 1/N! for N children). With N >= 3 this is acceptably rare.
     check("15d: Shuffle property persists",
           cue_prop(gid, "shuffle") is True)
     check("15d: Children count preserved",
           len(cue_prop(gid, "children")) == len(original))
+    reloaded_order = cue_prop(gid, "children")
+    if len(order_before_save) >= 4:
+        check("15d: Children reshuffled on load",
+              reloaded_order != order_before_save)
 
     # 15e: With shuffle=False, order is preserved on start
     call("cue.set_property", {
