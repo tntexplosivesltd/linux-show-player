@@ -49,6 +49,21 @@ from lisp.ui.widgets import (
 )
 
 
+def make_flat_group():
+    """Borderless QGroupBox: title still renders but the chrome
+    disappears. Pages read like a flat form while the opt-in checkable
+    mechanic used for multi-edit (setCheckable in setGroupEnabled) keeps
+    working — checking the box still hatches the title row."""
+    group = QGroupBox()
+    group.setFlat(True)
+    group.setStyleSheet(
+        "QGroupBox { border: 0; margin-top: 1.1em; padding: 0; }"
+        "QGroupBox::title { subcontrol-origin: margin;"
+        " subcontrol-position: top left; padding: 0; }"
+    )
+    return group
+
+
 class CueGeneralSettingsPage(CueSettingsPage):
     Name = QT_TRANSLATE_NOOP("SettingsPageName", "General")
     SortOrder = 10
@@ -68,7 +83,7 @@ class CueGeneralSettingsPage(CueSettingsPage):
         grid.setVerticalSpacing(2)
 
         # ---- Column 0: behaviour + fade ------------------------------
-        self.startActionGroup = self._makeFlatGroup()
+        self.startActionGroup = make_flat_group()
         self.startActionGroup.setLayout(QHBoxLayout())
         self.startActionGroup.layout().setContentsMargins(0, 0, 0, 0)
 
@@ -84,7 +99,7 @@ class CueGeneralSettingsPage(CueSettingsPage):
 
         grid.addWidget(self.startActionGroup, 0, 0)
 
-        self.stopActionGroup = self._makeFlatGroup()
+        self.stopActionGroup = make_flat_group()
         self.stopActionGroup.setLayout(QHBoxLayout())
         self.stopActionGroup.layout().setContentsMargins(0, 0, 0, 0)
 
@@ -106,7 +121,7 @@ class CueGeneralSettingsPage(CueSettingsPage):
 
         grid.addWidget(self.stopActionGroup, 1, 0)
 
-        self.fadeInGroup = self._makeFlatGroup()
+        self.fadeInGroup = make_flat_group()
         self.fadeInGroup.setEnabled(CueAction.FadeInStart in cueType.CueActions)
         self.fadeInGroup.setLayout(QHBoxLayout())
         self.fadeInGroup.layout().setContentsMargins(0, 0, 0, 0)
@@ -119,7 +134,7 @@ class CueGeneralSettingsPage(CueSettingsPage):
 
         grid.addWidget(self.fadeInGroup, 2, 0)
 
-        self.fadeOutGroup = self._makeFlatGroup()
+        self.fadeOutGroup = make_flat_group()
         self.fadeOutGroup.setEnabled(
             CueAction.FadeOutPause in cueType.CueActions
             or CueAction.FadeOutStop in cueType.CueActions
@@ -136,7 +151,7 @@ class CueGeneralSettingsPage(CueSettingsPage):
         grid.addWidget(self.fadeOutGroup, 3, 0)
 
         # ---- Column 1: identity --------------------------------------
-        self.cueNameGroup = self._makeFlatGroup()
+        self.cueNameGroup = make_flat_group()
         self.cueNameGroup.setLayout(QHBoxLayout())
         self.cueNameGroup.layout().setContentsMargins(0, 0, 0, 0)
 
@@ -157,7 +172,7 @@ class CueGeneralSettingsPage(CueSettingsPage):
 
         grid.addWidget(self.cueNameGroup, 0, 1)
 
-        self.cueDescriptionGroup = self._makeFlatGroup()
+        self.cueDescriptionGroup = make_flat_group()
         self.cueDescriptionGroup.setLayout(QHBoxLayout())
         self.cueDescriptionGroup.layout().setContentsMargins(0, 0, 0, 0)
         self.cueDescriptionGroup.setSizePolicy(
@@ -176,7 +191,7 @@ class CueGeneralSettingsPage(CueSettingsPage):
         grid.addWidget(self.cueDescriptionGroup, 1, 1, -1, 1)
 
         # ---- Column 2: appearance + exclusive ------------------------
-        self.colorGroup = self._makeFlatGroup()
+        self.colorGroup = make_flat_group()
         self.colorGroup.setLayout(QHBoxLayout())
         self.colorGroup.layout().setContentsMargins(0, 0, 0, 0)
 
@@ -187,7 +202,7 @@ class CueGeneralSettingsPage(CueSettingsPage):
 
         grid.addWidget(self.colorGroup, 0, 2)
 
-        self.fontSizeGroup = self._makeFlatGroup()
+        self.fontSizeGroup = make_flat_group()
         self.fontSizeGroup.setLayout(QHBoxLayout())
         self.fontSizeGroup.layout().setContentsMargins(0, 0, 0, 0)
 
@@ -206,7 +221,7 @@ class CueGeneralSettingsPage(CueSettingsPage):
         self.warning.setStyleSheet("color: #FFA500; font-weight: bold")
         grid.addWidget(self.warning, 2, 2)
 
-        self.exclusiveGroup = self._makeFlatGroup()
+        self.exclusiveGroup = make_flat_group()
         self.exclusiveGroup.setLayout(QVBoxLayout())
         self.exclusiveGroup.layout().setContentsMargins(0, 0, 0, 0)
 
@@ -225,20 +240,6 @@ class CueGeneralSettingsPage(CueSettingsPage):
         grid.setColumnStretch(2, 2)
 
         self.retranslateUi()
-
-    @staticmethod
-    def _makeFlatGroup():
-        """Create a borderless QGroupBox so titles still render but the
-        chrome disappears — the page reads like a flat form while the
-        opt-in checkable mechanic used for multi-edit keeps working."""
-        group = QGroupBox()
-        group.setFlat(True)
-        group.setStyleSheet(
-            "QGroupBox { border: 0; margin-top: 1.1em; padding: 0; }"
-            "QGroupBox::title { subcontrol-origin: margin;"
-            " subcontrol-position: top left; padding: 0; }"
-        )
-        return group
 
     @staticmethod
     def _stripDurationLabel(fadeEdit):
@@ -409,57 +410,60 @@ class CueTimingPage(CueSettingsPage):
 
     def __init__(self, cueType, **kwargs):
         super().__init__(cueType=cueType, **kwargs)
-        self.setLayout(QVBoxLayout())
 
-        # Pre wait
-        self.preWaitGroup = QGroupBox(self)
+        # Two-column flat-grid: pre-wait sits beside post-wait (both
+        # are HH:mm:ss.zzz time editors and pair naturally), with the
+        # next-action combo spanning underneath. Tooltips replace the
+        # old "Wait before/after cue execution" sub-labels — the group
+        # titles already say what each field does.
+        grid = QGridLayout(self)
+        grid.setContentsMargins(8, 4, 8, 4)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(2)
+
+        self.preWaitGroup = make_flat_group()
         self.preWaitGroup.setLayout(QHBoxLayout())
-        self.layout().addWidget(self.preWaitGroup)
-
-        self.preWaitLabel = QLabel(self.preWaitGroup)
-        self.preWaitLabel.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
-        self.preWaitGroup.layout().addWidget(self.preWaitLabel, 1)
+        self.preWaitGroup.layout().setContentsMargins(0, 0, 0, 0)
 
         self.preWaitEdit = QTimeEdit(self.preWaitGroup)
         self.preWaitEdit.setDisplayFormat("HH:mm:ss.zzz")
         self.preWaitEdit.setCurrentSection(QDateTimeEdit.SecondSection)
         self.preWaitGroup.layout().addWidget(self.preWaitEdit)
+        grid.addWidget(self.preWaitGroup, 0, 0)
 
-        # Post wait
-        self.postWaitGroup = QGroupBox(self)
+        self.postWaitGroup = make_flat_group()
         self.postWaitGroup.setLayout(QHBoxLayout())
-        self.layout().addWidget(self.postWaitGroup)
-
-        self.postWaitLabel = QLabel(self.postWaitGroup)
-        self.postWaitLabel.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
-        self.postWaitGroup.layout().addWidget(self.postWaitLabel, 1)
+        self.postWaitGroup.layout().setContentsMargins(0, 0, 0, 0)
 
         self.postWaitEdit = QTimeEdit(self.postWaitGroup)
         self.postWaitEdit.setDisplayFormat("HH:mm:ss.zzz")
         self.postWaitEdit.setCurrentSection(QDateTimeEdit.SecondSection)
         self.postWaitGroup.layout().addWidget(self.postWaitEdit)
+        grid.addWidget(self.postWaitGroup, 0, 1)
 
-        # Next action
-        self.nextActionGroup = QGroupBox(self)
+        self.nextActionGroup = make_flat_group()
         self.nextActionGroup.setLayout(QHBoxLayout())
-        self.layout().addWidget(self.nextActionGroup)
+        self.nextActionGroup.layout().setContentsMargins(0, 0, 0, 0)
 
         self.nextActionCombo = CueNextActionComboBox(
             parent=self.nextActionGroup
         )
         self.nextActionGroup.layout().addWidget(self.nextActionCombo)
+        grid.addWidget(self.nextActionGroup, 1, 0, 1, 2)
 
-        self.layout().addStretch()
+        # Push everything to the top so the page doesn't centre-justify
+        # its three rows in a tall inspector pane.
+        grid.setRowStretch(2, 1)
 
         self.retranslateUi()
 
     def retranslateUi(self):
         self.preWaitGroup.setTitle(translate("CueSettings", "Pre wait"))
-        self.preWaitLabel.setText(
+        self.preWaitEdit.setToolTip(
             translate("CueSettings", "Wait before cue execution")
         )
         self.postWaitGroup.setTitle(translate("CueSettings", "Post wait"))
-        self.postWaitLabel.setText(
+        self.postWaitEdit.setToolTip(
             translate("CueSettings", "Wait after cue execution")
         )
         self.nextActionGroup.setTitle(translate("CueSettings", "Next action"))

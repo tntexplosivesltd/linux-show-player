@@ -15,17 +15,16 @@
 # You should have received a copy of the GNU General Public License
 # along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
-from PyQt5.QtCore import QT_TRANSLATE_NOOP, Qt, QTime
+from PyQt5.QtCore import QT_TRANSLATE_NOOP, QTime
 from PyQt5.QtWidgets import (
     QDateTimeEdit,
-    QGroupBox,
+    QGridLayout,
     QHBoxLayout,
-    QLabel,
     QSpinBox,
     QTimeEdit,
-    QVBoxLayout,
 )
 
+from lisp.ui.settings.cue_pages.cue_general import make_flat_group
 from lisp.ui.settings.pages import SettingsPage
 from lisp.ui.ui_utils import translate
 
@@ -36,62 +35,63 @@ class MediaCueSettings(SettingsPage):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.setLayout(QVBoxLayout(self))
 
-        # Start time
-        self.startGroup = QGroupBox(self)
+        # Two-column flat-grid mirroring the Timing tab: start-time and
+        # stop-time pair naturally as HH:mm:ss.zzz editors, with the
+        # loop counter spanning beneath. Tooltips replace the verbose
+        # "Start/Stop position of the media" sub-labels — the group
+        # title already names each field.
+        grid = QGridLayout(self)
+        grid.setContentsMargins(8, 4, 8, 4)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(2)
+
+        self.startGroup = make_flat_group()
         self.startGroup.setLayout(QHBoxLayout())
-        self.layout().addWidget(self.startGroup)
-
-        self.startLabel = QLabel(self.startGroup)
-        self.startLabel.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
-        self.startGroup.layout().addWidget(self.startLabel, 1)
+        self.startGroup.layout().setContentsMargins(0, 0, 0, 0)
 
         self.startEdit = QTimeEdit(self.startGroup)
         self.startEdit.setDisplayFormat("HH:mm:ss.zzz")
         self.startEdit.setCurrentSection(QDateTimeEdit.SecondSection)
         self.startGroup.layout().addWidget(self.startEdit)
+        grid.addWidget(self.startGroup, 0, 0)
 
-        # Stop time
-        self.stopGroup = QGroupBox(self)
+        self.stopGroup = make_flat_group()
         self.stopGroup.setLayout(QHBoxLayout())
-        self.layout().addWidget(self.stopGroup)
-
-        self.stopLabel = QLabel(self.stopGroup)
-        self.stopLabel.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
-        self.stopGroup.layout().addWidget(self.stopLabel, 1)
+        self.stopGroup.layout().setContentsMargins(0, 0, 0, 0)
 
         self.stopEdit = QTimeEdit(self.stopGroup)
         self.stopEdit.setDisplayFormat("HH:mm:ss.zzz")
         self.stopEdit.setCurrentSection(QDateTimeEdit.SecondSection)
         self.stopGroup.layout().addWidget(self.stopEdit)
+        grid.addWidget(self.stopGroup, 0, 1)
 
-        # Loop
-        self.loopGroup = QGroupBox(self)
+        self.loopGroup = make_flat_group()
         self.loopGroup.setLayout(QHBoxLayout())
-        self.layout().addWidget(self.loopGroup)
-
-        self.loopLabel = QLabel(self.loopGroup)
-        self.loopLabel.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
-        self.loopGroup.layout().addWidget(self.loopLabel, 1)
+        self.loopGroup.layout().setContentsMargins(0, 0, 0, 0)
 
         self.spinLoop = QSpinBox(self.loopGroup)
         self.spinLoop.setRange(-1, 1_000_000)
         self.loopGroup.layout().addWidget(self.spinLoop)
+        grid.addWidget(self.loopGroup, 1, 0, 1, 2)
+
+        # Pin rows to the top so a tall inspector pane doesn't
+        # vertically centre the three controls.
+        grid.setRowStretch(2, 1)
 
         self.retranslateUi()
 
     def retranslateUi(self):
         self.startGroup.setTitle(translate("MediaCueSettings", "Start time"))
-        self.stopLabel.setText(
-            translate("MediaCueSettings", "Stop position of the media")
-        )
-        self.stopGroup.setTitle(translate("MediaCueSettings", "Stop time"))
-        self.startLabel.setText(
+        self.startEdit.setToolTip(
             translate("MediaCueSettings", "Start position of the media")
         )
+        self.stopGroup.setTitle(translate("MediaCueSettings", "Stop time"))
+        self.stopEdit.setToolTip(
+            translate("MediaCueSettings", "Stop position of the media")
+        )
         self.loopGroup.setTitle(translate("MediaCueSettings", "Loop"))
-        self.loopLabel.setText(
+        self.spinLoop.setToolTip(
             translate(
                 "MediaCueSettings",
                 "Repetition after first play (-1 = infinite)",
