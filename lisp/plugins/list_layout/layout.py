@@ -97,7 +97,6 @@ class ListLayout(CueLayout):
             self.interrupt_all
         )
         # Cue list
-        self._view.listView.itemDoubleClicked.connect(self._double_clicked)
         self._view.listView.contextMenuInvoked.connect(self._context_invoked)
         self._view.listView.keyPressed.connect(self._key_pressed)
         self._view.listView.itemSelectionChanged.connect(
@@ -194,12 +193,6 @@ class ListLayout(CueLayout):
         # Context menu actions
         self._edit_actions_group = MenuActionsGroup(priority=MENU_PRIORITY_CUE)
         self._edit_actions_group.add(
-            SimpleMenuAction(
-                translate("ListLayout", "Edit cue"),
-                self.edit_cue,
-                translate("ListLayout", "Edit selected"),
-                self.edit_cues,
-            ),
             SimpleMenuAction(
                 translate("ListLayout", "Clone cue"),
                 self._clone_cue,
@@ -377,14 +370,6 @@ class ListLayout(CueLayout):
             elif sequence == QKeySequence.Delete:
                 event.accept()
                 self._remove_cues(self.selected_cues())
-            elif (
-                event.key() == Qt.Key_Space
-                and event.modifiers() == Qt.ShiftModifier
-            ):
-                event.accept()
-                cue = self.standby_cue()
-                if cue is not None:
-                    self.edit_cue(cue)
             else:
                 self.key_pressed.emit(event)
 
@@ -502,10 +487,6 @@ class ListLayout(CueLayout):
         finally:
             self._view.listView.blockSignals(False)
 
-    def _double_clicked(self):
-        cue = self.standby_cue()
-        if cue is not None:
-            self.edit_cue(cue)
 
     def _context_invoked(self, event):
         # This is called in response to CueListView context-events

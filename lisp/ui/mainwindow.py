@@ -161,8 +161,6 @@ class MainWindow(QMainWindow, metaclass=QSingleton):
         self.actionUndo.triggered.connect(self._app.commands_stack.undo_last)
         self.actionRedo = QAction(self)
         self.actionRedo.triggered.connect(self._app.commands_stack.redo_last)
-        self.multiEdit = QAction(self)
-        self.multiEdit.triggered.connect(self.__editSelectedCues)
         self.selectAll = QAction(self)
         self.selectAll.triggered.connect(self.__layoutSelectAll)
         self.selectAllMedia = QAction(self)
@@ -180,8 +178,6 @@ class MainWindow(QMainWindow, metaclass=QSingleton):
         self.menuEdit.addAction(self.selectAllMedia)
         self.menuEdit.addAction(self.deselectAll)
         self.menuEdit.addAction(self.invertSelection)
-        self.menuEdit.addSeparator()
-        self.menuEdit.addAction(self.multiEdit)
 
         # menuView
         self.showInspectorAction = QAction(self)
@@ -259,8 +255,6 @@ class MainWindow(QMainWindow, metaclass=QSingleton):
             translate("MainWindow", "Invert selection")
         )
         self.invertSelection.setShortcut(translate("MainWindow", "CTRL+I"))
-        self.multiEdit.setText(translate("MainWindow", "Edit selected"))
-        self.multiEdit.setShortcut(translate("MainWindow", "CTRL+SHIFT+E"))
         # menuLayout
         self.menuLayout.setTitle(translate("MainWindow", "&Layout"))
         # menuView
@@ -271,7 +265,6 @@ class MainWindow(QMainWindow, metaclass=QSingleton):
         self.showInspectorAction.setShortcut(QKeySequence("F4"))
         # menuTools
         self.menuTools.setTitle(translate("MainWindow", "&Tools"))
-        self.multiEdit.setText(translate("MainWindow", "Edit selection"))
         # menuAbout
         self.menuAbout.setTitle(translate("MainWindow", "&About"))
         self.actionAbout.setText(translate("MainWindow", "About"))
@@ -464,11 +457,6 @@ class MainWindow(QMainWindow, metaclass=QSingleton):
     def __onEditPreferences(self):
         prefUi = AppConfigurationDialog(parent=self)
         prefUi.exec()
-
-    def __editSelectedCues(self):
-        self._app.session.layout.edit_cues(
-            list(self._app.session.layout.selected_cues())
-        )
 
     def __layoutSelectAll(self):
         self._app.session.layout.select_all()

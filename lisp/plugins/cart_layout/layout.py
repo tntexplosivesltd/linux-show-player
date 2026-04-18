@@ -148,12 +148,6 @@ class CartLayout(CueLayout):
         self._edit_actions_group = MenuActionsGroup(priority=MENU_PRIORITY_CUE)
         self._edit_actions_group.add(
             SimpleMenuAction(
-                translate("ListLayout", "Edit cue"),
-                self.edit_cue,
-                translate("ListLayout", "Edit selected cues"),
-                self.edit_cues,
-            ),
-            SimpleMenuAction(
                 translate("ListLayout", "Remove cue"),
                 self._remove_cue,
                 translate("ListLayout", "Remove selected cues"),
@@ -451,7 +445,6 @@ class CartLayout(CueLayout):
 
         widget.contextMenuRequested.connect(self._cue_context_menu)
         widget.cueExecuted.connect(self.cue_executed.emit)
-        widget.editRequested.connect(self.edit_cue)
         widget.selectedChanged.connect(self._selection_emit_timer.start)
 
         widget.showAccurateTiming(self.accurate_time)
@@ -473,7 +466,6 @@ class CartLayout(CueLayout):
 
         widget.cueExecuted.disconnect()
         widget.contextMenuRequested.disconnect()
-        widget.editRequested.disconnect()
 
         widget.deleteLater()
 

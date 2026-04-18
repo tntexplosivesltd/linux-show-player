@@ -19,14 +19,11 @@ from abc import abstractmethod
 
 from PyQt5.QtCore import Qt
 
-from lisp.command.cue import UpdateCueCommand, UpdateCuesCommand
 from lisp.command.model import ModelRemoveItemsCommand
 from lisp.core.has_properties import HasProperties
 from lisp.core.signal import Signal
-from lisp.core.util import greatest_common_superclass
 from lisp.cues.cue import Cue, CueAction
 from lisp.layout.cue_menu import CueContextMenu
-from lisp.ui.settings.cue_settings import CueSettingsDialog
 from lisp.ui.ui_utils import adjust_widget_position
 
 
@@ -194,28 +191,6 @@ class CueLayout(HasProperties):
 
     def fadeout_all(self):
         self.execute_all(CueAction.FadeOut)
-
-    def edit_cue(self, cue):
-        dialog = CueSettingsDialog(cue, parent=self.app.window)
-
-        def on_apply(settings):
-            self.app.commands_stack.do(UpdateCueCommand(settings, cue))
-
-        dialog.onApply.connect(on_apply)
-        dialog.exec()
-
-    def edit_cues(self, cues):
-        if cues:
-            # Use the greatest common superclass between the selected cues
-            dialog = CueSettingsDialog(
-                greatest_common_superclass(cues), parent=self.app.window
-            )
-
-            def on_apply(settings):
-                self.app.commands_stack.do(UpdateCuesCommand(settings, cues))
-
-            dialog.onApply.connect(on_apply)
-            dialog.exec()
 
     def show_context_menu(self, position):
         menu = self.app.window.menuEdit

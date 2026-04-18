@@ -45,7 +45,6 @@ class CueWidget(QWidget):
     SLIDER_RANGE = 1000
 
     contextMenuRequested = pyqtSignal(QPoint)
-    editRequested = pyqtSignal(object)
     cueExecuted = pyqtSignal(object)
     selectedChanged = pyqtSignal()
 
@@ -313,11 +312,9 @@ class CueWidget(QWidget):
             and self.seekSlider.isVisible()
         ):
             if event.button() != Qt.RightButton:
-                if event.modifiers() == Qt.ShiftModifier:
-                    self.editRequested.emit(self._cue)
-                elif event.modifiers() == Qt.ControlModifier:
+                if event.modifiers() == Qt.ControlModifier:
                     self.selected = not self.selected
-                else:
+                elif event.modifiers() == Qt.NoModifier:
                     self._cue.execute()
                     self.cueExecuted.emit(self._cue)
 
