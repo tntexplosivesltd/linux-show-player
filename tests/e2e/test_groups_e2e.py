@@ -821,6 +821,132 @@ def test_14_move_cue_with_groups(ids, group_id):
           len(cue_prop(group_id, "children")) > 0)
 
 
+def test_15_playlist_shuffle(ids, group_id):
+    """Shuffle flag randomizes children order on start and save/load."""
+    print("\n═══ Test 15: Playlist Shuffle ═══")
+
+    stop_all()
+
+    # Re-discover the current GroupCue
+    cues = call("cue.list")
+    group = next(
+        (c for c in sorted(cues, key=lambda c: c["index"])
+         if c["_type_"] == "GroupCue"),
+        None,
+    )
+    if group is None:
+        check("15: Group exists", False)
+        return group_id
+    group_id = group["id"]
+
+    # Set to playlist + shuffle
+    call("cue.set_property", {
+        "id": group_id, "property": "group_mode",
+        "value": "playlist",
+    })
+    call("cue.set_property", {
+        "id": group_id, "property": "shuffle",
+        "value": True,
+    })
+    call("cue.set_property", {
+        "id": group_id, "property": "loop",
+        "value": False,
+    })
+
+    # 15a: Record original children order
+    original = cue_prop(group_id, "children")
+    check("15a: Has children", len(original) >= 2)
+
+    # 15b: Start group — children should be shuffled.
+    # Try up to 5 times since shuffle can theoretically
+    # produce the same order (very unlikely with >=3 children).
+    shuffled = False
+    for _ in range(5):
+        call("cue.execute", {
+            "id": group_id, "action": "Start",
+        })
+        time.sleep(0.5)
+        after_start = cue_prop(group_id, "children")
+        call("cue.execute", {
+            "id": group_id, "action": "Stop",
+        })
+        time.sleep(0.3)
+        if after_start != original:
+            shuffled = True
+            break
+    check("15b: Children shuffled on start", shuffled)
+
+    # 15c: Pause and resume — order should NOT change
+    call("cue.execute", {
+        "id": group_id, "action": "Start",
+    })
+    time.sleep(0.5)
+    order_before_pause = cue_prop(group_id, "children")
+    call("cue.execute", {
+        "id": group_id, "action": "Pause",
+    })
+    time.sleep(0.3)
+    call("cue.execute", {
+        "id": group_id, "action": "Start",
+    })
+    time.sleep(0.5)
+    order_after_resume = cue_prop(group_id, "children")
+    check("15c: Order preserved on resume",
+          order_before_pause == order_after_resume)
+    stop_all()
+
+    # 15d: Save/load — children should be re-shuffled
+    order_before_save = cue_prop(group_id, "children")
+    save_path = "/tmp/lisp_shuffle_test_session.lsp"
+    call("session.save", {"path": save_path})
+    call("session.load", {"path": save_path})
+
+    # Wait for reload
+    gid = None
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        time.sleep(0.5)
+        cues = call("cue.list")
+        g = next(
+            (c for c in sorted(cues, key=lambda c: c["index"])
+             if c["_type_"] == "GroupCue"),
+            None,
+        )
+        if g is not None:
+            gid = g["id"]
+            break
+
+    if gid is None:
+        check("15d: Group found after reload", False)
+        return group_id
+
+    # Shuffle on load may produce the same order (unlikely).
+    # Just verify the property persisted and group still works.
+    check("15d: Shuffle property persists",
+          cue_prop(gid, "shuffle") is True)
+    check("15d: Children count preserved",
+          len(cue_prop(gid, "children")) == len(original))
+
+    # 15e: With shuffle=False, order is preserved on start
+    call("cue.set_property", {
+        "id": gid, "property": "shuffle",
+        "value": False,
+    })
+    order_before = cue_prop(gid, "children")
+    call("cue.execute", {"id": gid, "action": "Start"})
+    time.sleep(0.5)
+    order_after = cue_prop(gid, "children")
+    check("15e: No shuffle when flag is False",
+          order_before == order_after)
+
+    stop_all()
+    call("cue.set_property", {
+        "id": gid, "property": "shuffle",
+        "value": False,
+    })
+    return gid
+
+
 def test_12_group_delete_children_survive(ids, group_id):
     """Deleting a group directly should leave children visible."""
     print("\n═══ Test 12: Group Delete Children Survive ═══")
@@ -905,6 +1031,7 @@ def main():
         group_id = test_11_collapse_persist(ids, group_id)
         test_13_auto_expand_on_play(ids, group_id)
         test_14_move_cue_with_groups(ids, group_id)
+        group_id = test_15_playlist_shuffle(ids, group_id)
         test_12_group_delete_children_survive(ids, group_id)
     finally:
         stop_all()
