@@ -70,6 +70,14 @@ class ListLayout(CueLayout):
         self._running_model = RunningCueModel(self.cue_model)
         self._go_timer = QTimer()
         self._go_timer.setSingleShot(True)
+        # Coalesce rubber-band / multi-range selection changes into one
+        # selection_changed emit per event-loop tick.
+        self._selection_emit_timer = QTimer()
+        self._selection_emit_timer.setSingleShot(True)
+        self._selection_emit_timer.setInterval(0)
+        self._selection_emit_timer.timeout.connect(
+            self.selection_changed.emit
+        )
 
         self._view = ListLayoutView(
             self._list_model, self._running_model, self.Config
@@ -92,6 +100,9 @@ class ListLayout(CueLayout):
         self._view.listView.itemDoubleClicked.connect(self._double_clicked)
         self._view.listView.contextMenuInvoked.connect(self._context_invoked)
         self._view.listView.keyPressed.connect(self._key_pressed)
+        self._view.listView.itemSelectionChanged.connect(
+            self._selection_emit_timer.start
+        )
 
         # Layout menu
         layout_menu = self.app.window.menuLayout

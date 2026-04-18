@@ -17,7 +17,7 @@
 
 import re
 
-from PyQt5.QtCore import QT_TRANSLATE_NOOP
+from PyQt5.QtCore import QT_TRANSLATE_NOOP, QTimer
 from PyQt5.QtWidgets import QAction, QInputDialog, QMessageBox
 
 from lisp.command.model import ModelInsertItemsCommand, ModelMoveItemCommand
@@ -83,6 +83,14 @@ class CartLayout(CueLayout):
         self._cart_view = CartTabWidget()
         self._cart_view.keyPressed.connect(self._key_pressed)
         self._cart_view.currentChanged.connect(self._tab_changed)
+
+        # Coalesce per-widget selected-toggle events into one emit.
+        self._selection_emit_timer = QTimer()
+        self._selection_emit_timer.setSingleShot(True)
+        self._selection_emit_timer.setInterval(0)
+        self._selection_emit_timer.timeout.connect(
+            self.selection_changed.emit
+        )
 
         # Layout menu
         layout_menu = self.app.window.menuLayout
@@ -444,6 +452,7 @@ class CartLayout(CueLayout):
         widget.contextMenuRequested.connect(self._cue_context_menu)
         widget.cueExecuted.connect(self.cue_executed.emit)
         widget.editRequested.connect(self.edit_cue)
+        widget.selectedChanged.connect(self._selection_emit_timer.start)
 
         widget.showAccurateTiming(self.accurate_time)
         widget.setCountdownMode(self.countdown_mode)

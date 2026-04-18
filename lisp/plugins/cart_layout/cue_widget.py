@@ -47,6 +47,7 @@ class CueWidget(QWidget):
     contextMenuRequested = pyqtSignal(QPoint)
     editRequested = pyqtSignal(object)
     cueExecuted = pyqtSignal(object)
+    selectedChanged = pyqtSignal()
 
     def __init__(self, cue, **kwargs):
         super().__init__(**kwargs)
@@ -134,11 +135,15 @@ class CueWidget(QWidget):
 
     @selected.setter
     def selected(self, value):
+        value = bool(value)
+        if value == self._selected:
+            return
         self._selected = value
         # Show the selection via stylesheet/qproperties
         self.nameButton.setProperty("selected", self.selected)
         self.nameButton.style().unpolish(self.nameButton)
         self.nameButton.style().polish(self.nameButton)
+        self.selectedChanged.emit()
 
     def contextMenuEvent(self, event):
         self.contextMenuRequested.emit(event.globalPos())

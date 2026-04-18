@@ -51,6 +51,10 @@ class CueLayout(HasProperties):
         self.all_executed = Signal()  # After execute_all is called
 
         self.key_pressed = Signal()  # After a key is pressed
+        # Emitted (zero-arg) after the set of selected cues changes.
+        # Subclasses are expected to wire their selection source to
+        # this; the default is never emitted.
+        self.selection_changed = Signal()
 
     @property
     def cue_model(self):
