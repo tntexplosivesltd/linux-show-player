@@ -1,5 +1,5 @@
 {
-    "_version_": "0.6dev.17",
+    "_version_": "0.6dev.18",
     "cue": {
         "fadeAction": 3,
         "fadeActionType": "Linear",
@@ -48,5 +48,9 @@
     },
     "actions": {
         "maxStackSize": 0
+    },
+    "mainWindow": {
+        "inspectorVisible": true,
+        "inspectorHeight": 240
     }
 }

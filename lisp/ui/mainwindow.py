@@ -31,6 +31,7 @@ from PyQt5.QtWidgets import (
     qApp,
     QFileDialog,
     QMessageBox,
+    QSplitter,
     QVBoxLayout,
     QWidget,
     QFrame,
@@ -42,6 +43,7 @@ from lisp.command.layout import LayoutAutoInsertCuesCommand
 from lisp.core.singleton import QSingleton
 from lisp.cues.media_cue import MediaCue
 from lisp.ui.about import About
+from lisp.ui.inspector.panel import InspectorPanel
 from lisp.ui.logging.dialog import LogDialogs
 from lisp.ui.logging.handler import LogModelHandler
 from lisp.ui.logging.models import create_log_model
@@ -71,6 +73,24 @@ class MainWindow(QMainWindow, metaclass=QSingleton):
         self.centralWidget().layout().setContentsMargins(5, 5, 5, 5)
         self.setStatusBar(QStatusBar(self))
 
+        # Vertical splitter: layout view on top, inspector below.
+        # The layout view is hosted in a thin container so we can
+        # swap session layouts without re-parenting the splitter.
+        self._layoutContainer = QWidget(self.centralWidget())
+        layoutContainerVbox = QVBoxLayout(self._layoutContainer)
+        layoutContainerVbox.setContentsMargins(0, 0, 0, 0)
+
+        self.inspectorPanel = InspectorPanel(self.centralWidget())
+
+        self.contentSplitter = QSplitter(QtCore.Qt.Vertical, self.centralWidget())
+        self.contentSplitter.setChildrenCollapsible(False)
+        self.contentSplitter.addWidget(self._layoutContainer)
+        self.contentSplitter.addWidget(self.inspectorPanel)
+        # Top half is the workspace; let it absorb resize.
+        self.contentSplitter.setStretchFactor(0, 1)
+        self.contentSplitter.setStretchFactor(1, 0)
+        self.centralWidget().layout().addWidget(self.contentSplitter)
+
         self._app = app
         self._title = title
         self._cueSubMenus = {}
@@ -94,12 +114,14 @@ class MainWindow(QMainWindow, metaclass=QSingleton):
         self.menuFile = QMenu(self.menubar)
         self.menuEdit = QMenu(self.menubar)
         self.menuLayout = QMenu(self.menubar)
+        self.menuView = QMenu(self.menubar)
         self.menuTools = QMenu(self.menubar)
         self.menuAbout = QMenu(self.menubar)
 
         self.menubar.addMenu(self.menuFile)
         self.menubar.addMenu(self.menuEdit)
         self.menubar.addMenu(self.menuLayout)
+        self.menubar.addMenu(self.menuView)
         self.menubar.addMenu(self.menuTools)
         self.menubar.addMenu(self.menuAbout)
 
@@ -160,6 +182,12 @@ class MainWindow(QMainWindow, metaclass=QSingleton):
         self.menuEdit.addAction(self.invertSelection)
         self.menuEdit.addSeparator()
         self.menuEdit.addAction(self.multiEdit)
+
+        # menuView
+        self.showInspectorAction = QAction(self)
+        self.showInspectorAction.setCheckable(True)
+        self.showInspectorAction.toggled.connect(self.__setInspectorVisible)
+        self.menuView.addAction(self.showInspectorAction)
 
         # menuAbout
         self.actionAbout = QAction(self)
@@ -235,6 +263,12 @@ class MainWindow(QMainWindow, metaclass=QSingleton):
         self.multiEdit.setShortcut(translate("MainWindow", "CTRL+SHIFT+E"))
         # menuLayout
         self.menuLayout.setTitle(translate("MainWindow", "&Layout"))
+        # menuView
+        self.menuView.setTitle(translate("MainWindow", "&View"))
+        self.showInspectorAction.setText(
+            translate("MainWindow", "Show Inspector")
+        )
+        self.showInspectorAction.setShortcut(QKeySequence("F4"))
         # menuTools
         self.menuTools.setTitle(translate("MainWindow", "&Tools"))
         self.multiEdit.setText(translate("MainWindow", "Edit selection"))
@@ -325,23 +359,90 @@ class MainWindow(QMainWindow, metaclass=QSingleton):
         else:
             self.showMaximized()
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        # Splitter sizes can only be set meaningfully once the
+        # window has a real height; do it on first show.
+        if not getattr(self, "_inspectorRestored", False):
+            self.__restoreInspectorState()
+            self._inspectorRestored = True
+
     def closeEvent(self, event):
         if self.__checkSessionSaved():
+            self.__persistInspectorState()
+            self.inspectorPanel.flush()
             qApp.quit()
             event.accept()
         else:
             event.ignore()
 
+    def __setInspectorVisible(self, visible: bool):
+        """Toggle the inspector pane via the View menu / F4."""
+        if visible:
+            stored = self._app.conf.get("mainWindow.inspectorHeight", 240)
+            total = sum(self.contentSplitter.sizes()) or self.height()
+            inspector_h = max(80, min(int(stored), max(120, total - 120)))
+            self.contentSplitter.setSizes(
+                [max(120, total - inspector_h), inspector_h]
+            )
+            self.inspectorPanel.setVisible(True)
+        else:
+            # Cache the current height so re-enabling restores it.
+            current = self.contentSplitter.sizes()
+            if len(current) >= 2 and current[1] > 0:
+                self._app.conf.set(
+                    "mainWindow.inspectorHeight", int(current[1])
+                )
+            self.inspectorPanel.setVisible(False)
+
+    def __restoreInspectorState(self):
+        visible = bool(
+            self._app.conf.get("mainWindow.inspectorVisible", True)
+        )
+        height = int(self._app.conf.get("mainWindow.inspectorHeight", 240))
+        total = sum(self.contentSplitter.sizes()) or self.height()
+        if visible:
+            inspector_h = max(80, min(height, max(120, total - 120)))
+            self.contentSplitter.setSizes(
+                [max(120, total - inspector_h), inspector_h]
+            )
+        self.inspectorPanel.setVisible(visible)
+        # Sync the menu item without re-firing the toggled handler.
+        self.showInspectorAction.blockSignals(True)
+        self.showInspectorAction.setChecked(visible)
+        self.showInspectorAction.blockSignals(False)
+
+    def __persistInspectorState(self):
+        visible = self.inspectorPanel.isVisible()
+        self._app.conf.set("mainWindow.inspectorVisible", visible)
+        if visible:
+            sizes = self.contentSplitter.sizes()
+            if len(sizes) >= 2 and sizes[1] > 0:
+                self._app.conf.set(
+                    "mainWindow.inspectorHeight", int(sizes[1])
+                )
+        try:
+            self._app.conf.write()
+        except Exception:
+            logger.exception(
+                translate(
+                    "MainWindowError",
+                    "Could not persist inspector visibility state",
+                )
+            )
+
     def __beforeSessionFinalize(self):
-        self.centralWidget().layout().removeWidget(
+        self.inspectorPanel.detach()
+        self._layoutContainer.layout().removeWidget(
             self._app.session.layout.view
         )
         # Remove ownership, this allow the widget to be deleted
         self._app.session.layout.view.setParent(None)
 
     def __sessionCreated(self):
-        self.centralWidget().layout().addWidget(self._app.session.layout.view)
+        self._layoutContainer.layout().addWidget(self._app.session.layout.view)
         self._app.session.layout.view.show()
+        self.inspectorPanel.attach(self._app.session.layout)
         self._notification_toast.raise_()
         self.updateWindowTitle()
 
@@ -382,6 +483,9 @@ class MainWindow(QMainWindow, metaclass=QSingleton):
         self._app.session.layout.select_all(cue_type=MediaCue)
 
     def __saveSession(self):
+        # Commit any pending inspector edit so it lands in the
+        # undo history before the session is serialised.
+        self.inspectorPanel.flush()
         if self._app.session.session_file:
             self.save_session.emit(self._app.session.session_file)
             return True
