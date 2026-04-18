@@ -65,6 +65,11 @@ class GstMediaSettings(SettingsPage):
         # Create a local copy of the configuration
         self._settings = deepcopy(settings)
 
+        # Re-callable: the inspector reloads on every external refresh
+        # and on selection changes, so wipe the previously-built element
+        # pages and list rows before rebuilding from the new pipeline.
+        self.__resetPages()
+
         # Create the widgets
         pages = pages_by_element()
         for element in settings.get("pipe", ()):
@@ -137,16 +142,24 @@ class GstMediaSettings(SettingsPage):
         )
 
         if dialog.exec() == dialog.Accepted:
-            # Reset the view
-            self.listWidget.clear()
-            if self._current_page is not None:
-                self.layout().removeWidget(self._current_page)
-                self._current_page.hide()
-            self._current_page = None
-            self._pages.clear()
-
-            # Reload with the new pipeline
+            # Reload with the new pipeline (loadSettings resets the view
+            # itself now, so no extra teardown is needed here).
             self._settings["pipe"] = dialog.get_pipe()
 
             self.loadSettings({"media": self._settings})
             self.enableCheck(self._check)
+
+    def __resetPages(self):
+        """Tear down the per-element pages and the sidebar list so a
+        fresh loadSettings can rebuild them without accumulation."""
+        self.listWidget.clear()
+
+        if self._current_page is not None:
+            self.layout().removeWidget(self._current_page)
+            self._current_page.hide()
+        self._current_page = None
+
+        for page in self._pages:
+            page.setParent(None)
+            page.deleteLater()
+        self._pages.clear()
