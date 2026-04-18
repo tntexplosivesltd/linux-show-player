@@ -719,6 +719,63 @@ def register_all(dispatcher, app, signal_manager):
             ),
         }
 
+    # --- Settings ---
+
+    def handle_settings_list_cue_pages(params):
+        """List cue-settings pages registered for a cue type, in the
+        canonical dialog order (SortOrder, translated Name).
+
+        Pure read from CueSettingsRegistry — registry mutations happen
+        only during plugin init, so the GIL is sufficient; no need to
+        marshal to the Qt main thread.
+        """
+        from lisp.ui.settings.cue_settings import (
+            CueSettingsRegistry,
+            cue_page_sort_key,
+        )
+        from lisp.ui.ui_utils import translate
+
+        cue_type = params.get("cue_type")
+        if not cue_type:
+            raise AppError("cue_type is required")
+
+        registry = CueSettingsRegistry()
+        # Find the Cue subclass whose __name__ matches the request.
+        cue_class = None
+        for ref_class in registry.ref_classes():
+            if ref_class.__name__ == cue_type:
+                cue_class = ref_class
+                break
+        if cue_class is None:
+            # Fall back to walking the factory so we can resolve
+            # leaf cue types (e.g. StopAll) that don't appear as a
+            # ref_class themselves — their pages are inherited from Cue.
+            for registered in app.cue_factory.registered_types():
+                if registered == cue_type:
+                    # Instantiate briefly to discover the class, then
+                    # discard. Safe: Cue constructors are cheap.
+                    try:
+                        tmp = app.cue_factory.create_cue(cue_type)
+                        cue_class = type(tmp)
+                    except Exception as exc:
+                        raise AppError(
+                            f"Cannot resolve cue type: {cue_type} ({exc})"
+                        )
+                    break
+        if cue_class is None:
+            raise AppError(f"Unknown cue type: {cue_type}")
+
+        pages = sorted(registry.filter(cue_class), key=cue_page_sort_key)
+        return [
+            {
+                "class": page.__name__,
+                "name": translate("SettingsPageName", page.Name),
+                "raw_name": page.Name,
+                "sort_order": getattr(page, "SortOrder", 1000),
+            }
+            for page in pages
+        ]
+
     # --- Register all methods ---
 
     methods = {
@@ -787,6 +844,8 @@ def register_all(dispatcher, app, signal_manager):
         # Playback monitor
         "playback_monitor.state": handle_playback_monitor_state,
         "playback_monitor.toggle": handle_playback_monitor_toggle,
+        # Settings
+        "settings.list_cue_pages": handle_settings_list_cue_pages,
     }
 
     for method_name, handler in methods.items():
