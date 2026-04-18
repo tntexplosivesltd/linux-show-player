@@ -28,6 +28,7 @@ import sys
 import tempfile
 import time
 import wave
+from contextlib import contextmanager
 
 # Allow importing the test harness client without installing
 sys.path.insert(
@@ -91,14 +92,17 @@ def start_lisp(layout="ListLayout"):
         try:
             resp = send_request(HOST, PORT, "ping")
             if "result" in resp:
-                # Wait for session to fully load before proceeding
-                # (ping responds when harness is up, but session
-                # may still be loading from the temp file).
+                # Wait for session to fully load before proceeding.
+                # session.info returns {"has_session": False} before
+                # the session file loads — the harness registers
+                # before the session is attached, so a successful
+                # JSON-RPC result is not enough.
                 try:
                     info = send_request(
                         HOST, PORT, "session.info"
                     )
-                    if "result" in info:
+                    result = info.get("result") or {}
+                    if result.get("has_session"):
                         os.unlink(session_path)
                         return
                 except Exception:
@@ -166,6 +170,84 @@ def wait_state(cue_id, target, timeout=5.0):
             return True
         time.sleep(0.2)
     return False
+
+
+# ── Signal-based waits (preferred over polling) ──────────────
+
+def subscribe_cue(cue_id, signal_name):
+    """Subscribe to a per-cue signal; return subscription id.
+
+    Per-cue signals: started, stopped, paused, interrupted,
+    error, end, next, fadein_start/end, fadeout_start/end,
+    prewait_start/ended/paused/stopped,
+    postwait_start/ended/paused/stopped, property_changed.
+    """
+    sub = call("signals.subscribe", {
+        "signal": f"cue.{signal_name}",
+        "cue_id": cue_id,
+    })
+    return sub["subscription_id"]
+
+
+def subscribe(signal_path):
+    """Subscribe to a global signal path (e.g. 'cue_model.item_added')."""
+    sub = call("signals.subscribe", {"signal": signal_path})
+    return sub["subscription_id"]
+
+
+def wait_for_signal(sub_id, timeout=5.0, match=None):
+    """Block until the subscribed signal fires, or timeout.
+
+    Returns the event dict on success, or None on timeout.  All
+    other harness errors propagate.  Use this instead of
+    ``wait_state`` when the test has already subscribed BEFORE
+    triggering the action that causes the state change.
+    """
+    params = {"subscription_id": sub_id, "timeout": timeout}
+    if match is not None:
+        params["match"] = match
+    try:
+        return call("signals.wait_for", params)
+    except RuntimeError as e:
+        msg = str(e).lower()
+        if "timed out" in msg or "timeout" in msg:
+            return None
+        raise
+
+
+def unsubscribe(sub_id):
+    """Release a subscription; silently ignores 'not found'."""
+    try:
+        call("signals.unsubscribe", {"subscription_id": sub_id})
+    except RuntimeError:
+        pass
+
+
+@contextmanager
+def cue_signal(cue_id, signal_name):
+    """Subscribe, yield the subscription id, unsubscribe on exit.
+
+    Typical pattern::
+
+        with cue_signal(cue_id, "started") as sub:
+            call("cue.start", {"id": cue_id})
+            assert wait_for_signal(sub, timeout=5)
+    """
+    sub_id = subscribe_cue(cue_id, signal_name)
+    try:
+        yield sub_id
+    finally:
+        unsubscribe(sub_id)
+
+
+@contextmanager
+def signal_sub(signal_path):
+    """Context manager variant of ``subscribe`` for global signals."""
+    sub_id = subscribe(signal_path)
+    try:
+        yield sub_id
+    finally:
+        unsubscribe(sub_id)
 
 
 def stop_all():
