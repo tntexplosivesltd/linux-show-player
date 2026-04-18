@@ -352,28 +352,27 @@ class TestCollapsedProperty:
 
 
 class TestPlaylistShuffle:
-    def test_shuffle_reorders_children_on_start(
+    def test_start_does_not_shuffle_even_with_flag_on(
         self, group, mock_app
     ):
-        """Starting a stopped shuffle playlist should randomize
-        the children list."""
+        """Fresh playlist start must NOT shuffle — order stays
+        consistent during the show, even with shuffle=True."""
         ids = [f"c{i}" for i in range(10)]
         children = {cid: _make_child(cid) for cid in ids}
         mock_app.cue_model.get = lambda cid: children.get(cid)
         group.children = list(ids)
         group.group_mode = "playlist"
         group.shuffle = True
+        # Toggle-True shuffled the list; capture that as baseline
+        # and verify starting does NOT reshuffle.
+        baseline = list(group.children)
 
         group.__start__(fade=False)
 
-        # With 10 children the probability of the shuffle
-        # producing the original order is 1/10! ≈ 0.00003%
-        assert group.children != ids
+        assert group.children == baseline
 
-    def test_shuffle_does_not_reorder_on_resume(
-        self, group, mock_app
-    ):
-        """Resuming a paused shuffle playlist must NOT re-shuffle."""
+    def test_resume_does_not_shuffle(self, group, mock_app):
+        """Resuming a paused shuffle playlist must NOT shuffle."""
         c1 = _make_child("c1", state=CueState.Stop)
         c2 = _make_child("c2", state=CueState.Pause)
         mock_app.cue_model.get = lambda cid: {
@@ -382,16 +381,17 @@ class TestPlaylistShuffle:
         group.children = ["c1", "c2"]
         group.group_mode = "playlist"
         group.shuffle = True
+        # Reset children after the toggle handler ran
+        group.children = ["c1", "c2"]
         group._playlist_index = 1
 
         group.__start__(fade=False)
 
-        # Children order unchanged — we resumed, not restarted
         assert group.children == ["c1", "c2"]
         assert group._playlist_index == 1
 
     def test_no_shuffle_when_flag_false(self, group, mock_app):
-        """With shuffle=False, children order is preserved."""
+        """With shuffle=False, starting preserves children order."""
         ids = ["c1", "c2", "c3"]
         children = {cid: _make_child(cid) for cid in ids}
         mock_app.cue_model.get = lambda cid: children.get(cid)
@@ -402,6 +402,51 @@ class TestPlaylistShuffle:
         group.__start__(fade=False)
 
         assert group.children == ["c1", "c2", "c3"]
+
+    def test_shuffle_on_property_toggle_true(
+        self, group, mock_app
+    ):
+        """Setting shuffle True on a playlist group triggers a
+        shuffle — the 'option enabled' trigger."""
+        ids = [f"c{i}" for i in range(10)]
+        children = {cid: _make_child(cid) for cid in ids}
+        mock_app.cue_model.get = lambda cid: children.get(cid)
+        group.children = list(ids)
+        group.group_mode = "playlist"
+        assert group.shuffle is False
+
+        group.shuffle = True
+
+        assert group.children != ids
+
+    def test_no_shuffle_on_property_toggle_false(
+        self, group, mock_app
+    ):
+        """Setting shuffle False is a no-op for ordering."""
+        ids = ["c1", "c2", "c3"]
+        children = {cid: _make_child(cid) for cid in ids}
+        mock_app.cue_model.get = lambda cid: children.get(cid)
+        group.children = list(ids)
+        group.group_mode = "playlist"
+        group.shuffle = True
+        group.children = list(ids)  # reset after toggle shuffle
+
+        group.shuffle = False
+
+        assert group.children == ids
+
+    def test_no_shuffle_on_toggle_when_parallel(
+        self, group, mock_app
+    ):
+        """Parallel groups ignore the shuffle option even when
+        toggled True."""
+        ids = ["c1", "c2", "c3"]
+        group.children = list(ids)
+        group.group_mode = "parallel"
+
+        group.shuffle = True
+
+        assert group.children == ids
 
     def test_shuffle_on_session_load(self, group, mock_app):
         """_shuffle_on_load should shuffle children of playlist
@@ -569,25 +614,23 @@ class TestPlaylistShuffle:
         assert g2.children != ids
 
     def test_loop_does_not_reshuffle(self, group, mock_app):
-        """Loop wrap-around must NOT re-shuffle — spec requirement.
+        """Loop wrap-around must NOT re-shuffle.
 
-        _start_playlist is not called on loop; _play_child_at
-        only resets index to 0. Verify the order is stable across
-        a wrap, so the same shuffled sequence replays on loop.
+        The shuffled order, established on toggle/load, must
+        replay verbatim on every loop so the same track does
+        not repeat back-to-back across the cycle boundary.
         """
         ids = [f"c{i}" for i in range(10)]
         children = {cid: _make_child(cid) for cid in ids}
         mock_app.cue_model.get = lambda cid: children.get(cid)
         group.children = list(ids)
         group.group_mode = "playlist"
-        group.shuffle = True
+        group.shuffle = True  # toggle triggers shuffle
         group.loop = True
-
-        # Fresh start — triggers shuffle
-        group.__start__(fade=False)
         shuffled_order = list(group.children)
         assert shuffled_order != ids
 
+        group.__start__(fade=False)
         # Simulate loop wrap: _play_child_at with index past end
         group._play_child_at(
             len(shuffled_order),
@@ -595,8 +638,50 @@ class TestPlaylistShuffle:
             fade=False,
         )
 
-        # Children order unchanged — loop reused same shuffle
         assert group.children == shuffled_order
+
+    def test_shuffle_syncs_layout_indices(
+        self, group, mock_app
+    ):
+        """shuffle_children must move cues in the layout model
+        so the UI row order matches self.children (the UI sorts
+        by cue.index within a group, not by children list)."""
+        ids = ["c1", "c2", "c3"]
+        children = {}
+        for i, cid in enumerate(ids, start=1):
+            c = _make_child(cid)
+            c.index = i  # children at indices 1,2,3
+            children[cid] = c
+        mock_app.cue_model.get = lambda cid: children.get(cid)
+        group.index = 0  # group is at index 0, owns slots 1-3
+        group.children = list(ids)
+        group.group_mode = "playlist"
+
+        group.shuffle_children()
+
+        # Exactly the children that ended up in a different
+        # slot should have triggered a model.move call.
+        expected_moves = sum(
+            1 for i, cid in enumerate(group.children, start=1)
+            if children[cid].index != i
+        )
+        assert mock_app.layout.model.move.call_count == expected_moves
+
+    def test_shuffle_skips_layout_when_no_layout(
+        self, group, mock_app
+    ):
+        """If app.layout is None (no session), shuffle_children
+        should still randomize the list without crashing."""
+        ids = [f"c{i}" for i in range(10)]
+        children = {cid: _make_child(cid) for cid in ids}
+        mock_app.cue_model.get = lambda cid: children.get(cid)
+        mock_app.layout = None
+        group.children = list(ids)
+        group.group_mode = "playlist"
+
+        group.shuffle_children()
+
+        assert group.children != ids
 
     def test_shuffle_serialization_round_trip(self, mock_app):
         """Shuffle Property should serialize and deserialize."""

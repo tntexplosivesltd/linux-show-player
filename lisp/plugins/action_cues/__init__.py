@@ -15,7 +15,6 @@
 # You should have received a copy of the GNU General Public License
 # along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
-import random
 from os import path
 
 from lisp.core.loading import load_classes
@@ -55,4 +54,4 @@ class ActionCues(Plugin):
                 and cue.shuffle
                 and len(cue.children) > 1
             ):
-                random.shuffle(cue.children)
+                cue.shuffle_children()

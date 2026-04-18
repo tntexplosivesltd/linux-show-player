@@ -81,6 +81,55 @@ class GroupCue(Cue):
             self._start_crossfade_monitor, Connection.QtQueued
         )
 
+        # Shuffle when the user toggles the option on.
+        self.property_changed.connect(self._on_property_changed)
+
+    def _on_property_changed(self, _cue, name, value):
+        """Shuffle when the shuffle option transitions to True.
+
+        Fires during deserialization as well; that's harmless
+        since _shuffle_on_load will run on session_loaded and
+        double-shuffling remains uniformly random.
+        """
+        if (
+            name == "shuffle"
+            and value is True
+            and self.group_mode == "playlist"
+            and len(self.children) > 1
+        ):
+            self.shuffle_children()
+
+    def shuffle_children(self):
+        """Randomize children order and sync the layout.
+
+        Mutates `self.children` in place (list of IDs) and moves
+        each child cue in the active layout's model so the list
+        view rows match the new playback order.
+        """
+        random.shuffle(self.children)
+        self._resync_layout_to_children()
+
+    def _resync_layout_to_children(self):
+        """Move children in the layout model so row order follows
+        `self.children`.  Uses the layout adapter's `move` API so
+        `item_moved` is emitted and the tree view reorders rows.
+        """
+        layout = getattr(self.app, "layout", None)
+        model = getattr(layout, "model", None) if layout else None
+        if model is None:
+            return
+        # Children occupy contiguous slots starting right after
+        # the group itself.  Walk the shuffled list and move each
+        # child to its target slot; cues in between shift naturally.
+        base = self.index + 1
+        for offset, child_id in enumerate(self.children):
+            child = self.app.cue_model.get(child_id)
+            if child is None:
+                continue
+            target = base + offset
+            if child.index != target:
+                model.move(child.index, target)
+
     def _resolve_children(self):
         """Return the list of child Cue objects in order."""
         cues = []
@@ -143,9 +192,6 @@ class GroupCue(Cue):
                 and children[idx].state & CueState.IsPaused
             )
             if not resuming:
-                if self.shuffle:
-                    random.shuffle(self.children)
-                    children = self._resolve_children()
                 idx = 0
                 self._playlist_index = 0
             self._connected_children = set()

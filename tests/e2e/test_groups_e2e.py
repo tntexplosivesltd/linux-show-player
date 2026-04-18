@@ -822,7 +822,12 @@ def test_14_move_cue_with_groups(ids, group_id):
 
 
 def test_15_playlist_shuffle(ids, group_id):
-    """Shuffle flag randomizes children order on start and save/load."""
+    """Shuffle flag randomizes children on toggle-True and session load.
+
+    Shuffle is NOT triggered by cue start — the order stays consistent
+    during a show once set. UI ordering (cue.index) should match the
+    children list after shuffle.
+    """
     print("\n═══ Test 15: Playlist Shuffle ═══")
 
     stop_all()
@@ -839,14 +844,14 @@ def test_15_playlist_shuffle(ids, group_id):
         return group_id
     group_id = group["id"]
 
-    # Set to playlist + shuffle
+    # Set to playlist, shuffle=False initially, loop=False
     call("cue.set_property", {
         "id": group_id, "property": "group_mode",
         "value": "playlist",
     })
     call("cue.set_property", {
         "id": group_id, "property": "shuffle",
-        "value": True,
+        "value": False,
     })
     call("cue.set_property", {
         "id": group_id, "property": "loop",
@@ -857,26 +862,47 @@ def test_15_playlist_shuffle(ids, group_id):
     original = cue_prop(group_id, "children")
     check("15a: Has children", len(original) >= 2)
 
-    # 15b: Start group — children should be shuffled.
-    # Try up to 5 times since shuffle can theoretically
-    # produce the same order (very unlikely with >=3 children).
+    # 15b: Toggle shuffle False→True → children should be shuffled.
+    # Retry generously: with N children the per-iteration collision
+    # probability is 1/N! (e.g. 50% for N=2).  10 retries keeps the
+    # false-failure rate below 0.1% even in the worst case.
     shuffled = False
-    for _ in range(5):
-        call("cue.execute", {
-            "id": group_id, "action": "Start",
+    for _ in range(10):
+        call("cue.set_property", {
+            "id": group_id, "property": "shuffle", "value": False,
         })
-        time.sleep(0.5)
-        after_start = cue_prop(group_id, "children")
-        call("cue.execute", {
-            "id": group_id, "action": "Stop",
+        before_toggle = cue_prop(group_id, "children")
+        call("cue.set_property", {
+            "id": group_id, "property": "shuffle", "value": True,
         })
         time.sleep(0.3)
-        if after_start != original:
+        after_toggle = cue_prop(group_id, "children")
+        if after_toggle != before_toggle:
             shuffled = True
             break
-    check("15b: Children shuffled on start", shuffled)
+    check("15b: Children shuffled on shuffle toggle True", shuffled)
 
-    # 15c: Pause and resume — order should NOT change
+    # 15c: UI ordering (cue.index) matches children order after shuffle
+    children_order = cue_prop(group_id, "children")
+    cues = call("cue.list")
+    cue_by_id = {c["id"]: c for c in cues}
+    ui_indices = [cue_by_id[cid]["index"] for cid in children_order
+                  if cid in cue_by_id]
+    check("15c: UI indices match children order after shuffle",
+          ui_indices == sorted(ui_indices))
+
+    # 15d: Start does NOT reshuffle — order must stay consistent
+    order_before_start = cue_prop(group_id, "children")
+    call("cue.execute", {
+        "id": group_id, "action": "Start",
+    })
+    time.sleep(0.5)
+    order_after_start = cue_prop(group_id, "children")
+    check("15d: Start does not shuffle",
+          order_before_start == order_after_start)
+    stop_all()
+
+    # 15e: Pause and resume — order should NOT change
     call("cue.execute", {
         "id": group_id, "action": "Start",
     })
@@ -891,11 +917,27 @@ def test_15_playlist_shuffle(ids, group_id):
     })
     time.sleep(0.5)
     order_after_resume = cue_prop(group_id, "children")
-    check("15c: Order preserved on resume",
+    check("15e: Order preserved on resume",
           order_before_pause == order_after_resume)
     stop_all()
 
-    # 15d: Save/load — children should be re-shuffled
+    # 15f: Toggle True→False must NOT shuffle
+    stable_before = cue_prop(group_id, "children")
+    call("cue.set_property", {
+        "id": group_id, "property": "shuffle", "value": False,
+    })
+    time.sleep(0.3)
+    stable_after = cue_prop(group_id, "children")
+    check("15f: Toggle shuffle False does not shuffle",
+          stable_before == stable_after)
+
+    # Re-enable so session-load test has shuffle=True persisted
+    call("cue.set_property", {
+        "id": group_id, "property": "shuffle", "value": True,
+    })
+    time.sleep(0.3)
+
+    # 15g: Save/load — children should be re-shuffled
     order_before_save = cue_prop(group_id, "children")
     save_path = "/tmp/lisp_shuffle_test_session.lsp"
     call("session.save", {"path": save_path})
@@ -917,31 +959,25 @@ def test_15_playlist_shuffle(ids, group_id):
             break
 
     if gid is None:
-        check("15d: Group found after reload", False)
+        check("15g: Group found after reload", False)
         return group_id
 
-    # Shuffle on load may produce the same order (probability
-    # 1/N! for N children). With N >= 3 this is acceptably rare.
-    check("15d: Shuffle property persists",
+    check("15g: Shuffle property persists",
           cue_prop(gid, "shuffle") is True)
-    check("15d: Children count preserved",
+    check("15g: Children count preserved",
           len(cue_prop(gid, "children")) == len(original))
     reloaded_order = cue_prop(gid, "children")
     if len(order_before_save) >= 4:
-        check("15d: Children reshuffled on load",
+        check("15g: Children reshuffled on load",
               reloaded_order != order_before_save)
 
-    # 15e: With shuffle=False, order is preserved on start
-    call("cue.set_property", {
-        "id": gid, "property": "shuffle",
-        "value": False,
-    })
-    order_before = cue_prop(gid, "children")
-    call("cue.execute", {"id": gid, "action": "Start"})
-    time.sleep(0.5)
-    order_after = cue_prop(gid, "children")
-    check("15e: No shuffle when flag is False",
-          order_before == order_after)
+    # 15h: UI ordering matches children order after session load
+    cues = call("cue.list")
+    cue_by_id = {c["id"]: c for c in cues}
+    ui_indices = [cue_by_id[cid]["index"] for cid in reloaded_order
+                  if cid in cue_by_id]
+    check("15h: UI indices match children order after reload",
+          ui_indices == sorted(ui_indices))
 
     stop_all()
     call("cue.set_property", {
