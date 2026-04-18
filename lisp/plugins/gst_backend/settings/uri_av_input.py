@@ -73,16 +73,16 @@ class UriAvInputSettings(SettingsPage):
             self.download, 1, 0, 1, 2
         )
 
+        self.bufferSizeLabel = QLabel(self.bufferingGroup)
+        self.bufferSizeLabel.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+        self.bufferingGroup.layout().addWidget(
+            self.bufferSizeLabel, 2, 0
+        )
+
         self.bufferSize = QSpinBox(self.bufferingGroup)
         self.bufferSize.setRange(-1, 2_147_483_647)
         self.bufferSize.setValue(-1)
-        self.bufferingGroup.layout().addWidget(self.bufferSize, 2, 0)
-
-        self.bufferSizeLabel = QLabel(self.bufferingGroup)
-        self.bufferSizeLabel.setAlignment(Qt.AlignCenter)
-        self.bufferingGroup.layout().addWidget(
-            self.bufferSizeLabel, 2, 1
-        )
+        self.bufferingGroup.layout().addWidget(self.bufferSize, 2, 1)
 
         self.buttonFindFile.clicked.connect(self.select_file)
 
