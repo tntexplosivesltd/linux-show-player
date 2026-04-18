@@ -243,16 +243,21 @@ class CueGeneralSettingsPage(CueSettingsPage):
 
     @staticmethod
     def _stripDurationLabel(fadeEdit):
-        """Drop the per-FadeEdit 'Duration (sec):' caption and re-flow
-        the spinbox across both grid columns. Without this, the spinbox
-        stays parked in column 1 — i.e. offset by the width of the
-        'Curve:' label sitting below it — so it visually starts where
-        the owning group title ends instead of flush-left under it."""
+        """Re-flow a FadeEdit so the duration spinbox and curve combo
+        sit side-by-side without their internal captions. The owning
+        group title ('Fade In' / 'Fade Out') already names the duration,
+        and the curve combo's icons (linear / quadratic glyphs) are
+        self-documenting — so 'Duration (sec):' and 'Curve:' are pure
+        noise inside the inspector. Both labels are removed from the
+        layout and the two controls collapse onto row 0."""
         layout = fadeEdit.layout()
-        layout.removeWidget(fadeEdit.fadeDurationLabel)
-        fadeEdit.fadeDurationLabel.hide()
+        for label in (fadeEdit.fadeDurationLabel, fadeEdit.fadeTypeLabel):
+            layout.removeWidget(label)
+            label.hide()
         layout.removeWidget(fadeEdit.fadeDurationSpin)
-        layout.addWidget(fadeEdit.fadeDurationSpin, 0, 0, 1, 2)
+        layout.removeWidget(fadeEdit.fadeTypeCombo)
+        layout.addWidget(fadeEdit.fadeDurationSpin, 0, 0)
+        layout.addWidget(fadeEdit.fadeTypeCombo, 0, 1)
 
     def retranslateUi(self):
         self.cueNameGroup.setTitle(
