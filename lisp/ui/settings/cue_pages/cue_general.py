@@ -58,7 +58,7 @@ class CueGeneralSettingsPage(CueSettingsPage):
         super().__init__(cueType=cueType, **kwargs)
         self.iconSelectorDialog = None
 
-        # QLab-style 3-column grid: identity | behaviour | appearance+fade.
+        # QLab-style 3-column grid: behaviour+fade | identity | appearance.
         # Each column owns flat group-boxes so existing tests that touch
         # `xxxGroup.isCheckable()`/`isEnabled()` still work, but the chrome
         # disappears so the inspector reads as a single dense form.
@@ -67,41 +67,7 @@ class CueGeneralSettingsPage(CueSettingsPage):
         grid.setHorizontalSpacing(12)
         grid.setVerticalSpacing(6)
 
-        # ---- Column 0: identity --------------------------------------
-        self.cueNameGroup = self._makeFlatGroup()
-        self.cueNameGroup.setLayout(QHBoxLayout())
-        self.cueNameGroup.layout().setContentsMargins(0, 14, 0, 0)
-
-        self.cueIconPreview = QLabel(self.cueNameGroup)
-        self.cueNameGroup.layout().addWidget(self.cueIconPreview)
-
-        self.cueIconButton = QPushButton(self.cueNameGroup)
-        self.cueIconButton.clicked.connect(self.showIconSelector)
-        self.cueNameGroup.layout().addWidget(self.cueIconButton)
-
-        self.cueNameEdit = QLineEdit(self.cueNameGroup)
-        self.cueNameGroup.layout().addWidget(self.cueNameEdit, 1)
-
-        grid.addWidget(self.cueNameGroup, 0, 0)
-
-        self.cueDescriptionGroup = self._makeFlatGroup()
-        self.cueDescriptionGroup.setLayout(QHBoxLayout())
-        self.cueDescriptionGroup.layout().setContentsMargins(0, 14, 0, 0)
-        self.cueDescriptionGroup.setSizePolicy(
-            QSizePolicy.Expanding, QSizePolicy.Expanding
-        )
-
-        self.cueDescriptionEdit = QTextEdit(self.cueDescriptionGroup)
-        self.cueDescriptionEdit.setAcceptRichText(False)
-        self.cueDescriptionEdit.setFont(
-            QFontDatabase.systemFont(QFontDatabase.FixedFont)
-        )
-        self.cueDescriptionGroup.layout().addWidget(self.cueDescriptionEdit)
-
-        # Description fills column 0 from row 1 to the bottom of the grid.
-        grid.addWidget(self.cueDescriptionGroup, 1, 0, -1, 1)
-
-        # ---- Column 1: behaviour -------------------------------------
+        # ---- Column 0: behaviour + fade ------------------------------
         self.startActionGroup = self._makeFlatGroup()
         self.startActionGroup.setLayout(QHBoxLayout())
         self.startActionGroup.layout().setContentsMargins(0, 14, 0, 0)
@@ -120,7 +86,7 @@ class CueGeneralSettingsPage(CueSettingsPage):
         self.startActionLabel.setAlignment(Qt.AlignCenter)
         self.startActionGroup.layout().addWidget(self.startActionLabel, 1)
 
-        grid.addWidget(self.startActionGroup, 0, 1)
+        grid.addWidget(self.startActionGroup, 0, 0)
 
         self.stopActionGroup = self._makeFlatGroup()
         self.stopActionGroup.setLayout(QHBoxLayout())
@@ -146,13 +112,71 @@ class CueGeneralSettingsPage(CueSettingsPage):
         self.stopActionLabel.setAlignment(Qt.AlignCenter)
         self.stopActionGroup.layout().addWidget(self.stopActionLabel, 1)
 
-        grid.addWidget(self.stopActionGroup, 1, 1)
+        grid.addWidget(self.stopActionGroup, 1, 0)
 
-        # Spacer keeps behaviour rows pinned to the top of column 1 so
-        # they stay aligned with column 0/2 above the column-1 stretch.
-        grid.setRowStretch(2, 1)
+        self.fadeInGroup = self._makeFlatGroup()
+        self.fadeInGroup.setEnabled(CueAction.FadeInStart in cueType.CueActions)
+        self.fadeInGroup.setLayout(QHBoxLayout())
+        self.fadeInGroup.layout().setContentsMargins(0, 14, 0, 0)
 
-        # ---- Column 2: appearance + fade + exclusive -----------------
+        self.fadeInEdit = FadeEdit(
+            self.fadeInGroup, mode=FadeComboBox.Mode.FadeIn
+        )
+        self.fadeInGroup.layout().addWidget(self.fadeInEdit)
+
+        grid.addWidget(self.fadeInGroup, 2, 0)
+
+        self.fadeOutGroup = self._makeFlatGroup()
+        self.fadeOutGroup.setEnabled(
+            CueAction.FadeOutPause in cueType.CueActions
+            or CueAction.FadeOutStop in cueType.CueActions
+        )
+        self.fadeOutGroup.setLayout(QHBoxLayout())
+        self.fadeOutGroup.layout().setContentsMargins(0, 14, 0, 0)
+
+        self.fadeOutEdit = FadeEdit(
+            self.fadeOutGroup, mode=FadeComboBox.Mode.FadeOut
+        )
+        self.fadeOutGroup.layout().addWidget(self.fadeOutEdit)
+
+        grid.addWidget(self.fadeOutGroup, 3, 0)
+
+        # ---- Column 1: identity --------------------------------------
+        self.cueNameGroup = self._makeFlatGroup()
+        self.cueNameGroup.setLayout(QHBoxLayout())
+        self.cueNameGroup.layout().setContentsMargins(0, 14, 0, 0)
+
+        self.cueIconPreview = QLabel(self.cueNameGroup)
+        self.cueNameGroup.layout().addWidget(self.cueIconPreview)
+
+        self.cueIconButton = QPushButton(self.cueNameGroup)
+        self.cueIconButton.clicked.connect(self.showIconSelector)
+        self.cueNameGroup.layout().addWidget(self.cueIconButton)
+
+        self.cueNameEdit = QLineEdit(self.cueNameGroup)
+        self.cueNameGroup.layout().addWidget(self.cueNameEdit, 1)
+
+        grid.addWidget(self.cueNameGroup, 0, 1)
+
+        self.cueDescriptionGroup = self._makeFlatGroup()
+        self.cueDescriptionGroup.setLayout(QHBoxLayout())
+        self.cueDescriptionGroup.layout().setContentsMargins(0, 14, 0, 0)
+        self.cueDescriptionGroup.setSizePolicy(
+            QSizePolicy.Expanding, QSizePolicy.Expanding
+        )
+
+        self.cueDescriptionEdit = QTextEdit(self.cueDescriptionGroup)
+        self.cueDescriptionEdit.setAcceptRichText(False)
+        self.cueDescriptionEdit.setFont(
+            QFontDatabase.systemFont(QFontDatabase.FixedFont)
+        )
+        self.cueDescriptionGroup.layout().addWidget(self.cueDescriptionEdit)
+
+        # Description fills column 1 from row 1 to the bottom of the grid,
+        # matching the height of column 0's behaviour+fade stack.
+        grid.addWidget(self.cueDescriptionGroup, 1, 1, -1, 1)
+
+        # ---- Column 2: appearance + exclusive ------------------------
         self.colorGroup = self._makeFlatGroup()
         self.colorGroup.setLayout(QHBoxLayout())
         self.colorGroup.layout().setContentsMargins(0, 14, 0, 0)
@@ -175,41 +199,13 @@ class CueGeneralSettingsPage(CueSettingsPage):
 
         grid.addWidget(self.fontSizeGroup, 1, 2)
 
-        # Warning sits between the appearance pair and the fade trio so
-        # it stays visually attached to the colour/font controls it
-        # qualifies, not the fade controls below it.
+        # Warning sits beneath the appearance pair so it stays visually
+        # attached to the colour/font controls it qualifies.
         self.warning = QLabel(self)
         self.warning.setAlignment(Qt.AlignCenter)
         self.warning.setWordWrap(True)
         self.warning.setStyleSheet("color: #FFA500; font-weight: bold")
         grid.addWidget(self.warning, 2, 2)
-
-        self.fadeInGroup = self._makeFlatGroup()
-        self.fadeInGroup.setEnabled(CueAction.FadeInStart in cueType.CueActions)
-        self.fadeInGroup.setLayout(QHBoxLayout())
-        self.fadeInGroup.layout().setContentsMargins(0, 14, 0, 0)
-
-        self.fadeInEdit = FadeEdit(
-            self.fadeInGroup, mode=FadeComboBox.Mode.FadeIn
-        )
-        self.fadeInGroup.layout().addWidget(self.fadeInEdit)
-
-        grid.addWidget(self.fadeInGroup, 3, 2)
-
-        self.fadeOutGroup = self._makeFlatGroup()
-        self.fadeOutGroup.setEnabled(
-            CueAction.FadeOutPause in cueType.CueActions
-            or CueAction.FadeOutStop in cueType.CueActions
-        )
-        self.fadeOutGroup.setLayout(QHBoxLayout())
-        self.fadeOutGroup.layout().setContentsMargins(0, 14, 0, 0)
-
-        self.fadeOutEdit = FadeEdit(
-            self.fadeOutGroup, mode=FadeComboBox.Mode.FadeOut
-        )
-        self.fadeOutGroup.layout().addWidget(self.fadeOutEdit)
-
-        grid.addWidget(self.fadeOutGroup, 4, 2)
 
         self.exclusiveGroup = self._makeFlatGroup()
         self.exclusiveGroup.setLayout(QVBoxLayout())
@@ -218,12 +214,12 @@ class CueGeneralSettingsPage(CueSettingsPage):
         self.exclusiveCheckBox = QCheckBox(self.exclusiveGroup)
         self.exclusiveGroup.layout().addWidget(self.exclusiveCheckBox)
 
-        grid.addWidget(self.exclusiveGroup, 5, 2)
+        grid.addWidget(self.exclusiveGroup, 3, 2)
 
-        # Even the three columns; col 0 (identity) gets a touch more
-        # because the description editor benefits from the extra width.
-        grid.setColumnStretch(0, 3)
-        grid.setColumnStretch(1, 2)
+        # Behaviour controls are compact; identity (with its description
+        # editor) deserves the extra width; appearance stays narrow.
+        grid.setColumnStretch(0, 2)
+        grid.setColumnStretch(1, 3)
         grid.setColumnStretch(2, 2)
 
         self.retranslateUi()
