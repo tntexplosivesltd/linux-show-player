@@ -23,6 +23,7 @@ from lisp.ui.settings.pages import SettingsPagesTabWidget, CuePageMixin
 
 class CueControllerSettingsPage(SettingsPagesTabWidget, CuePageMixin):
     Name = QT_TRANSLATE_NOOP("SettingsPageName", "Cue Control")
+    SortOrder = 50
 
     def __init__(self, cueType, **kwargs):
         super().__init__(cueType=cueType, **kwargs)

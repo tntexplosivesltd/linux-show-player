@@ -65,6 +65,7 @@ class MidiCue(Cue):
 
 class MidiCueSettings(SettingsPage):
     Name = QT_TRANSLATE_NOOP("SettingsPageName", "MIDI Settings")
+    SortOrder = 30
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)

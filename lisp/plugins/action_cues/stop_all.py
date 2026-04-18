@@ -51,6 +51,7 @@ class StopAll(Cue):
 
 class StopAllSettings(SettingsPage):
     Name = QT_TRANSLATE_NOOP("SettingsPageName", "Stop Settings")
+    SortOrder = 30
 
     SupportedActions = [
         CueAction.Stop,

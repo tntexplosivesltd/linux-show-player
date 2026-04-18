@@ -37,6 +37,19 @@ class CueSettingsRegistry(ClassBasedRegistry, metaclass=Singleton):
         return super().filter(ref_class)
 
 
+def cue_page_sort_key(page):
+    """Canonical sort key for cue settings pages.
+
+    Sorts primarily by the page's SortOrder (lower first) and
+    secondarily by its translated Name so the ordering is stable
+    across locales for pages sharing a slot.
+    """
+    return (
+        getattr(page, "SortOrder", 1000),
+        translate("SettingsPageName", page.Name),
+    )
+
+
 class CueSettingsDialog(QDialog):
     onApply = QtCore.pyqtSignal(dict)
 
@@ -73,11 +86,9 @@ class CueSettingsDialog(QDialog):
         self.mainPage.layout().setContentsMargins(0, 0, 0, 0)
         self.layout().addWidget(self.mainPage)
 
-        def sk(widget):
-            # Sort-Key function
-            return translate("SettingsPageName", widget.Name)
-
-        for page in sorted(CueSettingsRegistry().filter(cue_class), key=sk):
+        for page in sorted(
+            CueSettingsRegistry().filter(cue_class), key=cue_page_sort_key
+        ):
             if issubclass(page, CuePageMixin):
                 settings_widget = page(cue_class)
             else:

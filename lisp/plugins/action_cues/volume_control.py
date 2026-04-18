@@ -131,6 +131,7 @@ class VolumeControl(Cue):
 
 class VolumeSettings(SettingsPage):
     Name = QT_TRANSLATE_NOOP("SettingsPageName", "Volume Settings")
+    SortOrder = 30
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)

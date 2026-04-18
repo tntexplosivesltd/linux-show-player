@@ -68,6 +68,7 @@ class SeekCue(Cue):
 
 class SeekCueSettings(SettingsPage):
     Name = QT_TRANSLATE_NOOP("SettingsPageName", "Seek Settings")
+    SortOrder = 30
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)

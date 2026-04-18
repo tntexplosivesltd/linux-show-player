@@ -24,6 +24,11 @@ from lisp.ui.widgets.pagestreewidget import PagesTreeWidget
 
 
 class SettingsPage(QWidget):
+    # Canonical tab-row position; lower values sort earlier. Pages that do
+    # not override get 1000, placing them after all canonically-ordered
+    # tabs with an alphabetical-by-Name tiebreaker.
+    SortOrder = 1000
+
     def loadSettings(self, settings):
         """Load existing settings value into the widget
 

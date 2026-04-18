@@ -36,6 +36,7 @@ from lisp.ui.ui_utils import translate
 
 class TimecodeSettings(CueSettingsPage):
     Name = QT_TRANSLATE_NOOP("SettingsPageName", "Timecode")
+    SortOrder = 80
 
     def __init__(self, cueType, **kwargs):
         super().__init__(cueType, **kwargs)

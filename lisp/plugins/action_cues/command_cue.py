@@ -125,6 +125,7 @@ class CommandCue(Cue):
 
 class CommandCueSettings(SettingsPage):
     Name = QT_TRANSLATE_NOOP("SettingsPageName", "Command")
+    SortOrder = 30
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

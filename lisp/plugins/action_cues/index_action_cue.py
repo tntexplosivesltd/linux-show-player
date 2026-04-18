@@ -73,6 +73,7 @@ class IndexActionCue(Cue):
 
 class IndexActionCueSettings(SettingsPage):
     Name = QT_TRANSLATE_NOOP("SettingsPageName", "Action Settings")
+    SortOrder = 30
 
     DEFAULT_SUGGESTION = translate("IndexActionCue", "No suggestion")
 

@@ -32,6 +32,7 @@ from lisp.ui.ui_utils import translate
 
 class MediaCueSettings(SettingsPage):
     Name = QT_TRANSLATE_NOOP("SettingsPageName", "Media Cue")
+    SortOrder = 60
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)

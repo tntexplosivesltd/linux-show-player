@@ -487,6 +487,7 @@ class GroupCue(Cue):
 
 class GroupCueSettings(SettingsPage):
     Name = QT_TRANSLATE_NOOP("SettingsPageName", "Group Settings")
+    SortOrder = 30
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)

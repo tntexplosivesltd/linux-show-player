@@ -174,6 +174,7 @@ COL_FADE = 3
 
 class OscCueSettings(SettingsPage):
     Name = QT_TRANSLATE_NOOP("Cue Name", "OSC Settings")
+    SortOrder = 30
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
