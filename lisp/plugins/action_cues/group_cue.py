@@ -57,6 +57,7 @@ class GroupCue(Cue):
     group_mode = Property(default="parallel")
     loop = Property(default=False)
     crossfade = Property(default=0.0)
+    shuffle = Property(default=False)
     icon = Property(default="cue-group")
     collapsed = Property(default=False)
 

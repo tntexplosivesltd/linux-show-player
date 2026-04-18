@@ -62,6 +62,9 @@ class TestGroupCueDefaults:
     def test_default_collapsed_false(self, group):
         assert group.collapsed is False
 
+    def test_default_shuffle_false(self, group):
+        assert group.shuffle is False
+
 
 class TestResolveChildren:
     def test_resolves_existing_children(self, group, mock_app):
