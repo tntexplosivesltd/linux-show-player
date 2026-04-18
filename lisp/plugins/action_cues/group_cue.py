@@ -476,6 +476,11 @@ class GroupCueSettings(SettingsPage):
             translate("GroupCue", "Loop"), self.loopCheck
         )
 
+        self.shuffleCheck = QCheckBox(self.group)
+        self.group.layout().addRow(
+            translate("GroupCue", "Shuffle"), self.shuffleCheck
+        )
+
         self.modeCombo.currentIndexChanged.connect(
             self._mode_changed
         )
@@ -491,6 +496,7 @@ class GroupCueSettings(SettingsPage):
         is_playlist = self.modeCombo.currentData() == "playlist"
         self.crossfadeSpin.setEnabled(is_playlist)
         self.loopCheck.setEnabled(is_playlist)
+        self.shuffleCheck.setEnabled(is_playlist)
 
     def enableCheck(self, enabled):
         self.setGroupEnabled(self.group, enabled)
@@ -503,6 +509,7 @@ class GroupCueSettings(SettingsPage):
 
         self.crossfadeSpin.setValue(settings.get("crossfade", 0.0))
         self.loopCheck.setChecked(settings.get("loop", False))
+        self.shuffleCheck.setChecked(settings.get("shuffle", False))
         self._mode_changed(self.modeCombo.currentIndex())
 
     def getSettings(self):
@@ -511,6 +518,7 @@ class GroupCueSettings(SettingsPage):
                 "group_mode": self.modeCombo.currentData(),
                 "crossfade": self.crossfadeSpin.value(),
                 "loop": self.loopCheck.isChecked(),
+                "shuffle": self.shuffleCheck.isChecked(),
             }
         return {}
 
