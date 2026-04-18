@@ -228,8 +228,8 @@ class TestGeneralTabStructure:
         assert "Description/Note" in titles
         assert "Color" in titles
         assert "Set Font Size" in titles
-        assert "Start action" in titles
-        assert "Stop action" in titles
+        assert "Default Start action" in titles
+        assert "Default Stop action" in titles
         assert "Fade In" in titles
         assert "Fade Out" in titles
         assert "Exclusive" in titles

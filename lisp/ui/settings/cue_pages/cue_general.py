@@ -63,14 +63,14 @@ class CueGeneralSettingsPage(CueSettingsPage):
         # `xxxGroup.isCheckable()`/`isEnabled()` still work, but the chrome
         # disappears so the inspector reads as a single dense form.
         grid = QGridLayout(self)
-        grid.setContentsMargins(8, 8, 8, 8)
+        grid.setContentsMargins(8, 4, 8, 4)
         grid.setHorizontalSpacing(12)
-        grid.setVerticalSpacing(6)
+        grid.setVerticalSpacing(2)
 
         # ---- Column 0: behaviour + fade ------------------------------
         self.startActionGroup = self._makeFlatGroup()
         self.startActionGroup.setLayout(QHBoxLayout())
-        self.startActionGroup.layout().setContentsMargins(0, 14, 0, 0)
+        self.startActionGroup.layout().setContentsMargins(0, 0, 0, 0)
 
         self.startActionCombo = CueActionComboBox(
             {CueAction.Start, CueAction.FadeInStart}.intersection(
@@ -82,15 +82,11 @@ class CueGeneralSettingsPage(CueSettingsPage):
         self.startActionCombo.setEnabled(self.startActionCombo.count() > 1)
         self.startActionGroup.layout().addWidget(self.startActionCombo)
 
-        self.startActionLabel = QLabel(self.startActionGroup)
-        self.startActionLabel.setAlignment(Qt.AlignCenter)
-        self.startActionGroup.layout().addWidget(self.startActionLabel, 1)
-
         grid.addWidget(self.startActionGroup, 0, 0)
 
         self.stopActionGroup = self._makeFlatGroup()
         self.stopActionGroup.setLayout(QHBoxLayout())
-        self.stopActionGroup.layout().setContentsMargins(0, 14, 0, 0)
+        self.stopActionGroup.layout().setContentsMargins(0, 0, 0, 0)
 
         self.stopActionCombo = CueActionComboBox(
             {
@@ -108,20 +104,17 @@ class CueGeneralSettingsPage(CueSettingsPage):
         self.stopActionCombo.setEnabled(self.stopActionCombo.count() > 1)
         self.stopActionGroup.layout().addWidget(self.stopActionCombo)
 
-        self.stopActionLabel = QLabel(self.stopActionGroup)
-        self.stopActionLabel.setAlignment(Qt.AlignCenter)
-        self.stopActionGroup.layout().addWidget(self.stopActionLabel, 1)
-
         grid.addWidget(self.stopActionGroup, 1, 0)
 
         self.fadeInGroup = self._makeFlatGroup()
         self.fadeInGroup.setEnabled(CueAction.FadeInStart in cueType.CueActions)
         self.fadeInGroup.setLayout(QHBoxLayout())
-        self.fadeInGroup.layout().setContentsMargins(0, 14, 0, 0)
+        self.fadeInGroup.layout().setContentsMargins(0, 0, 0, 0)
 
         self.fadeInEdit = FadeEdit(
             self.fadeInGroup, mode=FadeComboBox.Mode.FadeIn
         )
+        self._stripDurationLabel(self.fadeInEdit)
         self.fadeInGroup.layout().addWidget(self.fadeInEdit)
 
         grid.addWidget(self.fadeInGroup, 2, 0)
@@ -132,11 +125,12 @@ class CueGeneralSettingsPage(CueSettingsPage):
             or CueAction.FadeOutStop in cueType.CueActions
         )
         self.fadeOutGroup.setLayout(QHBoxLayout())
-        self.fadeOutGroup.layout().setContentsMargins(0, 14, 0, 0)
+        self.fadeOutGroup.layout().setContentsMargins(0, 0, 0, 0)
 
         self.fadeOutEdit = FadeEdit(
             self.fadeOutGroup, mode=FadeComboBox.Mode.FadeOut
         )
+        self._stripDurationLabel(self.fadeOutEdit)
         self.fadeOutGroup.layout().addWidget(self.fadeOutEdit)
 
         grid.addWidget(self.fadeOutGroup, 3, 0)
@@ -144,7 +138,7 @@ class CueGeneralSettingsPage(CueSettingsPage):
         # ---- Column 1: identity --------------------------------------
         self.cueNameGroup = self._makeFlatGroup()
         self.cueNameGroup.setLayout(QHBoxLayout())
-        self.cueNameGroup.layout().setContentsMargins(0, 14, 0, 0)
+        self.cueNameGroup.layout().setContentsMargins(0, 0, 0, 0)
 
         self.cueIconPreview = QLabel(self.cueNameGroup)
         self.cueNameGroup.layout().addWidget(self.cueIconPreview)
@@ -160,7 +154,7 @@ class CueGeneralSettingsPage(CueSettingsPage):
 
         self.cueDescriptionGroup = self._makeFlatGroup()
         self.cueDescriptionGroup.setLayout(QHBoxLayout())
-        self.cueDescriptionGroup.layout().setContentsMargins(0, 14, 0, 0)
+        self.cueDescriptionGroup.layout().setContentsMargins(0, 0, 0, 0)
         self.cueDescriptionGroup.setSizePolicy(
             QSizePolicy.Expanding, QSizePolicy.Expanding
         )
@@ -179,7 +173,7 @@ class CueGeneralSettingsPage(CueSettingsPage):
         # ---- Column 2: appearance + exclusive ------------------------
         self.colorGroup = self._makeFlatGroup()
         self.colorGroup.setLayout(QHBoxLayout())
-        self.colorGroup.layout().setContentsMargins(0, 14, 0, 0)
+        self.colorGroup.layout().setContentsMargins(0, 0, 0, 0)
 
         self.colorBButton = ColorButton(self.colorGroup)
         self.colorFButton = ColorButton(self.colorGroup)
@@ -190,7 +184,7 @@ class CueGeneralSettingsPage(CueSettingsPage):
 
         self.fontSizeGroup = self._makeFlatGroup()
         self.fontSizeGroup.setLayout(QHBoxLayout())
-        self.fontSizeGroup.layout().setContentsMargins(0, 14, 0, 0)
+        self.fontSizeGroup.layout().setContentsMargins(0, 0, 0, 0)
 
         self.fontSizeSpin = QSpinBox(self.fontSizeGroup)
         self.fontSizeSpin.setValue(QLabel().fontInfo().pointSize())
@@ -209,7 +203,7 @@ class CueGeneralSettingsPage(CueSettingsPage):
 
         self.exclusiveGroup = self._makeFlatGroup()
         self.exclusiveGroup.setLayout(QVBoxLayout())
-        self.exclusiveGroup.layout().setContentsMargins(0, 14, 0, 0)
+        self.exclusiveGroup.layout().setContentsMargins(0, 0, 0, 0)
 
         self.exclusiveCheckBox = QCheckBox(self.exclusiveGroup)
         self.exclusiveGroup.layout().addWidget(self.exclusiveCheckBox)
@@ -232,11 +226,21 @@ class CueGeneralSettingsPage(CueSettingsPage):
         group = QGroupBox()
         group.setFlat(True)
         group.setStyleSheet(
-            "QGroupBox { border: 0; margin-top: 14px; padding: 0; }"
+            "QGroupBox { border: 0; margin-top: 1.1em; padding: 0; }"
             "QGroupBox::title { subcontrol-origin: margin;"
             " subcontrol-position: top left; padding: 0; }"
         )
         return group
+
+    @staticmethod
+    def _stripDurationLabel(fadeEdit):
+        """Drop the per-FadeEdit 'Duration (sec):' caption and reclaim
+        its grid column. The owning group title ('Fade In' / 'Fade Out')
+        already names the control, and removing the inner label collapses
+        a redundant text column so the spinbox sits flush with the curve
+        picker beneath it."""
+        fadeEdit.fadeDurationLabel.hide()
+        fadeEdit.layout().setColumnStretch(0, 0)
 
     def retranslateUi(self):
         self.cueNameGroup.setTitle(
@@ -265,14 +269,10 @@ class CueGeneralSettingsPage(CueSettingsPage):
             )
         )
         self.startActionGroup.setTitle(
-            translate("CueSettings", "Start action")
+            translate("CueSettings", "Default Start action")
         )
-        self.startActionLabel.setText(
-            translate("CueSettings", "Default action to start the cue")
-        )
-        self.stopActionGroup.setTitle(translate("CueSettings", "Stop action"))
-        self.stopActionLabel.setText(
-            translate("CueSettings", "Default action to stop the cue")
+        self.stopActionGroup.setTitle(
+            translate("CueSettings", "Default Stop action")
         )
         self.fadeInGroup.setTitle(translate("FadeSettings", "Fade In"))
         self.fadeOutGroup.setTitle(translate("FadeSettings", "Fade Out"))
