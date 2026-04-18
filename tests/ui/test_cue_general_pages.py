@@ -198,6 +198,29 @@ class TestCueGeneralFadeGating:
         assert not page.fadeInGroup.isEnabled()
         assert not page.fadeOutGroup.isEnabled()
 
+    def test_enable_check_does_not_re_enable_disabled_fade_groups(
+        self, qtbot
+    ):
+        """Multi-edit mode (`enableCheck(True)`) must NOT re-enable fade
+        groups that were construction-time disabled because the cue type
+        lacks FadeInStart / FadeOutStop actions. ``setEnabled(False)``
+        and ``setCheckable`` live on independent axes; a regression that
+        reset one via the other would silently leak fade settings for
+        cues that cannot actually fade."""
+        page = CueGeneralSettingsPage(_StubCueNoFades)
+        qtbot.addWidget(page)
+
+        page.enableCheck(True)
+
+        assert not page.fadeInGroup.isEnabled()
+        assert not page.fadeOutGroup.isEnabled()
+        # And getSettings must still exclude fade keys.
+        result = page.getSettings()
+        assert "fadein_type" not in result
+        assert "fadein_duration" not in result
+        assert "fadeout_type" not in result
+        assert "fadeout_duration" not in result
+
 
 class TestCueTimingPageRoundTrip:
     def test_round_trip_preserves_every_key(self, qtbot):

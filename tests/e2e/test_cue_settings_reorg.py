@@ -202,8 +202,10 @@ def test_2_general_timing_roundtrip(t):
         "pre_wait": 1.25,
         "post_wait": 2.75,
         "next_action": "DoNothing",
-        "default_start_action": 0,  # Default
-        "default_stop_action": 0,
+        # Use real CueAction string values — "Default" (the enum's 0
+        # value) rounds-trips vacuously because every cue starts there.
+        "default_start_action": "FadeInStart",
+        "default_stop_action": "FadeOutStop",
         "fadein_type": "Linear",
         "fadein_duration": 1.5,
         "fadeout_type": "Quadratic",
@@ -300,6 +302,70 @@ def test_3_exclusive_and_icon_roundtrip(t):
     )
 
 
+def test_4_groupcue_general_roundtrip(t):
+    """Same General/Timing keys must survive on a GroupCue — it
+    inherits the merged page via the Cue base class, so this
+    protects against regressions in subclass hook-up."""
+    print("\n=== Test 4: GroupCue General/Timing round-trip ===")
+
+    for cue in call("cue.list"):
+        call("cue.remove", {"id": cue["id"]})
+    time.sleep(0.2)
+
+    properties = {
+        "name": "Group RoundTrip",
+        "description": "group desc",
+        "pre_wait": 0.5,
+        "post_wait": 1.5,
+        "next_action": "DoNothing",
+        "fadein_type": "Linear",
+        "fadein_duration": 0.75,
+        "fadeout_type": "Linear",
+        "fadeout_duration": 0.75,
+    }
+
+    call("cue.add", {
+        "type": "GroupCue",
+        "properties": properties,
+    })
+    time.sleep(0.3)
+
+    cues = call("cue.list")
+    t.check("4: cue created", len(cues) == 1)
+    if not cues:
+        return
+
+    pre_id = cues[0]["id"]
+    snapshot = {k: cue_prop(pre_id, k) for k in properties}
+
+    call("session.save", {"path": SAVE_PATH})
+    _relaunch_lisp_with(SAVE_PATH)
+
+    cues = call("cue.list")
+    t.check("4: cue present after restart", len(cues) == 1)
+    if len(cues) != 1:
+        return
+
+    t.check(
+        "4: type preserved as GroupCue",
+        cues[0]["_type_"] == "GroupCue",
+    )
+
+    post_id = cues[0]["id"]
+    for key, original in snapshot.items():
+        actual = cue_prop(post_id, key)
+        ok = (
+            abs(actual - original) < 1e-6
+            if isinstance(original, float)
+            else actual == original
+        )
+        t.check(
+            f"4: {key} preserved "
+            f"(before={original!r}, after={actual!r})",
+            ok,
+        )
+
+
 # ── Suite entry point ─────────────────────────────────────────
 
 def run_tests(t):
@@ -317,6 +383,11 @@ def run_tests(t):
         test_3_exclusive_and_icon_roundtrip(t)
     except Exception as e:
         t.check(f"Test 3 error: {e}", False)
+
+    try:
+        test_4_groupcue_general_roundtrip(t)
+    except Exception as e:
+        t.check(f"Test 4 error: {e}", False)
 
     stop_all()
 

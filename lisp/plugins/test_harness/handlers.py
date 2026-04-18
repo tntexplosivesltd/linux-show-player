@@ -740,27 +740,18 @@ def register_all(dispatcher, app, signal_manager):
             raise AppError("cue_type is required")
 
         registry = CueSettingsRegistry()
-        # Find the Cue subclass whose __name__ matches the request.
-        cue_class = None
-        for ref_class in registry.ref_classes():
-            if ref_class.__name__ == cue_type:
-                cue_class = ref_class
-                break
+        # Resolve via the CueFactory: it stores every cue class keyed
+        # by type-name (the class itself is the factory callable in
+        # practice), so this is O(1) and doesn't require instantiating
+        # anything off the main thread.
+        factory_registry = app.cue_factory._CueFactory__registry
+        cue_class = factory_registry.get(cue_type)
         if cue_class is None:
-            # Fall back to walking the factory so we can resolve
-            # leaf cue types (e.g. StopAll) that don't appear as a
-            # ref_class themselves — their pages are inherited from Cue.
-            for registered in app.cue_factory.registered_types():
-                if registered == cue_type:
-                    # Instantiate briefly to discover the class, then
-                    # discard. Safe: Cue constructors are cheap.
-                    try:
-                        tmp = app.cue_factory.create_cue(cue_type)
-                        cue_class = type(tmp)
-                    except Exception as exc:
-                        raise AppError(
-                            f"Cannot resolve cue type: {cue_type} ({exc})"
-                        )
+            # Fall back to ref_classes for base types (e.g. "Cue",
+            # "MediaCue") that are not leaf factory entries.
+            for ref_class in registry.ref_classes():
+                if ref_class.__name__ == cue_type:
+                    cue_class = ref_class
                     break
         if cue_class is None:
             raise AppError(f"Unknown cue type: {cue_type}")
