@@ -42,8 +42,10 @@ from lisp.ui.settings.app_pages.cue import CueAppSettings
 from lisp.ui.settings.app_pages.general import AppGeneral
 from lisp.ui.settings.app_pages.layouts import LayoutsSettings
 from lisp.ui.settings.app_pages.plugins import PluginsSettings
-from lisp.ui.settings.cue_pages.cue_appearance import Appearance
-from lisp.ui.settings.cue_pages.cue_general import CueGeneralSettingsPage
+from lisp.ui.settings.cue_pages.cue_general import (
+    CueGeneralSettingsPage,
+    CueTimingPage,
+)
 from lisp.ui.settings.cue_pages.media_cue import MediaCueSettings
 from lisp.ui.settings.cue_settings import CueSettingsRegistry
 from lisp.ui.ui_utils import translate
@@ -82,8 +84,8 @@ class Application(metaclass=Singleton):
 
         # Register common cue-settings widgets
         CueSettingsRegistry().add(CueGeneralSettingsPage, Cue)
+        CueSettingsRegistry().add(CueTimingPage, Cue)
         CueSettingsRegistry().add(MediaCueSettings, MediaCue)
-        CueSettingsRegistry().add(Appearance)
 
         # Connect mainWindow actions
         self.__main_window.new_session.connect(self.__new_session_dialog)

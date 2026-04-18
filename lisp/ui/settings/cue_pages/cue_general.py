@@ -16,53 +16,119 @@
 # along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
 from PyQt5.QtCore import QT_TRANSLATE_NOOP, Qt, QTime
+from PyQt5.QtGui import QFontDatabase
 from PyQt5.QtWidgets import (
     QCheckBox,
     QDateTimeEdit,
+    QDialog,
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
+    QPushButton,
+    QScrollArea,
+    QSpinBox,
+    QTextEdit,
     QTimeEdit,
     QVBoxLayout,
+    QWidget,
 )
 
 from lisp.cues.cue import CueAction
-from lisp.ui.settings.pages import (
-    CuePageMixin,
-    CueSettingsPage,
-    SettingsPagesTabWidget,
-)
-from lisp.ui.ui_utils import translate
+from lisp.ui.icons import IconTheme
+from lisp.ui.settings.cue_pages.cue_appearance import IconSelectorDialog
+from lisp.ui.settings.pages import CueSettingsPage
+from lisp.ui.ui_utils import css_to_dict, dict_to_css, translate
 from lisp.ui.widgets import (
     CueActionComboBox,
     CueNextActionComboBox,
+    ColorButton,
     FadeComboBox,
     FadeEdit,
 )
 
 
-class CueGeneralSettingsPage(SettingsPagesTabWidget, CuePageMixin):
-    Name = QT_TRANSLATE_NOOP("SettingsPageName", "Cue")
+class CueGeneralSettingsPage(CueSettingsPage):
+    Name = QT_TRANSLATE_NOOP("SettingsPageName", "General")
+    SortOrder = 10
+    iconName = "music"
 
     def __init__(self, cueType, **kwargs):
         super().__init__(cueType=cueType, **kwargs)
-        self.addPage(CueBehavioursPage(self.cueType))
-        self.addPage(CueWaitsPage(self.cueType))
-        self.addPage(CueFadePage(self.cueType))
-        self.addPage(CueExclusivePage(self.cueType))
-
-
-class CueBehavioursPage(CueSettingsPage):
-    Name = QT_TRANSLATE_NOOP("SettingsPageName", "Behaviours")
-
-    def __init__(self, cueType, **kwargs):
-        super().__init__(cueType, **kwargs)
         self.setLayout(QVBoxLayout())
+        self.layout().setContentsMargins(0, 0, 0, 0)
 
-        # Start-Action
-        self.startActionGroup = QGroupBox(self)
+        self.iconSelectorDialog = None
+
+        # Scroll area hosting every group box — nine group boxes do not
+        # fit within the dialog's 800x510 default without scrolling.
+        self.scrollArea = QScrollArea(self)
+        self.scrollArea.setWidgetResizable(True)
+        self.scrollArea.setFrameShape(QScrollArea.NoFrame)
+        self.layout().addWidget(self.scrollArea)
+
+        self.scrollContents = QWidget(self.scrollArea)
+        self.scrollContents.setLayout(QVBoxLayout())
+        self.scrollArea.setWidget(self.scrollContents)
+
+        contents = self.scrollContents.layout()
+
+        # 1. Cue Name and Icon
+        self.cueNameGroup = QGroupBox(self.scrollContents)
+        self.cueNameGroup.setLayout(QHBoxLayout())
+        contents.addWidget(self.cueNameGroup)
+
+        self.cueIconPreview = QLabel(self.cueNameGroup)
+        self.cueNameGroup.layout().addWidget(self.cueIconPreview)
+
+        self.cueIconButton = QPushButton(self.cueNameGroup)
+        self.cueIconButton.clicked.connect(self.showIconSelector)
+        self.cueNameGroup.layout().addWidget(self.cueIconButton)
+
+        self.cueNameEdit = QLineEdit(self.cueNameGroup)
+        self.cueNameGroup.layout().addWidget(self.cueNameEdit)
+
+        # 2. Description/Note
+        self.cueDescriptionGroup = QGroupBox(self.scrollContents)
+        self.cueDescriptionGroup.setLayout(QHBoxLayout())
+        contents.addWidget(self.cueDescriptionGroup)
+
+        self.cueDescriptionEdit = QTextEdit(self.cueDescriptionGroup)
+        self.cueDescriptionEdit.setAcceptRichText(False)
+        self.cueDescriptionEdit.setFont(
+            QFontDatabase.systemFont(QFontDatabase.FixedFont)
+        )
+        self.cueDescriptionGroup.layout().addWidget(self.cueDescriptionEdit)
+
+        # 3. Color
+        self.colorGroup = QGroupBox(self.scrollContents)
+        self.colorGroup.setLayout(QHBoxLayout())
+        contents.addWidget(self.colorGroup)
+
+        self.colorBButton = ColorButton(self.colorGroup)
+        self.colorFButton = ColorButton(self.colorGroup)
+        self.colorGroup.layout().addWidget(self.colorBButton)
+        self.colorGroup.layout().addWidget(self.colorFButton)
+
+        # 4. Set Font Size
+        self.fontSizeGroup = QGroupBox(self.scrollContents)
+        self.fontSizeGroup.setLayout(QHBoxLayout())
+        contents.addWidget(self.fontSizeGroup)
+
+        self.fontSizeSpin = QSpinBox(self.fontSizeGroup)
+        self.fontSizeSpin.setValue(QLabel().fontInfo().pointSize())
+        self.fontSizeGroup.layout().addWidget(self.fontSizeSpin)
+
+        # Appearance warning — sits beneath the visual-affecting groups.
+        self.warning = QLabel(self.scrollContents)
+        self.warning.setAlignment(Qt.AlignCenter)
+        self.warning.setStyleSheet("color: #FFA500; font-weight: bold")
+        contents.addWidget(self.warning)
+
+        # 5. Start action
+        self.startActionGroup = QGroupBox(self.scrollContents)
         self.startActionGroup.setLayout(QHBoxLayout())
-        self.layout().addWidget(self.startActionGroup)
+        contents.addWidget(self.startActionGroup)
 
         self.startActionCombo = CueActionComboBox(
             {CueAction.Start, CueAction.FadeInStart}.intersection(
@@ -78,10 +144,10 @@ class CueBehavioursPage(CueSettingsPage):
         self.startActionLabel.setAlignment(Qt.AlignCenter)
         self.startActionGroup.layout().addWidget(self.startActionLabel)
 
-        # Stop-Action
-        self.stopActionGroup = QGroupBox(self)
+        # 6. Stop action
+        self.stopActionGroup = QGroupBox(self.scrollContents)
         self.stopActionGroup.setLayout(QHBoxLayout())
-        self.layout().addWidget(self.stopActionGroup)
+        contents.addWidget(self.stopActionGroup)
 
         self.stopActionCombo = CueActionComboBox(
             {
@@ -103,33 +169,166 @@ class CueBehavioursPage(CueSettingsPage):
         self.stopActionLabel.setAlignment(Qt.AlignCenter)
         self.stopActionGroup.layout().addWidget(self.stopActionLabel)
 
-        self.layout().addSpacing(150)
-        self.setEnabled(
-            self.stopActionCombo.isEnabled()
-            and self.startActionCombo.isEnabled()
+        # 7. Fade In
+        self.fadeInGroup = QGroupBox(self.scrollContents)
+        self.fadeInGroup.setEnabled(CueAction.FadeInStart in cueType.CueActions)
+        self.fadeInGroup.setLayout(QHBoxLayout())
+        contents.addWidget(self.fadeInGroup)
+
+        self.fadeInEdit = FadeEdit(
+            self.fadeInGroup, mode=FadeComboBox.Mode.FadeIn
         )
+        self.fadeInGroup.layout().addWidget(self.fadeInEdit)
+
+        # 8. Fade Out
+        self.fadeOutGroup = QGroupBox(self.scrollContents)
+        self.fadeOutGroup.setEnabled(
+            CueAction.FadeOutPause in cueType.CueActions
+            or CueAction.FadeOutStop in cueType.CueActions
+        )
+        self.fadeOutGroup.setLayout(QHBoxLayout())
+        contents.addWidget(self.fadeOutGroup)
+
+        self.fadeOutEdit = FadeEdit(
+            self.fadeOutGroup, mode=FadeComboBox.Mode.FadeOut
+        )
+        self.fadeOutGroup.layout().addWidget(self.fadeOutEdit)
+
+        # 9. Exclusive
+        self.exclusiveGroup = QGroupBox(self.scrollContents)
+        self.exclusiveGroup.setLayout(QVBoxLayout())
+        contents.addWidget(self.exclusiveGroup)
+
+        self.exclusiveCheckBox = QCheckBox(self.exclusiveGroup)
+        self.exclusiveGroup.layout().addWidget(self.exclusiveCheckBox)
+
+        contents.addStretch()
 
         self.retranslateUi()
 
     def retranslateUi(self):
-        # Start-Action
-        self.startActionGroup.setTitle(translate("CueSettings", "Start action"))
+        self.cueNameGroup.setTitle(
+            translate("CueAppearanceSettings", "Cue Name and Icon")
+        )
+        self.cueNameEdit.setText(translate("CueAppearanceSettings", "NoName"))
+        self.cueIconButton.setText(
+            translate("CueAppearanceSettings", "Change icon")
+        )
+        self.cueDescriptionGroup.setTitle(
+            translate("CueAppearanceSettings", "Description/Note")
+        )
+        self.colorGroup.setTitle(translate("CueAppearanceSettings", "Color"))
+        self.colorBButton.setText(
+            translate("CueAppearanceSettings", "Select background color")
+        )
+        self.colorFButton.setText(
+            translate("CueAppearanceSettings", "Select font color")
+        )
+        self.fontSizeGroup.setTitle(
+            translate("CueAppearanceSettings", "Set Font Size")
+        )
+        self.warning.setText(
+            translate(
+                "CueAppearanceSettings", "The appearance depends on the layout"
+            )
+        )
+        self.startActionGroup.setTitle(
+            translate("CueSettings", "Start action")
+        )
         self.startActionLabel.setText(
             translate("CueSettings", "Default action to start the cue")
         )
-
-        # Stop-Action
         self.stopActionGroup.setTitle(translate("CueSettings", "Stop action"))
         self.stopActionLabel.setText(
             translate("CueSettings", "Default action to stop the cue")
         )
+        self.fadeInGroup.setTitle(translate("FadeSettings", "Fade In"))
+        self.fadeOutGroup.setTitle(translate("FadeSettings", "Fade Out"))
+        self.exclusiveGroup.setTitle(translate("CueSettings", "Exclusive"))
+        self.exclusiveCheckBox.setText(
+            translate(
+                "CueSettings",
+                "While playing, prevent other cues from starting",
+            )
+        )
+
+    def showIconSelector(self):
+        if self.iconSelectorDialog is None:
+            self.iconSelectorDialog = IconSelectorDialog(self)
+
+        self.iconSelectorDialog.setSelectedIcon(self.iconName)
+
+        if self.iconSelectorDialog.exec() == QDialog.Accepted:
+            self.iconName = self.iconSelectorDialog.getSelectedIcon("led")
+            self.updateIconPreview()
+
+    def updateIconPreview(self):
+        self.cueIconPreview.setPixmap(
+            IconTheme.get(self.iconName).pixmap(20, 20)
+        )
 
     def enableCheck(self, enabled):
+        self.setGroupEnabled(self.cueNameGroup, enabled)
+        self.setGroupEnabled(self.cueDescriptionGroup, enabled)
+        self.setGroupEnabled(self.colorGroup, enabled)
+        self.setGroupEnabled(self.fontSizeGroup, enabled)
         self.setGroupEnabled(self.startActionGroup, enabled)
         self.setGroupEnabled(self.stopActionGroup, enabled)
+        self.setGroupEnabled(self.fadeInGroup, enabled)
+        self.setGroupEnabled(self.fadeOutGroup, enabled)
+        self.setGroupEnabled(self.exclusiveGroup, enabled)
+
+    def loadSettings(self, settings):
+        if "name" in settings:
+            self.cueNameEdit.setText(settings["name"])
+        if "icon" in settings:
+            self.iconName = settings["icon"]
+            self.updateIconPreview()
+        if "description" in settings:
+            self.cueDescriptionEdit.setPlainText(settings["description"])
+        if "stylesheet" in settings:
+            style = css_to_dict(settings["stylesheet"])
+            if "background" in style:
+                self.colorBButton.setColor(style["background"])
+            if "color" in style:
+                self.colorFButton.setColor(style["color"])
+            if "font-size" in style:
+                # [:-2] strips the trailing "pt"
+                self.fontSizeSpin.setValue(int(style["font-size"][:-2]))
+
+        self.startActionCombo.setCurrentItem(
+            settings.get("default_start_action", "")
+        )
+        self.stopActionCombo.setCurrentItem(
+            settings.get("default_stop_action", "")
+        )
+
+        self.fadeInEdit.setFadeType(settings.get("fadein_type", ""))
+        self.fadeInEdit.setDuration(settings.get("fadein_duration", 0))
+        self.fadeOutEdit.setFadeType(settings.get("fadeout_type", ""))
+        self.fadeOutEdit.setDuration(settings.get("fadeout_duration", 0))
+
+        self.exclusiveCheckBox.setChecked(settings.get("exclusive", False))
 
     def getSettings(self):
         settings = {}
+        style = {}
+
+        if self.isGroupEnabled(self.cueNameGroup):
+            settings["name"] = self.cueNameEdit.text()
+            settings["icon"] = self.iconName
+        if self.isGroupEnabled(self.cueDescriptionGroup):
+            settings["description"] = self.cueDescriptionEdit.toPlainText()
+        if self.isGroupEnabled(self.colorGroup):
+            if self.colorBButton.color() is not None:
+                style["background"] = self.colorBButton.color()
+            if self.colorFButton.color() is not None:
+                style["color"] = self.colorFButton.color()
+        if self.isGroupEnabled(self.fontSizeGroup):
+            style["font-size"] = str(self.fontSizeSpin.value()) + "pt"
+
+        if style:
+            settings["stylesheet"] = dict_to_css(style)
 
         if (
             self.isGroupEnabled(self.startActionGroup)
@@ -142,21 +341,26 @@ class CueBehavioursPage(CueSettingsPage):
             self.isGroupEnabled(self.stopActionGroup)
             and self.stopActionCombo.isEnabled()
         ):
-            settings["default_stop_action"] = self.stopActionCombo.currentItem()
+            settings["default_stop_action"] = (
+                self.stopActionCombo.currentItem()
+            )
+
+        if self.isGroupEnabled(self.fadeInGroup):
+            settings["fadein_type"] = self.fadeInEdit.fadeType()
+            settings["fadein_duration"] = self.fadeInEdit.duration()
+        if self.isGroupEnabled(self.fadeOutGroup):
+            settings["fadeout_type"] = self.fadeOutEdit.fadeType()
+            settings["fadeout_duration"] = self.fadeOutEdit.duration()
+
+        if self.isGroupEnabled(self.exclusiveGroup):
+            settings["exclusive"] = self.exclusiveCheckBox.isChecked()
 
         return settings
 
-    def loadSettings(self, settings):
-        self.startActionCombo.setCurrentItem(
-            settings.get("default_start_action", "")
-        )
-        self.stopActionCombo.setCurrentItem(
-            settings.get("default_stop_action", "")
-        )
 
-
-class CueWaitsPage(CueSettingsPage):
-    Name = QT_TRANSLATE_NOOP("SettingsPageName", "Pre/Post Wait")
+class CueTimingPage(CueSettingsPage):
+    Name = QT_TRANSLATE_NOOP("SettingsPageName", "Timing")
+    SortOrder = 20
 
     def __init__(self, cueType, **kwargs):
         super().__init__(cueType=cueType, **kwargs)
@@ -200,20 +404,19 @@ class CueWaitsPage(CueSettingsPage):
         )
         self.nextActionGroup.layout().addWidget(self.nextActionCombo)
 
+        self.layout().addStretch()
+
         self.retranslateUi()
 
     def retranslateUi(self):
-        # PreWait
         self.preWaitGroup.setTitle(translate("CueSettings", "Pre wait"))
         self.preWaitLabel.setText(
             translate("CueSettings", "Wait before cue execution")
         )
-        # PostWait
         self.postWaitGroup.setTitle(translate("CueSettings", "Post wait"))
         self.postWaitLabel.setText(
             translate("CueSettings", "Wait after cue execution")
         )
-        # NextAction
         self.nextActionGroup.setTitle(translate("CueSettings", "Next action"))
 
     def enableCheck(self, enabled):
@@ -239,114 +442,5 @@ class CueWaitsPage(CueSettingsPage):
             settings["post_wait"] = round(postWaitMs / 1000, 3)
         if self.isGroupEnabled(self.nextActionGroup):
             settings["next_action"] = self.nextActionCombo.currentData()
-
-        return settings
-
-
-class CueFadePage(CueSettingsPage):
-    Name = QT_TRANSLATE_NOOP("SettingsPageName", "Fade In/Out")
-
-    def __init__(self, cueType, **kwargs):
-        super().__init__(cueType, **kwargs)
-        self.setLayout(QVBoxLayout())
-
-        # FadeIn
-        self.fadeInGroup = QGroupBox(self)
-        self.fadeInGroup.setEnabled(CueAction.FadeInStart in cueType.CueActions)
-        self.fadeInGroup.setLayout(QHBoxLayout())
-        self.layout().addWidget(self.fadeInGroup)
-
-        self.fadeInEdit = FadeEdit(
-            self.fadeInGroup, mode=FadeComboBox.Mode.FadeIn
-        )
-        self.fadeInGroup.layout().addWidget(self.fadeInEdit)
-
-        # FadeOut
-        self.fadeOutGroup = QGroupBox(self)
-        self.fadeOutGroup.setEnabled(
-            CueAction.FadeOutPause in cueType.CueActions
-            or CueAction.FadeOutStop in cueType.CueActions
-        )
-        self.fadeOutGroup.setLayout(QHBoxLayout())
-        self.layout().addWidget(self.fadeOutGroup)
-
-        self.fadeOutEdit = FadeEdit(
-            self.fadeOutGroup, mode=FadeComboBox.Mode.FadeOut
-        )
-        self.fadeOutGroup.layout().addWidget(self.fadeOutEdit)
-
-        self.retranslateUi()
-
-    def retranslateUi(self):
-        # FadeIn/Out
-        self.fadeInGroup.setTitle(translate("FadeSettings", "Fade In"))
-        self.fadeOutGroup.setTitle(translate("FadeSettings", "Fade Out"))
-
-    def loadSettings(self, settings):
-        self.fadeInEdit.setFadeType(settings.get("fadein_type", ""))
-        self.fadeInEdit.setDuration(settings.get("fadein_duration", 0))
-        self.fadeOutEdit.setFadeType(settings.get("fadeout_type", ""))
-        self.fadeOutEdit.setDuration(settings.get("fadeout_duration", 0))
-
-    def enableCheck(self, enabled):
-        self.setGroupEnabled(self.fadeInGroup, enabled)
-        self.setGroupEnabled(self.fadeOutGroup, enabled)
-
-    def getSettings(self):
-        settings = {}
-
-        if self.isGroupEnabled(self.fadeInGroup):
-            settings["fadein_type"] = self.fadeInEdit.fadeType()
-            settings["fadein_duration"] = self.fadeInEdit.duration()
-
-        if self.isGroupEnabled(self.fadeOutGroup):
-            settings["fadeout_type"] = self.fadeOutEdit.fadeType()
-            settings["fadeout_duration"] = self.fadeOutEdit.duration()
-
-        return settings
-
-
-class CueExclusivePage(CueSettingsPage):
-    Name = QT_TRANSLATE_NOOP("SettingsPageName", "Exclusive")
-
-    def __init__(self, cueType, **kwargs):
-        super().__init__(cueType, **kwargs)
-        self.setLayout(QVBoxLayout())
-
-        self.exclusiveGroup = QGroupBox(self)
-        self.exclusiveGroup.setLayout(QVBoxLayout())
-        self.layout().addWidget(self.exclusiveGroup)
-
-        self.exclusiveCheckBox = QCheckBox(self.exclusiveGroup)
-        self.exclusiveGroup.layout().addWidget(self.exclusiveCheckBox)
-
-        self.layout().addStretch()
-
-        self.retranslateUi()
-
-    def retranslateUi(self):
-        self.exclusiveGroup.setTitle(
-            translate("CueSettings", "Exclusive")
-        )
-        self.exclusiveCheckBox.setText(
-            translate(
-                "CueSettings",
-                "While playing, prevent other cues from starting",
-            )
-        )
-
-    def enableCheck(self, enabled):
-        self.setGroupEnabled(self.exclusiveGroup, enabled)
-
-    def loadSettings(self, settings):
-        self.exclusiveCheckBox.setChecked(
-            settings.get("exclusive", False)
-        )
-
-    def getSettings(self):
-        settings = {}
-
-        if self.isGroupEnabled(self.exclusiveGroup):
-            settings["exclusive"] = self.exclusiveCheckBox.isChecked()
 
         return settings
