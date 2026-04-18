@@ -349,3 +349,56 @@ class TestCollapsedProperty:
         g = GroupCue(mock_app)
         props = g.properties(defaults=False)
         assert "collapsed" not in props
+
+
+class TestPlaylistShuffle:
+    def test_shuffle_reorders_children_on_start(
+        self, group, mock_app
+    ):
+        """Starting a stopped shuffle playlist should randomize
+        the children list."""
+        ids = [f"c{i}" for i in range(10)]
+        children = {cid: _make_child(cid) for cid in ids}
+        mock_app.cue_model.get = lambda cid: children.get(cid)
+        group.children = list(ids)
+        group.group_mode = "playlist"
+        group.shuffle = True
+
+        group.__start__(fade=False)
+
+        # With 10 children the probability of the shuffle
+        # producing the original order is 1/10! ≈ 0.00003%
+        assert group.children != ids
+
+    def test_shuffle_does_not_reorder_on_resume(
+        self, group, mock_app
+    ):
+        """Resuming a paused shuffle playlist must NOT re-shuffle."""
+        c1 = _make_child("c1", state=CueState.Stop)
+        c2 = _make_child("c2", state=CueState.Pause)
+        mock_app.cue_model.get = lambda cid: {
+            "c1": c1, "c2": c2
+        }.get(cid)
+        group.children = ["c1", "c2"]
+        group.group_mode = "playlist"
+        group.shuffle = True
+        group._playlist_index = 1
+
+        group.__start__(fade=False)
+
+        # Children order unchanged — we resumed, not restarted
+        assert group.children == ["c1", "c2"]
+        assert group._playlist_index == 1
+
+    def test_no_shuffle_when_flag_false(self, group, mock_app):
+        """With shuffle=False, children order is preserved."""
+        ids = ["c1", "c2", "c3"]
+        children = {cid: _make_child(cid) for cid in ids}
+        mock_app.cue_model.get = lambda cid: children.get(cid)
+        group.children = list(ids)
+        group.group_mode = "playlist"
+        group.shuffle = False
+
+        group.__start__(fade=False)
+
+        assert group.children == ["c1", "c2", "c3"]

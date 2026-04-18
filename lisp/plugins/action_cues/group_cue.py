@@ -16,6 +16,7 @@
 # along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
 import logging
+import random
 from threading import Lock
 
 from PyQt5.QtCore import QT_TRANSLATE_NOOP, Qt
@@ -142,6 +143,9 @@ class GroupCue(Cue):
                 and children[idx].state & CueState.IsPaused
             )
             if not resuming:
+                if self.shuffle:
+                    random.shuffle(self.children)
+                    children = self._resolve_children()
                 idx = 0
                 self._playlist_index = 0
             self._connected_children = set()
