@@ -15,7 +15,7 @@
 # You should have received a copy of the GNU General Public License
 # along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
-from PyQt5.QtCore import QT_TRANSLATE_NOOP, Qt, QTime
+from PyQt5.QtCore import QT_TRANSLATE_NOOP, Qt, QSize, QTime
 from PyQt5.QtGui import QFontDatabase
 from PyQt5.QtWidgets import (
     QCheckBox,
@@ -140,10 +140,15 @@ class CueGeneralSettingsPage(CueSettingsPage):
         self.cueNameGroup.setLayout(QHBoxLayout())
         self.cueNameGroup.layout().setContentsMargins(0, 0, 0, 0)
 
-        self.cueIconPreview = QLabel(self.cueNameGroup)
-        self.cueNameGroup.layout().addWidget(self.cueIconPreview)
-
+        # The button itself shows the current icon — clicking it opens
+        # the picker. A separate preview label would be redundant since
+        # the icon-bearing button already tells the user "this is your
+        # icon, and you can change it."
         self.cueIconButton = QPushButton(self.cueNameGroup)
+        self.cueIconButton.setIconSize(QSize(20, 20))
+        self.cueIconButton.setToolTip(
+            translate("CueAppearanceSettings", "Change icon")
+        )
         self.cueIconButton.clicked.connect(self.showIconSelector)
         self.cueNameGroup.layout().addWidget(self.cueIconButton)
 
@@ -253,7 +258,7 @@ class CueGeneralSettingsPage(CueSettingsPage):
             translate("CueAppearanceSettings", "Cue Name and Icon")
         )
         self.cueNameEdit.setText(translate("CueAppearanceSettings", "NoName"))
-        self.cueIconButton.setText(
+        self.cueIconButton.setToolTip(
             translate("CueAppearanceSettings", "Change icon")
         )
         self.cueDescriptionGroup.setTitle(
@@ -301,9 +306,7 @@ class CueGeneralSettingsPage(CueSettingsPage):
             self.updateIconPreview()
 
     def updateIconPreview(self):
-        self.cueIconPreview.setPixmap(
-            IconTheme.get(self.iconName).pixmap(20, 20)
-        )
+        self.cueIconButton.setIcon(IconTheme.get(self.iconName))
 
     def enableCheck(self, enabled):
         self.setGroupEnabled(self.cueNameGroup, enabled)
