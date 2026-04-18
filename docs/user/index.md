@@ -25,16 +25,22 @@ the goal is to provide a complete playback software for musical plays, theater s
 
 Here some functionality offered by LiSP:
 
-* List layout
+* List layout with collapsible cue groups
 * Cart layout (buttons) for touchscreens
 * Undo/Redo changes
 * Concurrent cues playback
+* Video playback with dedicated projection window
+* Still image display and slideshows via cue groups
+* Cue groups: parallel and playlist modes with crossfade
+* Exclusive mode to prevent overlapping playback
+* Playback monitor window for booth-wide time display
 * Pre/Post wait
 * Realtime sound effects: equalization, pitch shift, speed control, compression
+* Video fade-to-black via alpha channel
 * Peak and ReplayGain normalization
 * Send/Receive MIDI and OSC
 * Multi-language support
-* Can play (almost) any kind of media file
+* Can play (almost) any kind of media file (audio, video, images)
 
 ## Project Status
 

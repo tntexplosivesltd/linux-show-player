@@ -23,9 +23,12 @@ Settings and operations related to the current session
 
 Add/Edit cues (accessible right-clicking on empty areas of the layout)
 
-* **Integration cues:** Add cus that communicate with different protocols (MIDI, OSC).
-* **Media cues:** Add media-cues.
-* **Action cues:** Add different types of action-cues.
+* **Integration cues:** Add cues that communicate with different protocols (MIDI, OSC).
+* **Media cues:** Add media cues:
+    * **Audio cue (from file):** ``[CTRL+M]`` Add an audio playback cue
+    * **Video cue (from file):** ``[CTRL+SHIFT+M]`` Add a video playback cue (audio + video)
+    * **Image cue (from file):** ``[CTRL+SHIFT+I]`` Add a still image display cue
+* **Action cues:** Add different types of action cues.
 * **Misc cues:** Add misc cues.
 * **Undo:** ``[CTRL+Z]`` Undo the last action (the last action is shown in the bottom of the window).
 * **Redo:** ``[CTRL+Y]`` Redo the last undone action.
@@ -57,12 +60,16 @@ This menu give access to layout functionality and display options for the curren
 * **Show index column:** Show / hide the cue numbers.
 * **Auto-select next cue:** If enabled the next cue is selected automatically.
 * **Selection mode:** ``[CTRL+SHIFT+E]`` Enable multi-selection (for editing).
+* **Collapse all groups:** ``[CTRL+SHIFT+[]`` Collapse all group cues in the list.
+* **Expand all groups:** ``[CTRL+SHIFT+]]`` Expand all group cues in the list.
 * **Disable GO Key while playing:** Disable the "GO" keyboard shortcut while there are playing cues.
 * **Show resize handles:** Enable handles that allow to customize the size of various panels.
 * **Restore default size:** Reset the size of panels to their defaults.
 
 ## Tools
 
+* **Playback Monitor:** ``[CTRL+SHIFT+M]`` Toggle a standalone window showing elapsed and remaining time for the currently playing cue [[see more]](plugins/playback_monitor.md).
+* **Video Monitor:** Toggle a confidence monitor window that mirrors the projection output on the operator's screen. *(Only available when the GStreamer backend is loaded.)*
 * **ReplayGain/Normalization:** Volume normalization [[see more]](plugins/replaygain.md).
 * **Synchronization:** Keep multiple "live" sessions in sync [[see more]](plugins/synchronization.md).
 * **Rename Cues:** Rename multiple cues at once [[see more]](plugins/cue_rename.md).

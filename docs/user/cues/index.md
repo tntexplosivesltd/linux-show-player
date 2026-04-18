@@ -118,6 +118,20 @@ Given its non-sequential nature, the _Cart Layout_ does not support the “Next 
     * **Duration:** How long the fade should last before reaching a minimum value
     * **Curve:** How the value should decrease in time
 
+### Exclusive
+
+Exclusive mode prevents multiple cues from playing simultaneously. When a cue with exclusive mode
+enabled is running, all other cues are blocked from starting until it stops.
+
+* **Exclusive:** When checked, this cue will block other cues from starting while it is running.
+  Other running cues are also prevented from starting when any exclusive cue is active.
+
+This is useful for scenarios where overlapping playback would cause problems — for example, ensuring
+only one background music track plays at a time, or preventing sound effects from overlapping
+with announcements.
+
+Exclusive mode is configured per-cue in the **Exclusive** tab of the cue settings dialog.
+
 ## Editing multiple cues
 
 While multiple cues are selected, you can use the `Edit > Edit selected media`

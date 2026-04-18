@@ -44,6 +44,18 @@ or `Double-Click` the cue.
 Cues can be selected/deselected with `Right-Click > Select`, `CTRL+Space` or
 `CTRL+Click`
 
+### Cue Groups
+
+Group cues and their children are displayed as a tree hierarchy. Groups show an expand/collapse
+arrow that hides or reveals child cues. See [Group Cue](cues/action_cues.md#group-cue) for
+details on creating groups and their playback modes.
+
+* **Collapse/expand:** Click the arrow on a group row
+* **Collapse all:** `Layout > Collapse all groups` or ``[CTRL+SHIFT+[]``
+* **Expand all:** `Layout > Expand all groups` or ``[CTRL+SHIFT+]]``
+* **Auto-expand on play:** Groups automatically expand when they start playing (configurable)
+* Collapse state is saved with the session
+
 ### Move and Copy Cues
 
 * **Move:** cues can be moved with a simple `Drag&Drop`
@@ -96,7 +108,8 @@ This can be changed per-show via the `Layout` menu.
 * **Show accurate time:** show/hide tens of seconds for running cues (right panel)
 * **Show seek-bars:** show/hide seek bars for running cues (right panel)
 * **Auto-select next cue:** if enabled the next cue will be selected automatically
-* **Enable selection modo:** if enabled "selection" mode will be active by default
+* **Enable selection mode:** if enabled "selection" mode will be active by default
+* **Auto-expand groups on play:** if enabled, group cues automatically expand when they start playing
 
 ### Behaviours
 

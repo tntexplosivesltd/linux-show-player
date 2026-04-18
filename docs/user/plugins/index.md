@@ -13,4 +13,5 @@ replaygain
 cue_rename
 timecode
 synchronization
+playback_monitor
 ```

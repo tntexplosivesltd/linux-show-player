@@ -4,9 +4,19 @@ Actions cues allows to control other cues status or parameters.
 
 ## Group Cue
 
-This cue groups other cues together, providing two playback modes. Child cues are visually indented in the list layout and are triggered by the group rather than by the GO button.
+This cue groups other cues together, providing two playback modes. Child cues are visually nested under the group in the list layout and are triggered by the group rather than by the GO button.
 
 To create a group, select multiple cues in the list layout, then right-click and choose **Group selected**. To dissolve a group, right-click the group cue (or any of its children) and choose **Ungroup**.
+
+### Collapsible Groups (List Layout)
+
+In the list layout, groups can be collapsed and expanded by clicking the arrow next to the group name. This hides or reveals the child cues, keeping the cue list tidy during complex shows.
+
+* **Collapse/expand a group:** Click the expand arrow on the group row
+* **Collapse all groups:** `Layout > Collapse all groups` or ``[CTRL+SHIFT+[]``
+* **Expand all groups:** `Layout > Expand all groups` or ``[CTRL+SHIFT+]]``
+* **Auto-expand on play:** When a group starts playing, it automatically expands to show its children (configurable in layout settings)
+* **Persistent state:** Collapse/expand state is saved with the session
 
 ### Options (Group Settings)
 

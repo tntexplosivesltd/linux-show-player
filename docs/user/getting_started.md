@@ -14,7 +14,7 @@ A show, or session, is the container of everything you'll build inside the appli
 ## Cues
 
 At the heart of every show, are the **cues**, used to execute specific actions,
-such as playing sounds, sending MIDI messages, controlling other cues and so on.
+such as playing sounds, displaying video or images, sending MIDI messages, controlling other cues and so on.
 
 Each individual cue allows great customization of its behaviours.
 
