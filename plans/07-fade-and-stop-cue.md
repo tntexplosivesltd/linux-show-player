@@ -4,7 +4,7 @@
 
 **Goal:** Add a `StopCue` action cue ("Fade & Stop") that targets a single cue (including `GroupCue` for cascading), runs its own `live_volume` + `live_alpha` faders over a user-supplied duration, then dispatches `Stop`/`Pause`/`Interrupt`.
 
-**Architecture:** New file `lisp/plugins/action_cues/stop_cue.py` mirroring `volume_control.py`. Reuses LiSP's existing fader infrastructure (`Fader` from `lisp/core/fader.py`) and the `get_fader()` API on `Volume` and `VideoAlpha` GStreamer elements. No core changes — the feature composes existing pieces. A coordinator method decorated with `@async_function` spawns one sub-thread per fader, joins them, then calls `target.execute(action)` from the worker thread (matching `VolumeControl.__fade` threading semantics).
+**Architecture:** New helper module `lisp/plugins/action_cues/_fader_coordinator.py` exposes `build_affected_set(target)`, `collect_live_faders(cues, states)`, and a `ParallelFadeRunner` class that drives a set of faders concurrently to a target value, with cooperative abort. New file `lisp/plugins/action_cues/stop_cue.py` defines `StopCue` on top of the coordinator — its `__start__` flattens the target, collects faders, builds a runner, and (via `@async_function`) calls `run_until_complete()` then dispatches the plain (non-fading) `Stop` / `Pause` / `Interrupt` action. Reuses LiSP's fader infrastructure (`Fader` on `Volume` / `VideoAlpha` GStreamer elements). No core changes. The coordinator is shared with Part 2's ResumeCue — this is why it's extracted from the first commit rather than built as StopCue internals and lifted later.
 
 **Tech Stack:** Python 3.9+, PyQt5, LiSP `Property` / `Cue` / `Fader` / `@async_function`, GStreamer element faders, pytest + pytest-qt for unit tests, JSON-RPC test_harness for E2E.
 
@@ -18,9 +18,11 @@
 
 | File | Action | Responsibility |
 |------|--------|----------------|
-| `lisp/plugins/action_cues/stop_cue.py` | Create | `StopCue` class, `StopCueSettings` page, registry wiring |
+| `lisp/plugins/action_cues/_fader_coordinator.py` | Create | Shared helper module: `build_affected_set`, `collect_live_faders`, `ParallelFadeRunner`. Used by StopCue (this plan) and ResumeCue (Part 2). Underscore prefix keeps `load_classes` from trying to register it as a cue. |
+| `lisp/plugins/action_cues/stop_cue.py` | Create | `StopCue` class, `StopCueSettings` page, registry wiring. Thin — delegates fade orchestration to the coordinator. |
 | `lisp/i18n/ts/*.ts` | Regenerate | New `QT_TRANSLATE_NOOP` strings for "Fade & Stop", action combo, UI labels |
-| `tests/cues/test_stop_cue.py` | Create | Unit tests: properties, target resolution, affected-set, fader collection, fade-then-action coordinator, abort |
+| `tests/plugins/action_cues/test_fader_coordinator.py` | Create | Unit tests for the shared coordinator module (affected-set flattening, fader collection, runner + abort) |
+| `tests/cues/test_stop_cue.py` | Create | Unit tests for StopCue: properties, target resolution, runner wiring, abort, settings |
 | `tests/e2e/test_fade_and_stop_e2e.py` | Create | E2E suite via `test_harness`: single-target, group fan-out, mid-fade abort, non-media target |
 | `docs/specs/2026-04-18-sfr-workflow-roadmap.md` | Modify | Tick Part 1 checkboxes at the end |
 
@@ -108,15 +110,13 @@ Create `lisp/plugins/action_cues/stop_cue.py`:
 # along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
 import logging
-from threading import Thread
 
 from PyQt5.QtCore import QT_TRANSLATE_NOOP
 
 from lisp.core.decorators import async_function
 from lisp.core.fade_functions import FadeOutType
 from lisp.core.properties import Property
-from lisp.cues.cue import Cue, CueAction, CueState
-from lisp.cues.media_cue import MediaCue
+from lisp.cues.cue import Cue, CueAction
 from lisp.ui.ui_utils import translate
 
 logger = logging.getLogger(__name__)
@@ -142,9 +142,10 @@ class StopCue(Cue):
         super().__init__(*args, **kwargs)
         self.name = translate("CueName", self.Name)
 
-        # Faders currently running for abort support.
-        self._active_faders = []
-        self._aborted = False
+        # The in-flight ParallelFadeRunner, if any. Set by __start__,
+        # cleared when the runner finishes or aborts. Used by __stop__
+        # to cooperatively cancel the fade.
+        self._runner = None
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -239,45 +240,48 @@ git commit -m "feat(stop-cue): resolve target_id and error on missing target"
 
 ---
 
-## Task 3: Affected-set assembly (single, group, nested group)
+## Task 3: Coordinator helper module — `build_affected_set`
 
 **Files:**
-- Modify: `lisp/plugins/action_cues/stop_cue.py`
-- Modify: `tests/cues/test_stop_cue.py`
+- Create: `lisp/plugins/action_cues/_fader_coordinator.py`
+- Create: `tests/plugins/action_cues/__init__.py` (empty)
+- Create: `tests/plugins/action_cues/test_fader_coordinator.py`
 
-- [ ] **Step 1: Write failing tests for affected-set**
+- [ ] **Step 1: Write failing tests for `build_affected_set`**
 
-Append to `tests/cues/test_stop_cue.py`:
+Create `tests/plugins/action_cues/__init__.py` (empty file — makes pytest discover the package).
+
+Create `tests/plugins/action_cues/test_fader_coordinator.py`:
 
 ```python
+"""Unit tests for the _fader_coordinator helper module."""
+from unittest.mock import MagicMock
+
+from lisp.cues.media_cue import MediaCue
+from lisp.plugins.action_cues._fader_coordinator import build_affected_set
 from lisp.plugins.action_cues.group_cue import GroupCue
 
 
-class TestAffectedSet:
+class TestBuildAffectedSet:
     def _make_media_cue(self, cue_id="media-1"):
         cue = MagicMock(spec=MediaCue)
         cue.id = cue_id
-        cue.state = CueState.Stop
         return cue
 
-    def test_single_media_target(self, mock_app):
+    def test_single_media_target(self):
         target = self._make_media_cue()
-        cue = StopCue(app=mock_app)
-        affected = cue._build_affected_set(target)
-        assert affected == [target]
+        assert build_affected_set(target) == [target]
 
-    def test_group_target_flattens_children(self, mock_app):
+    def test_group_target_flattens_children(self):
         child_a = self._make_media_cue("a")
         child_b = self._make_media_cue("b")
         group = MagicMock(spec=GroupCue)
         group.id = "g1"
         group._resolve_children.return_value = [child_a, child_b]
 
-        cue = StopCue(app=mock_app)
-        affected = cue._build_affected_set(group)
-        assert affected == [child_a, child_b]
+        assert build_affected_set(group) == [child_a, child_b]
 
-    def test_nested_group_flattens_recursively(self, mock_app):
+    def test_nested_group_flattens_recursively(self):
         leaf_a = self._make_media_cue("a")
         leaf_b = self._make_media_cue("b")
 
@@ -289,81 +293,111 @@ class TestAffectedSet:
         outer.id = "outer"
         outer._resolve_children.return_value = [inner]
 
-        cue = StopCue(app=mock_app)
-        affected = cue._build_affected_set(outer)
-        assert affected == [leaf_a, leaf_b]
+        assert build_affected_set(outer) == [leaf_a, leaf_b]
 
-    def test_non_running_included_in_affected_set(self, mock_app):
-        """_build_affected_set does NOT filter by state; the filter
-        lives in the fader-collection step so the action still fires
-        on all children via the group cascade."""
-        child = self._make_media_cue("stopped")
-        child.state = CueState.Stop
+    def test_non_running_still_included(self):
+        """build_affected_set does NOT filter by state; the filter
+        lives in collect_live_faders so the calling cue's action still
+        fires on all children via the group cascade."""
+        child = self._make_media_cue("any-state")
         group = MagicMock(spec=GroupCue)
         group.id = "g1"
         group._resolve_children.return_value = [child]
 
-        cue = StopCue(app=mock_app)
-        affected = cue._build_affected_set(group)
-        assert affected == [child]
+        assert build_affected_set(group) == [child]
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `poetry run pytest tests/cues/test_stop_cue.py::TestAffectedSet -v`
-Expected: FAIL — `_build_affected_set` does not exist.
+Run: `poetry run pytest tests/plugins/action_cues/test_fader_coordinator.py -v`
+Expected: FAIL — `ModuleNotFoundError: No module named 'lisp.plugins.action_cues._fader_coordinator'`.
 
-- [ ] **Step 3: Add `_build_affected_set`**
+- [ ] **Step 3: Create `_fader_coordinator.py` with `build_affected_set`**
 
-Append to `lisp/plugins/action_cues/stop_cue.py`:
+Create `lisp/plugins/action_cues/_fader_coordinator.py`:
 
 ```python
-    def _build_affected_set(self, target):
-        """Flatten target (and any nested GroupCues) to a list of leaf cues.
+# This file is part of Linux Show Player
+#
+# Copyright 2026 Francesco Ceruti <ceppofrancy@gmail.com>
+#
+# Linux Show Player is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# Linux Show Player is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
+"""Shared fader-orchestration helpers for the Fade & Stop / Fade & Resume
+action cues. Underscore prefix keeps this module out of ActionCues'
+load_classes cue-registration loop.
+"""
 
-        GroupCue membership is resolved via `_resolve_children()`; nested
-        groups are flattened recursively. The target itself is returned
-        as a single-element list when it is not a GroupCue.
-        """
-        from lisp.plugins.action_cues.group_cue import GroupCue
+import logging
 
-        if not isinstance(target, GroupCue):
-            return [target]
+logger = logging.getLogger(__name__)
 
-        leaves = []
-        for child in target._resolve_children():
-            leaves.extend(self._build_affected_set(child))
-        return leaves
+
+def build_affected_set(target):
+    """Flatten target (and any nested GroupCues) to a list of leaf cues.
+
+    GroupCue membership is resolved via `_resolve_children()`; nested
+    groups are flattened recursively. The target itself is returned
+    as a single-element list when it is not a GroupCue.
+    """
+    # Local import to avoid a circular import at module load time
+    # (group_cue imports from cues.cue, and this module is imported
+    # from stop_cue / resume_cue which live in the same package).
+    from lisp.plugins.action_cues.group_cue import GroupCue
+
+    if not isinstance(target, GroupCue):
+        return [target]
+
+    leaves = []
+    for child in target._resolve_children():
+        leaves.extend(build_affected_set(child))
+    return leaves
 ```
-
-Note: the import is inside the method to avoid a circular import at module load time (`group_cue` imports from `cues.cue`; keeping this local matches patterns used elsewhere in the codebase).
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `poetry run pytest tests/cues/test_stop_cue.py -v`
-Expected: PASS
+Run: `poetry run pytest tests/plugins/action_cues/test_fader_coordinator.py -v`
+Expected: PASS (4 tests)
 
 - [ ] **Step 5: Commit**
 
 ```
-git add lisp/plugins/action_cues/stop_cue.py tests/cues/test_stop_cue.py
-git commit -m "feat(stop-cue): flatten group targets into affected set"
+git add lisp/plugins/action_cues/_fader_coordinator.py tests/plugins/action_cues/__init__.py tests/plugins/action_cues/test_fader_coordinator.py
+git commit -m "feat(action-cues): add _fader_coordinator with build_affected_set"
 ```
 
 ---
 
-## Task 4: Fader collection from Volume and VideoAlpha elements
+## Task 4: Coordinator helper — `collect_live_faders`
 
 **Files:**
-- Modify: `lisp/plugins/action_cues/stop_cue.py`
-- Modify: `tests/cues/test_stop_cue.py`
+- Modify: `lisp/plugins/action_cues/_fader_coordinator.py`
+- Modify: `tests/plugins/action_cues/test_fader_coordinator.py`
 
-- [ ] **Step 1: Write failing tests for fader collection**
+The `states` parameter (defaulting to `CueState.IsRunning`) exists from
+day one so Part 2's ResumeCue can call with `Pause | IsRunning` without
+needing a second API. StopCue consumes the default.
 
-Append to `tests/cues/test_stop_cue.py`:
+- [ ] **Step 1: Write failing tests for `collect_live_faders`**
+
+Append to `tests/plugins/action_cues/test_fader_coordinator.py`:
 
 ```python
-class TestFaderCollection:
+from lisp.cues.cue import CueState
+from lisp.plugins.action_cues._fader_coordinator import collect_live_faders
+
+
+class TestCollectLiveFaders:
     def _make_media_with_elements(self, element_map, state=CueState.Running):
         """element_map: {'Volume': volume_el_or_None, 'VideoAlpha': ...}"""
         cue = MagicMock(spec=MediaCue)
@@ -372,19 +406,18 @@ class TestFaderCollection:
         cue.media.element = lambda name: element_map.get(name)
         return cue
 
-    def test_media_with_only_volume(self, mock_app):
+    def test_media_with_only_volume(self):
         volume_fader = MagicMock(name="volume_fader")
         volume_el = MagicMock()
         volume_el.get_fader.return_value = volume_fader
 
-        cue_media = self._make_media_with_elements({"Volume": volume_el})
+        cue = self._make_media_with_elements({"Volume": volume_el})
 
-        cue = StopCue(app=mock_app)
-        faders = cue._collect_faders([cue_media])
+        faders = collect_live_faders([cue])
         assert faders == [volume_fader]
         volume_el.get_fader.assert_called_once_with("live_volume")
 
-    def test_media_with_volume_and_alpha(self, mock_app):
+    def test_media_with_volume_and_alpha(self):
         volume_fader = MagicMock(name="vf")
         alpha_fader = MagicMock(name="af")
         volume_el = MagicMock()
@@ -392,105 +425,337 @@ class TestFaderCollection:
         alpha_el = MagicMock()
         alpha_el.get_fader.return_value = alpha_fader
 
-        cue_media = self._make_media_with_elements({
+        cue = self._make_media_with_elements({
             "Volume": volume_el, "VideoAlpha": alpha_el,
         })
 
-        cue = StopCue(app=mock_app)
-        faders = cue._collect_faders([cue_media])
+        faders = collect_live_faders([cue])
         assert volume_fader in faders
         assert alpha_fader in faders
         assert len(faders) == 2
 
-    def test_media_with_neither_element(self, mock_app):
-        cue_media = self._make_media_with_elements({})
-        cue = StopCue(app=mock_app)
-        assert cue._collect_faders([cue_media]) == []
+    def test_media_with_neither_element(self):
+        cue = self._make_media_with_elements({})
+        assert collect_live_faders([cue]) == []
 
-    def test_non_media_cue_skipped(self, mock_app):
+    def test_non_media_cue_skipped(self):
         non_media = MagicMock()
         non_media.state = CueState.Running
-        del non_media.media  # intentionally no `media` attribute
-        cue = StopCue(app=mock_app)
-        assert cue._collect_faders([non_media]) == []
+        del non_media.media  # no `media` attribute
+        assert collect_live_faders([non_media]) == []
 
-    def test_non_running_cues_skipped(self, mock_app):
+    def test_default_states_excludes_stopped(self):
+        """Default `states=CueState.IsRunning` skips stopped cues."""
         volume_el = MagicMock()
-        cue_media = self._make_media_with_elements(
+        cue = self._make_media_with_elements(
             {"Volume": volume_el}, state=CueState.Stop
         )
-        cue = StopCue(app=mock_app)
-        assert cue._collect_faders([cue_media]) == []
+        assert collect_live_faders([cue]) == []
         volume_el.get_fader.assert_not_called()
+
+    def test_default_states_excludes_paused(self):
+        """Default states skips paused cues too — StopCue only acts
+        on running targets; ResumeCue opts in via the states param."""
+        volume_el = MagicMock()
+        cue = self._make_media_with_elements(
+            {"Volume": volume_el}, state=CueState.Pause
+        )
+        assert collect_live_faders([cue]) == []
+
+    def test_states_param_includes_paused_when_requested(self):
+        """states=Pause|IsRunning collects faders from paused cues
+        (this is how ResumeCue's happy path queries them)."""
+        volume_fader = MagicMock(name="vf")
+        volume_el = MagicMock()
+        volume_el.get_fader.return_value = volume_fader
+
+        cue = self._make_media_with_elements(
+            {"Volume": volume_el}, state=CueState.Pause
+        )
+
+        faders = collect_live_faders(
+            [cue], states=CueState.Pause | CueState.IsRunning
+        )
+        assert faders == [volume_fader]
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `poetry run pytest tests/cues/test_stop_cue.py::TestFaderCollection -v`
-Expected: FAIL — `_collect_faders` does not exist.
+Run: `poetry run pytest tests/plugins/action_cues/test_fader_coordinator.py::TestCollectLiveFaders -v`
+Expected: FAIL — `collect_live_faders` does not exist.
 
-- [ ] **Step 3: Add `_collect_faders`**
+- [ ] **Step 3: Add `collect_live_faders`**
 
-Append to `lisp/plugins/action_cues/stop_cue.py`:
+Append to `lisp/plugins/action_cues/_fader_coordinator.py`:
 
 ```python
-    _FADEABLE_ELEMENTS = (
-        ("Volume", "live_volume"),
-        ("VideoAlpha", "live_alpha"),
-    )
+from lisp.cues.cue import CueState
+from lisp.cues.media_cue import MediaCue
 
-    def _collect_faders(self, cues):
-        """Return a list of Fader objects for cues currently running.
 
-        For each MediaCue in `cues` whose state is in `IsRunning`, ask
-        its Volume / VideoAlpha elements for a fader on their live
-        properties. Non-MediaCues and cues without the requisite
-        elements contribute nothing.
-        """
-        faders = []
-        for cue in cues:
-            if not (cue.state & CueState.IsRunning):
+_FADEABLE_ELEMENTS = (
+    ("Volume", "live_volume"),
+    ("VideoAlpha", "live_alpha"),
+)
+
+
+def collect_live_faders(cues, states=CueState.IsRunning):
+    """Return a list of Fader objects for cues whose state matches `states`.
+
+    For each MediaCue in `cues` whose `state & states` is non-zero, ask
+    its Volume / VideoAlpha elements for a fader on their live
+    properties. Non-MediaCues and cues without the requisite elements
+    contribute nothing.
+
+    Default `states=CueState.IsRunning` matches StopCue's use case
+    (fading things that are actively playing). ResumeCue passes
+    `states=CueState.Pause | CueState.IsRunning` to pick up paused
+    cues it's about to resume.
+    """
+    faders = []
+    for cue in cues:
+        if not (cue.state & states):
+            continue
+        if not isinstance(cue, MediaCue):
+            continue
+        media = getattr(cue, "media", None)
+        if media is None:
+            continue
+        for element_name, fader_prop in _FADEABLE_ELEMENTS:
+            element = media.element(element_name)
+            if element is None:
                 continue
-            if not isinstance(cue, MediaCue):
-                continue
-            media = getattr(cue, "media", None)
-            if media is None:
-                continue
-            for element_name, fader_prop in self._FADEABLE_ELEMENTS:
-                element = media.element(element_name)
-                if element is None:
-                    continue
-                faders.append(element.get_fader(fader_prop))
-        return faders
+            faders.append(element.get_fader(fader_prop))
+    return faders
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `poetry run pytest tests/cues/test_stop_cue.py -v`
-Expected: PASS
+Run: `poetry run pytest tests/plugins/action_cues/test_fader_coordinator.py -v`
+Expected: PASS (all prior tests + 7 new)
 
 - [ ] **Step 5: Commit**
 
 ```
-git add lisp/plugins/action_cues/stop_cue.py tests/cues/test_stop_cue.py
-git commit -m "feat(stop-cue): collect live_volume + live_alpha faders from targets"
+git add lisp/plugins/action_cues/_fader_coordinator.py tests/plugins/action_cues/test_fader_coordinator.py
+git commit -m "feat(action-cues): add collect_live_faders with states filter"
 ```
 
 ---
 
-## Task 5: Fade-then-action coordinator
+## Task 5: Coordinator helper — `ParallelFadeRunner` + wire StopCue
+
+Two logical pieces in one task because testing the runner in isolation
+plus testing StopCue's `__start__` wiring is what proves the feature
+works end-to-end. Split across two commits for reviewability.
 
 **Files:**
+- Modify: `lisp/plugins/action_cues/_fader_coordinator.py`
+- Modify: `tests/plugins/action_cues/test_fader_coordinator.py`
 - Modify: `lisp/plugins/action_cues/stop_cue.py`
 - Modify: `tests/cues/test_stop_cue.py`
 
-- [ ] **Step 1: Write failing tests for action dispatch**
+### 5A — Runner class in the coordinator
+
+- [ ] **Step 1: Write failing tests for `ParallelFadeRunner`**
+
+Append to `tests/plugins/action_cues/test_fader_coordinator.py`:
+
+```python
+import threading
+
+from lisp.core.fade_functions import FadeOutType
+from lisp.plugins.action_cues._fader_coordinator import ParallelFadeRunner
+
+
+class TestParallelFadeRunner:
+    def _make_blocking_fader(self, block_event):
+        """Returns a fader whose fade() blocks until block_event is set."""
+        fader = MagicMock()
+
+        def fake_fade(seconds, to_value, curve):
+            block_event.wait(timeout=5.0)
+            return not fader.stop.called
+
+        fader.fade.side_effect = fake_fade
+        return fader
+
+    def test_runner_calls_prepare_on_each_fader(self):
+        f1 = MagicMock()
+        f2 = MagicMock()
+        runner = ParallelFadeRunner(
+            [f1, f2], to_value=0.0, curve=FadeOutType.Linear,
+            duration_seconds=0.01,
+        )
+        assert runner.run_until_complete() is True
+        f1.prepare.assert_called_once()
+        f2.prepare.assert_called_once()
+
+    def test_runner_fades_all_in_parallel_to_target(self):
+        f1 = MagicMock()
+        f2 = MagicMock()
+        runner = ParallelFadeRunner(
+            [f1, f2], to_value=0.0, curve=FadeOutType.Linear,
+            duration_seconds=0.01,
+        )
+        runner.run_until_complete()
+
+        f1.fade.assert_called_once_with(0.01, 0.0, FadeOutType.Linear)
+        f2.fade.assert_called_once_with(0.01, 0.0, FadeOutType.Linear)
+
+    def test_runner_returns_true_on_clean_completion(self):
+        f = MagicMock()
+        runner = ParallelFadeRunner(
+            [f], to_value=0.0, curve=FadeOutType.Linear,
+            duration_seconds=0.01,
+        )
+        assert runner.run_until_complete() is True
+
+    def test_runner_abort_calls_stop_on_each_fader_and_returns_false(self):
+        block = threading.Event()
+        f1 = self._make_blocking_fader(block)
+        f2 = self._make_blocking_fader(block)
+
+        runner = ParallelFadeRunner(
+            [f1, f2], to_value=0.0, curve=FadeOutType.Linear,
+            duration_seconds=1.0,
+        )
+
+        # Start the runner in a separate thread so we can abort it
+        result = {}
+
+        def run():
+            result["ret"] = runner.run_until_complete()
+
+        t = threading.Thread(target=run)
+        t.start()
+        # Let the fades get underway
+        threading.Event().wait(0.05)
+
+        runner.abort()
+        block.set()  # unblock the fake fades so they can return
+        t.join(timeout=2.0)
+
+        assert result["ret"] is False
+        f1.stop.assert_called_once()
+        f2.stop.assert_called_once()
+
+    def test_runner_with_empty_faders_is_no_op(self):
+        runner = ParallelFadeRunner(
+            [], to_value=0.0, curve=FadeOutType.Linear,
+            duration_seconds=1.0,
+        )
+        assert runner.run_until_complete() is True
+
+    def test_fader_exception_does_not_deadlock_runner(self):
+        bad = MagicMock()
+        bad.fade.side_effect = RuntimeError("boom")
+        good = MagicMock()
+        runner = ParallelFadeRunner(
+            [bad, good], to_value=0.0, curve=FadeOutType.Linear,
+            duration_seconds=0.01,
+        )
+        # Should complete (not hang) even though one fader raised
+        assert runner.run_until_complete() is True
+        good.fade.assert_called_once()
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `poetry run pytest tests/plugins/action_cues/test_fader_coordinator.py::TestParallelFadeRunner -v`
+Expected: FAIL — `ParallelFadeRunner` does not exist.
+
+- [ ] **Step 3: Add `ParallelFadeRunner`**
+
+Append to `lisp/plugins/action_cues/_fader_coordinator.py`:
+
+```python
+from threading import Thread
+
+
+class ParallelFadeRunner:
+    """Drive a set of Faders concurrently to a target value.
+
+    Each fader runs in its own daemon thread (Fader.fade is blocking).
+    `run_until_complete()` joins all threads and returns True if the
+    run completed, False if `abort()` was called. `abort()` calls
+    `stop()` on each fader and flips a flag the return value reads.
+    """
+
+    def __init__(self, faders, to_value, curve, duration_seconds):
+        self._faders = list(faders)
+        self._to_value = to_value
+        self._curve = curve
+        self._duration_seconds = duration_seconds
+        self._aborted = False
+        self._threads = []
+
+    def run_until_complete(self):
+        """Start faders in parallel, join them, return True if not aborted."""
+        for fader in self._faders:
+            try:
+                fader.prepare()
+            except Exception:
+                logger.exception(
+                    "ParallelFadeRunner: fader.prepare() raised; continuing"
+                )
+
+        for fader in self._faders:
+            t = Thread(
+                target=self._run_single,
+                args=(fader,),
+                daemon=True,
+            )
+            t.start()
+            self._threads.append(t)
+
+        for t in self._threads:
+            t.join()
+
+        return not self._aborted
+
+    def abort(self):
+        """Cooperatively cancel the in-flight fades."""
+        self._aborted = True
+        for fader in self._faders:
+            try:
+                fader.stop()
+            except Exception:
+                logger.exception(
+                    "ParallelFadeRunner: fader.stop() raised during abort"
+                )
+
+    def _run_single(self, fader):
+        try:
+            fader.fade(self._duration_seconds, self._to_value, self._curve)
+        except Exception:
+            logger.exception("ParallelFadeRunner: fader.fade() raised")
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `poetry run pytest tests/plugins/action_cues/test_fader_coordinator.py -v`
+Expected: PASS (all coordinator tests)
+
+- [ ] **Step 5: Commit**
+
+```
+git add lisp/plugins/action_cues/_fader_coordinator.py tests/plugins/action_cues/test_fader_coordinator.py
+git commit -m "feat(action-cues): add ParallelFadeRunner with cooperative abort"
+```
+
+### 5B — Wire StopCue onto the coordinator
+
+- [ ] **Step 6: Write failing tests for StopCue `__start__` action dispatch**
 
 Append to `tests/cues/test_stop_cue.py`:
 
 ```python
 class TestFadeThenAction:
     def _setup(self, mock_app, target_id="t1"):
+        from lisp.cues.cue import CueState
+        from lisp.cues.media_cue import MediaCue
+
         target = MagicMock(spec=MediaCue)
         target.id = target_id
         target.state = CueState.Running
@@ -503,7 +768,7 @@ class TestFadeThenAction:
         return cue, target
 
     def test_instant_action_when_duration_zero(self, mock_app):
-        """duration=0 + no faders ? action fires synchronously in __start__."""
+        """duration=0 + no faders -> action fires synchronously in __start__."""
         cue, target = self._setup(mock_app)
         cue.duration = 0
         cue.action = CueAction.Stop.value
@@ -513,7 +778,7 @@ class TestFadeThenAction:
         target.execute.assert_called_once_with(CueAction.Stop)
 
     def test_no_faders_with_duration_still_fires_action(self, mock_app):
-        """duration>0 but no faders collected ? action fires immediately."""
+        """duration>0 but no faders collected -> action fires immediately."""
         cue, target = self._setup(mock_app)
         cue.duration = 1000
         cue.action = CueAction.Pause.value
@@ -521,31 +786,22 @@ class TestFadeThenAction:
         cue.__start__()
         target.execute.assert_called_once_with(CueAction.Pause)
 
-    def test_fade_then_action_runs_async(self, mock_app, monkeypatch):
-        """duration>0 with faders ? faders run, then action dispatched."""
-        # Patch Thread so we can inspect scheduling without real threading
-        class _FakeThread:
-            def __init__(self, target=None, args=(), kwargs=None, daemon=False):
-                self._target = target
-                self._args = args
-                self._kwargs = kwargs or {}
+    def test_fade_then_action_uses_runner_and_dispatches(self, mock_app,
+                                                         monkeypatch):
+        """duration>0 with faders -> ParallelFadeRunner runs, action dispatched."""
+        from lisp.cues.cue import CueState
+        from lisp.cues.media_cue import MediaCue
 
-            def start(self):
-                self._target(*self._args, **self._kwargs)
-
-            def join(self, timeout=None):
-                pass
-
+        # Substitute the runner with a MagicMock we can inspect
+        fake_runner = MagicMock()
+        fake_runner.run_until_complete.return_value = True
+        runner_cls = MagicMock(return_value=fake_runner)
         monkeypatch.setattr(
-            "lisp.plugins.action_cues.stop_cue.Thread", _FakeThread
-        )
-        # @async_function also uses threading.Thread; patch at its source
-        monkeypatch.setattr(
-            "lisp.core.decorators.Thread", _FakeThread
+            "lisp.plugins.action_cues.stop_cue.ParallelFadeRunner",
+            runner_cls,
         )
 
         volume_fader = MagicMock()
-        volume_fader.fade.return_value = True
         volume_el = MagicMock()
         volume_el.get_fader.return_value = volume_fader
 
@@ -555,6 +811,18 @@ class TestFadeThenAction:
         target.media.element = lambda n: volume_el if n == "Volume" else None
         mock_app.cue_model.get.return_value = target
 
+        # Patch the @async_function decorator's Thread so the coordinator
+        # runs synchronously and we can assert on its effects.
+        class _FakeThread:
+            def __init__(self, target=None, args=(), kwargs=None, daemon=False):
+                self._target = target
+                self._args = args
+                self._kwargs = kwargs or {}
+
+            def start(self):
+                self._target(*self._args, **self._kwargs)
+        monkeypatch.setattr("lisp.core.decorators.Thread", _FakeThread)
+
         cue = StopCue(app=mock_app)
         cue.target_id = "t1"
         cue.duration = 500
@@ -562,8 +830,12 @@ class TestFadeThenAction:
 
         cue.__start__()
 
-        volume_fader.prepare.assert_called_once()
-        volume_fader.fade.assert_called_once()
+        runner_cls.assert_called_once()
+        call_kwargs = runner_cls.call_args.kwargs
+        call_args = runner_cls.call_args.args
+        # Faders arg (positional) is the list we collected
+        assert volume_fader in (call_args[0] if call_args else call_kwargs["faders"])
+        fake_runner.run_until_complete.assert_called_once()
         target.execute.assert_called_once_with(CueAction.Interrupt)
 
     def test_action_is_non_fading_variant(self, mock_app):
@@ -581,18 +853,68 @@ class TestFadeThenAction:
                 CueAction.FadeOutPause,
                 CueAction.FadeOutInterrupt,
             )
+
+    def test_runner_abort_skips_action_dispatch(self, mock_app, monkeypatch):
+        """If the runner returns False (aborted), action is NOT dispatched."""
+        from lisp.cues.cue import CueState
+        from lisp.cues.media_cue import MediaCue
+
+        fake_runner = MagicMock()
+        fake_runner.run_until_complete.return_value = False
+        monkeypatch.setattr(
+            "lisp.plugins.action_cues.stop_cue.ParallelFadeRunner",
+            MagicMock(return_value=fake_runner),
+        )
+
+        class _FakeThread:
+            def __init__(self, target=None, args=(), kwargs=None, daemon=False):
+                self._target = target
+                self._args = args
+                self._kwargs = kwargs or {}
+
+            def start(self):
+                self._target(*self._args, **self._kwargs)
+        monkeypatch.setattr("lisp.core.decorators.Thread", _FakeThread)
+
+        volume_el = MagicMock()
+        volume_el.get_fader.return_value = MagicMock()
+        target = MagicMock(spec=MediaCue)
+        target.state = CueState.Running
+        target.media = MagicMock()
+        target.media.element = lambda n: volume_el if n == "Volume" else None
+        mock_app.cue_model.get.return_value = target
+
+        cue = StopCue(app=mock_app)
+        cue.target_id = "t1"
+        cue.duration = 500
+        cue.action = CueAction.Stop.value
+
+        cue.__start__()
+
+        target.execute.assert_not_called()
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [ ] **Step 7: Run tests to verify they fail**
 
 Run: `poetry run pytest tests/cues/test_stop_cue.py::TestFadeThenAction -v`
-Expected: FAIL — `__start__` currently returns without dispatching.
+Expected: FAIL — `__start__` currently stops at target resolution.
 
-- [ ] **Step 3: Rewrite `__start__` and add coordinator**
+- [ ] **Step 8: Rewrite `__start__` using the coordinator**
 
-Replace the stub `__start__` in `lisp/plugins/action_cues/stop_cue.py` with:
+Replace the stub `__start__` in `lisp/plugins/action_cues/stop_cue.py`. The
+imports line and the method body both change, so apply them together:
 
 ```python
+# Add to imports (near the top of the file):
+from lisp.plugins.action_cues._fader_coordinator import (
+    build_affected_set,
+    collect_live_faders,
+    ParallelFadeRunner,
+)
+```
+
+```python
+# Replace the stub __start__ with:
     def __start__(self, fade=False):
         target = self.app.cue_model.get(self.target_id)
         if target is None:
@@ -602,81 +924,58 @@ Replace the stub `__start__` in `lisp/plugins/action_cues/stop_cue.py` with:
             self._error()
             return False
 
-        affected = self._build_affected_set(target)
-        faders = self._collect_faders(affected)
+        affected = build_affected_set(target)
+        faders = collect_live_faders(affected)
 
         if self.duration > 0 and faders:
-            self._aborted = False
-            self._active_faders = list(faders)
-            self._run_fade_then_action(target, faders)
+            self._runner = ParallelFadeRunner(
+                faders,
+                to_value=0.0,
+                curve=FadeOutType[self.fade_type],
+                duration_seconds=self.duration / 1000,
+            )
+            self._run_fade_then_action(target)
             return True
 
-        # Instant path: no fade to run, dispatch the action synchronously
+        # Instant path: no fade to run, dispatch action synchronously.
         target.execute(CueAction(self.action))
         return False
 
     @async_function
-    def _run_fade_then_action(self, target, faders):
-        """Run all faders to 0 in parallel, then dispatch the action.
-
-        Executed in a daemon thread via @async_function. Each fader
-        runs in its own sub-thread because Fader.fade() is blocking;
-        the coordinator joins them all, then fires the action on the
-        target (plain Stop/Pause/Interrupt, not FadeOut*).
+    def _run_fade_then_action(self, target):
+        """Drive the runner to completion (in a daemon thread), then
+        dispatch the action. Skip dispatch if the runner was aborted.
         """
         try:
-            fade_seconds = self.duration / 1000
-            fade_curve = FadeOutType[self.fade_type]
-
-            threads = []
-            for fader in faders:
-                fader.prepare()
-                t = Thread(
-                    target=self._run_single_fader,
-                    args=(fader, fade_seconds, fade_curve),
-                    daemon=True,
-                )
-                t.start()
-                threads.append(t)
-
-            for t in threads:
-                t.join()
-
-            if self._aborted:
-                return
-
+            completed = self._runner.run_until_complete()
+            if not completed:
+                return  # aborted — caller's __stop__ handled state
             target.execute(CueAction(self.action))
         except Exception:
             logger.exception("StopCue: error during fade-and-action")
             self._error()
             return
         finally:
-            self._active_faders = []
+            self._runner = None
 
         self._ended()
-
-    def _run_single_fader(self, fader, seconds, curve):
-        try:
-            fader.fade(seconds, 0.0, curve)
-        except Exception:
-            logger.exception("StopCue: fader raised")
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [ ] **Step 9: Run tests to verify they pass**
 
 Run: `poetry run pytest tests/cues/test_stop_cue.py -v`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 10: Commit**
 
 ```
 git add lisp/plugins/action_cues/stop_cue.py tests/cues/test_stop_cue.py
-git commit -m "feat(stop-cue): coordinate parallel faders then dispatch action"
+git commit -m "feat(stop-cue): drive ParallelFadeRunner then dispatch action"
 ```
 
 ---
 
-## Task 6: Abort in-flight faders on StopCue `__stop__` / `__interrupt__`
+## Task 6: Abort in-flight fade via `ParallelFadeRunner.abort()`
 
 **Files:**
 - Modify: `lisp/plugins/action_cues/stop_cue.py`
@@ -688,38 +987,34 @@ Append to `tests/cues/test_stop_cue.py`:
 
 ```python
 class TestAbort:
-    def test_stop_aborts_all_active_faders(self, mock_app):
-        fader_a = MagicMock()
-        fader_b = MagicMock()
-
+    def test_stop_aborts_runner_when_present(self, mock_app):
         cue = StopCue(app=mock_app)
-        cue._active_faders = [fader_a, fader_b]
+        cue._runner = MagicMock()
 
-        cue.__stop__()
+        result = cue.__stop__()
 
-        fader_a.stop.assert_called_once()
-        fader_b.stop.assert_called_once()
-        assert cue._aborted is True
+        cue._runner.abort.assert_called_once()
+        assert result is True
 
-    def test_interrupt_aborts_all_active_faders(self, mock_app):
-        fader = MagicMock()
+    def test_interrupt_aborts_runner_when_present(self, mock_app):
         cue = StopCue(app=mock_app)
-        cue._active_faders = [fader]
+        cue._runner = MagicMock()
 
         cue.__interrupt__()
 
-        fader.stop.assert_called_once()
-        assert cue._aborted is True
+        cue._runner.abort.assert_called_once()
 
-    def test_stop_without_running_faders_is_safe(self, mock_app):
+    def test_stop_without_runner_is_safe(self, mock_app):
+        """No in-flight fade: __stop__ must not crash."""
         cue = StopCue(app=mock_app)
-        assert cue.__stop__() is True
+        assert cue._runner is None
+        assert cue.__stop__() is True  # no exception raised
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `poetry run pytest tests/cues/test_stop_cue.py::TestAbort -v`
-Expected: FAIL — `__stop__` / `__interrupt__` inherit base behaviour which doesn't touch faders.
+Expected: FAIL — `__stop__` / `__interrupt__` inherit base behaviour which doesn't touch the runner.
 
 - [ ] **Step 3: Add `__stop__` and `__interrupt__`**
 
@@ -727,9 +1022,15 @@ Append to `lisp/plugins/action_cues/stop_cue.py`:
 
 ```python
     def __stop__(self, fade=False):
-        self._aborted = True
-        for fader in self._active_faders:
-            fader.stop()
+        """Cancel the in-flight fade, if any.
+
+        Does NOT re-start the target — "I changed my mind about fading"
+        means "cancel the fade," not "put the audio back". The target
+        stays wherever the partial fade left it.
+        """
+        runner = self._runner
+        if runner is not None:
+            runner.abort()
         return True
 
     __interrupt__ = __stop__
@@ -744,7 +1045,7 @@ Expected: PASS
 
 ```
 git add lisp/plugins/action_cues/stop_cue.py tests/cues/test_stop_cue.py
-git commit -m "feat(stop-cue): abort active faders on stop/interrupt"
+git commit -m "feat(stop-cue): abort the in-flight runner on stop/interrupt"
 ```
 
 ---
@@ -1211,7 +1512,7 @@ Expected: each reports `FAILED: 0`.
 
 - [ ] **Step 3: Run Ruff**
 
-Run: `poetry run ruff check lisp/plugins/action_cues/stop_cue.py tests/cues/test_stop_cue.py tests/e2e/test_fade_and_stop_e2e.py`
+Run: `poetry run ruff check lisp/plugins/action_cues/stop_cue.py lisp/plugins/action_cues/_fader_coordinator.py tests/cues/test_stop_cue.py tests/plugins/action_cues/test_fader_coordinator.py tests/e2e/test_fade_and_stop_e2e.py`
 Expected: clean. Fix any violations inline and commit.
 
 ---
@@ -1228,8 +1529,8 @@ Use the `Agent` tool with `subagent_type="voltagent-qa-sec:qa-expert"` and this 
 >
 > - Spec: `docs/specs/2026-04-18-fade-and-stop-cue-design.md`
 > - Plan: `plans/07-fade-and-stop-cue.md`
-> - Implementation: `lisp/plugins/action_cues/stop_cue.py`
-> - Unit tests: `tests/cues/test_stop_cue.py`
+> - Implementation: `lisp/plugins/action_cues/stop_cue.py`, `lisp/plugins/action_cues/_fader_coordinator.py`
+> - Unit tests: `tests/cues/test_stop_cue.py`, `tests/plugins/action_cues/test_fader_coordinator.py`
 > - E2E tests: `tests/e2e/test_fade_and_stop_e2e.py`
 >
 > Assess:
@@ -1267,16 +1568,17 @@ Use the `Agent` tool with `subagent_type="voltagent-qa-sec:code-reviewer"` and t
 
 > Review the Fade & Stop cue code for correctness, convention fit, and thread safety.
 >
-> - Implementation: `lisp/plugins/action_cues/stop_cue.py`
+> - Implementation: `lisp/plugins/action_cues/stop_cue.py`, `lisp/plugins/action_cues/_fader_coordinator.py`
 > - Spec (for intent): `docs/specs/2026-04-18-fade-and-stop-cue-design.md`
 > - Reference patterns to match: `lisp/plugins/action_cues/volume_control.py` (single-target fade), `lisp/plugins/action_cues/stop_all.py` (action combo), `lisp/plugins/action_cues/group_cue.py:449-485` (child cascade).
 >
 > Specifically check:
 > 1. Correctness against spec: does every behaviour described in the Architecture section land in the code?
 > 2. LiSP conventions: signal/fader/property usage matches `volume_control.py`; translation contexts are sensible; registry wiring is correct.
-> 3. Thread safety: the `@async_function` coordinator spawns per-fader threads — is `_active_faders` / `_aborted` mutation safe? Any Qt-main-thread violations?
-> 4. Resource cleanup: faders released on abort, error, and natural completion. No leaks if `_run_fade_then_action` raises.
+> 3. Thread safety: `ParallelFadeRunner` spawns per-fader daemon threads and `run_until_complete()` joins them — is `_aborted` mutation visible across threads? Are `fader.prepare()` / `fader.stop()` safe to call from arbitrary threads? Any Qt-main-thread violations in `StopCue._run_fade_then_action`?
+> 4. Resource cleanup: `self._runner` cleared on abort, error, and natural completion. No leaks if `_run_fade_then_action` raises.
 > 5. Edge cases from the spec: missing target logged+errored; non-Media target takes the instant path; concurrent SFRs on the same target don't corrupt state.
+> 6. Coordinator API shape: does `collect_live_faders`'s `states` parameter default match StopCue's use case? Is the contract documented well enough that Part 2's ResumeCue can build on it without surprises?
 >
 > Report only high-confidence issues. Return a prioritised punch list under 300 words.
 
