@@ -33,9 +33,50 @@ from lisp.cues.cue import CueAction
 from lisp.cues.cue_time import CueTime
 from lisp.cues.media_cue import MediaCue
 from lisp.plugins.list_layout.control_buttons import CueControlButtons
+from lisp.ui.ui_utils import css_to_dict
 from lisp.ui.widgets import QClickSlider
 from lisp.ui.widgets.elidedlabel import ElidedLabel
 from lisp.ui.widgets.waveform import WaveformSlider
+
+
+class _ColorStripe(QWidget):
+    """Narrow vertical strip on a running cue widget's left edge.
+
+    Reflects the cue's palette background so the playback panel shows
+    the same colour cue as the list view's row tint — two surfaces,
+    one source of truth (``cue.stylesheet``).
+
+    Collapses (hidden) when no background is set, so cues without a
+    colour stay visually quiet and don't fight the running-cue state
+    highlights.
+
+    Painted via a ``background-color`` stylesheet with the
+    ``WA_StyledBackground`` attribute set — a bare ``QWidget`` ignores
+    stylesheet backgrounds by default, so the attribute is required
+    to make Qt actually fill the rectangle.
+    """
+
+    _WIDTH = 4
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._color = ""
+        self.setFixedWidth(self._WIDTH)
+        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setVisible(False)
+
+    def color(self) -> str:
+        return self._color
+
+    def setColor(self, hex_color: str) -> None:
+        self._color = hex_color or ""
+        if self._color:
+            self.setStyleSheet(f"background-color: {self._color};")
+            self.setVisible(True)
+        else:
+            self.setStyleSheet("")
+            self.setVisible(False)
 
 
 def get_running_widget(cue, config, **kwargs):
@@ -51,6 +92,7 @@ class RunningCueWidget(QWidget):
         self.setFocusPolicy(Qt.NoFocus)
         self.setLayout(QHBoxLayout(self))
         self.layout().setContentsMargins(0, 0, 0, 1)
+        self.layout().setSpacing(0)
 
         self._accurate_time = False
         self._config = config
@@ -58,6 +100,11 @@ class RunningCueWidget(QWidget):
         self.cue = cue
         self.cue_time = CueTime(cue)
         self.cue_time.notify.connect(self._time_updated, Connection.QtQueued)
+
+        # Left-edge colour stripe — playback-panel analogue of the
+        # list view's row tint. Updated from cue.stylesheet below.
+        self.colorStripe = _ColorStripe(self)
+        self.layout().addWidget(self.colorStripe)
 
         # Use this to avoid transparent background
         self.gridLayoutWidget = QWidget(self)
@@ -90,6 +137,11 @@ class RunningCueWidget(QWidget):
         self.gridLayout.setRowStretch(1, 3)
         self.gridLayout.setColumnStretch(0, 7)
         self.gridLayout.setColumnStretch(1, 5)
+
+        self._apply_stylesheet_color()
+        cue.changed("stylesheet").connect(
+            self._stylesheet_changed, Connection.QtQueued
+        )
 
         cue.changed("name").connect(self.name_changed, Connection.QtQueued)
         cue.started.connect(self.controlButtons.pauseMode, Connection.QtQueued)
@@ -153,6 +205,13 @@ class RunningCueWidget(QWidget):
     def name_changed(self, name):
         self.nameLabel.setText(name)
         self.nameLabel.setToolTip(name)
+
+    def _stylesheet_changed(self, _stylesheet):
+        self._apply_stylesheet_color()
+
+    def _apply_stylesheet_color(self):
+        background = css_to_dict(self.cue.stylesheet).get("background", "")
+        self.colorStripe.setColor(background)
 
     def set_accurate_time(self, enable):
         self._accurate_time = enable
