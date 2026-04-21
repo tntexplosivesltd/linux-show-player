@@ -43,10 +43,10 @@ from lisp.ui.ui_utils import css_to_dict, dict_to_css, translate
 from lisp.ui.widgets import (
     CueActionComboBox,
     CueNextActionComboBox,
-    ColorButton,
     FadeComboBox,
     FadeEdit,
 )
+from lisp.ui.widgets.cue_color_palette import CueColorPalette
 
 
 def make_flat_group():
@@ -195,10 +195,12 @@ class CueGeneralSettingsPage(CueSettingsPage):
         self.colorGroup.setLayout(QHBoxLayout())
         self.colorGroup.layout().setContentsMargins(0, 0, 0, 0)
 
-        self.colorBButton = ColorButton(self.colorGroup)
-        self.colorFButton = ColorButton(self.colorGroup)
-        self.colorGroup.layout().addWidget(self.colorBButton)
-        self.colorGroup.layout().addWidget(self.colorFButton)
+        # QLab-style fixed palette replaces the old free-form
+        # QColorDialog. Foreground colour is gone — the palette only
+        # owns background, and any legacy ``color:`` key on a session's
+        # stylesheet drops on the next save.
+        self.colorPalette = CueColorPalette(self.colorGroup)
+        self.colorGroup.layout().addWidget(self.colorPalette)
 
         grid.addWidget(self.colorGroup, 0, 2)
 
@@ -271,12 +273,6 @@ class CueGeneralSettingsPage(CueSettingsPage):
             translate("CueAppearanceSettings", "Description/Note")
         )
         self.colorGroup.setTitle(translate("CueAppearanceSettings", "Color"))
-        self.colorBButton.setText(
-            translate("CueAppearanceSettings", "Select background color")
-        )
-        self.colorFButton.setText(
-            translate("CueAppearanceSettings", "Select font color")
-        )
         self.fontSizeGroup.setTitle(
             translate("CueAppearanceSettings", "Set Font Size")
         )
@@ -339,10 +335,11 @@ class CueGeneralSettingsPage(CueSettingsPage):
             self.cueDescriptionEdit.setPlainText(settings["description"])
         if "stylesheet" in settings:
             style = css_to_dict(settings["stylesheet"])
-            if "background" in style:
-                self.colorBButton.setColor(style["background"])
-            if "color" in style:
-                self.colorFButton.setColor(style["color"])
+            # Palette snaps any non-palette hex on load so legacy
+            # sessions migrate silently on the very next save. The
+            # "color" (foreground) key is deliberately ignored — the
+            # palette doesn't own a foreground affordance any more.
+            self.colorPalette.setColor(style.get("background", ""))
             if "font-size" in style:
                 # [:-2] strips the trailing "pt"
                 self.fontSizeSpin.setValue(int(style["font-size"][:-2]))
@@ -370,15 +367,21 @@ class CueGeneralSettingsPage(CueSettingsPage):
             settings["icon"] = self.iconName
         if self.isGroupEnabled(self.cueDescriptionGroup):
             settings["description"] = self.cueDescriptionEdit.toPlainText()
-        if self.isGroupEnabled(self.colorGroup):
-            if self.colorBButton.color() is not None:
-                style["background"] = self.colorBButton.color()
-            if self.colorFButton.color() is not None:
-                style["color"] = self.colorFButton.color()
-        if self.isGroupEnabled(self.fontSizeGroup):
+        color_enabled = self.isGroupEnabled(self.colorGroup)
+        font_enabled = self.isGroupEnabled(self.fontSizeGroup)
+        if color_enabled:
+            bg = self.colorPalette.color()
+            if bg:
+                style["background"] = bg
+        if font_enabled:
             style["font-size"] = str(self.fontSizeSpin.value()) + "pt"
 
-        if style:
+        # Emit the stylesheet whenever the user has opted in to either
+        # appearance group. Gating on ``style`` being non-empty would
+        # swallow the "No color" case — style stays empty, yet the
+        # user's intent ("clear the background") must still reach the
+        # diff engine for UpdateCuesCommand to dispatch.
+        if color_enabled or font_enabled:
             settings["stylesheet"] = dict_to_css(style)
 
         if (

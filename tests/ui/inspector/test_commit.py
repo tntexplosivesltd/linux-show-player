@@ -231,6 +231,51 @@ def test_combo_change_commits(engine_and_page):
     assert stack.do.call_count == 1
 
 
+def test_palette_color_pick_commits(qtbot):
+    """Clicking a palette swatch fires ``colorPicked``. The palette's
+    internal ``_Swatch`` buttons aren't checkable (the palette owns
+    selection visually, not via Qt state), so the generic
+    ``QAbstractButton.toggled`` hookup never fires. The commit engine
+    has to hook ``colorPicked`` explicitly or the inspector's live-
+    edit contract silently breaks for colour changes."""
+    from PyQt5.QtWidgets import QVBoxLayout
+
+    from lisp.ui.settings.pages import SettingsPage
+    from lisp.ui.widgets.cue_color_palette import CueColorPalette
+
+    class PalettePage(SettingsPage):
+        Name = "PalettePage"
+
+        def __init__(self, parent=None):
+            super().__init__(parent)
+            layout = QVBoxLayout(self)
+            self.palette = CueColorPalette()
+            layout.addWidget(self.palette)
+
+        def loadSettings(self, settings):
+            self.palette.setColor(settings.get("bg", ""))
+
+        def getSettings(self):
+            return {"bg": self.palette.color()}
+
+    page = PalettePage()
+    qtbot.addWidget(page)
+    stack = MagicMock()
+    engine = InspectorCommitEngine(commands_stack=stack)
+    engine.bind(page, [_make_cue()])
+
+    # Simulate a user click on the Red swatch — ``_Swatch.click()``
+    # routes through the palette's internal slot, which emits
+    # ``colorPicked``.
+    page.palette.swatches()[1].click()
+
+    assert stack.do.call_count == 1
+    command = stack.do.call_args.args[0]
+    assert isinstance(command, UpdateCueCommand)
+
+    engine.unbind()
+
+
 def test_commit_requested_signal_triggers_flush(engine_and_page):
     """Pages can ask the engine to commit via the inherited
     ``commit_requested`` signal — covers modal sub-dialogs (e.g. the

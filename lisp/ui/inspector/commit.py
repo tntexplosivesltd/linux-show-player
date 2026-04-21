@@ -57,6 +57,7 @@ from PyQt5.QtWidgets import (
 )
 
 from lisp.command.cue import UpdateCueCommand, UpdateCuesCommand
+from lisp.ui.widgets.cue_color_palette import CueColorPalette
 
 
 def _dict_diff(old: dict, new: dict) -> dict:
@@ -240,6 +241,16 @@ class InspectorCommitEngine:
                 child.currentIndexChanged.connect(self._flush_slot)
                 self._widget_connections.append(
                     (child.currentIndexChanged, self._flush_slot)
+                )
+            if isinstance(child, CueColorPalette):
+                # The palette's child swatches are non-checkable
+                # QAbstractButtons, so the generic ``toggled`` hookup
+                # above never sees them. Hook the palette's own
+                # ``colorPicked`` signal instead — it fires once per
+                # user pick with the new hex attached.
+                child.colorPicked.connect(self._flush_slot)
+                self._widget_connections.append(
+                    (child.colorPicked, self._flush_slot)
                 )
 
     def _disconnect_widget_connections(self) -> None:

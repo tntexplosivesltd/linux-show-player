@@ -18,6 +18,7 @@ from lisp.ui.inspector.mixed_values import (
     clear_mixed_indicator,
     is_mixed,
 )
+from lisp.ui.widgets.cue_color_palette import CueColorPalette
 
 
 # ---------------------------------------------------------------------------
@@ -182,6 +183,46 @@ class TestUnknownWidget:
         clear_mixed_indicator(w)
 
         assert w is w  # smoke — no exception raised
+
+
+class TestMixedValueProtocol:
+    """Widgets exposing ``setMixed(bool)`` / ``isMixed()`` are driven
+    through that protocol instead of the built-in per-class branches.
+    This keeps custom inspector widgets (``CueColorPalette``, and any
+    future plugin-authored affordances) in charge of their own mixed
+    presentation without mixed_values importing every widget module."""
+
+    def test_apply_calls_set_mixed_true_on_palette(self, qtbot):
+        w = CueColorPalette()
+        qtbot.addWidget(w)
+        w.setColor("#C03A2A")
+
+        apply_mixed_indicator(w)
+
+        assert w.isMixed() is True
+
+    def test_clear_calls_set_mixed_false_on_palette(self, qtbot):
+        w = CueColorPalette()
+        qtbot.addWidget(w)
+        w.setMixed(True)
+
+        clear_mixed_indicator(w)
+
+        assert w.isMixed() is False
+
+    def test_apply_does_not_emit_color_picked(self, qtbot):
+        # Mixed presentation is a passive hint; emitting colorPicked
+        # here would make the commit engine treat divergence display
+        # as a user edit.
+        w = CueColorPalette()
+        qtbot.addWidget(w)
+        received = []
+        w.colorPicked.connect(received.append)
+
+        apply_mixed_indicator(w)
+        clear_mixed_indicator(w)
+
+        assert received == []
 
 
 # ---------------------------------------------------------------------------

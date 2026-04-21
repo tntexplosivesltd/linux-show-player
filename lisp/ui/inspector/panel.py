@@ -65,6 +65,7 @@ from lisp.ui.settings.cue_settings import (
 )
 from lisp.ui.settings.pages import CuePageMixin
 from lisp.ui.ui_utils import translate
+from lisp.ui.widgets.cue_color_palette import CueColorPalette
 
 
 # Widget classes we know how to (a) read a scalar value from for
@@ -77,6 +78,7 @@ _TRACKABLE = (
     QAbstractSlider,
     QAbstractButton,
     QComboBox,
+    CueColorPalette,
 )
 
 
@@ -88,6 +90,11 @@ def _widget_value(widget: QWidget):
     across every QWidget subclass is not required — we just need
     equality to be meaningful for the cases listed above.
     """
+    if isinstance(widget, CueColorPalette):
+        # Check this before QAbstractButton-bearing branches —
+        # the palette is a QWidget containing swatch buttons, so
+        # its own hex value is what matters, not any child button.
+        return widget.color()
     if isinstance(widget, QLineEdit):
         return widget.text()
     if isinstance(widget, QAbstractSpinBox):
@@ -489,6 +496,12 @@ class InspectorPanel(QWidget):
     # ------------------------------------------------------------------
 
     def _write_widget_value(self, widget: QWidget, value) -> bool:
+        if isinstance(widget, CueColorPalette):
+            # Delegating to setColor runs the hex through
+            # snap_to_palette, so harness callers can pass legacy or
+            # near-palette hex and still land on a valid entry.
+            widget.setColor(value if value is not None else "")
+            return True
         if isinstance(widget, QLineEdit):
             widget.setText(str(value))
             return True

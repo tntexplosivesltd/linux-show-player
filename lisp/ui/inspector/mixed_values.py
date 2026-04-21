@@ -76,7 +76,18 @@ def apply_mixed_indicator(widget: QWidget) -> None:
 
     Silently no-ops for widget classes the inspector does not know
     how to decorate (custom plugin widgets, layout containers, etc.).
+
+    Custom widgets can opt in by exposing a ``setMixed(bool)`` method
+    — the inspector will drive that protocol in preference to the
+    built-in per-class branches, so plugin-authored affordances
+    (``CueColorPalette``, custom list pickers, etc.) own their own
+    mixed presentation without this module importing them.
     """
+    set_mixed = getattr(widget, "setMixed", None)
+    if callable(set_mixed):
+        set_mixed(True)
+        return
+
     if isinstance(widget, QLineEdit):
         widget.clear()
         widget.setPlaceholderText(MIXED_PLACEHOLDER)
@@ -108,6 +119,11 @@ def clear_mixed_indicator(widget: QWidget) -> None:
     which point all selected cues share that value and the dash
     indicator is no longer appropriate.
     """
+    set_mixed = getattr(widget, "setMixed", None)
+    if callable(set_mixed):
+        set_mixed(False)
+        return
+
     if isinstance(widget, QLineEdit):
         widget.setPlaceholderText("")
         return

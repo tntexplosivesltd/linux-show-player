@@ -377,3 +377,56 @@ class TestExternalRefresh:
         qtbot.wait(50)
 
         panel._engine._commands_stack.do.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# CueColorPalette value adapters
+# ---------------------------------------------------------------------------
+
+
+class TestColorPaletteAdapters:
+    """The panel's private value-read/write helpers need a branch for
+    ``CueColorPalette`` so that (a) divergence detection on a multi-cue
+    selection sees differing backgrounds and (b) the E2E harness can
+    drive the palette through ``set_field_value``. Without these
+    branches the palette is opaque — `_widget_value` returns None,
+    collapsing divergence detection to a silent no-op."""
+
+    def test_widget_value_reads_palette_color(self, qtbot):
+        from lisp.ui.inspector.panel import _widget_value
+        from lisp.ui.widgets.cue_color_palette import CueColorPalette
+
+        w = CueColorPalette()
+        qtbot.addWidget(w)
+        w.setColor("#3535B8")
+
+        assert _widget_value(w) == "#3535B8"
+
+    def test_widget_value_reads_empty_for_none_slot(self, qtbot):
+        from lisp.ui.inspector.panel import _widget_value
+        from lisp.ui.widgets.cue_color_palette import CueColorPalette
+
+        w = CueColorPalette()
+        qtbot.addWidget(w)
+
+        assert _widget_value(w) == ""
+
+    def test_write_widget_value_sets_palette_color(self, qtbot, panel):
+        from lisp.ui.widgets.cue_color_palette import CueColorPalette
+
+        w = CueColorPalette()
+        qtbot.addWidget(w)
+
+        assert panel._write_widget_value(w, "#C03A2A") is True
+        assert w.color() == "#C03A2A"
+
+    def test_write_widget_value_snaps_non_palette_hex(self, qtbot, panel):
+        # Harness callers may hand over legacy hex; delegating through
+        # setColor ensures snap-to-palette applies.
+        from lisp.ui.widgets.cue_color_palette import CueColorPalette
+
+        w = CueColorPalette()
+        qtbot.addWidget(w)
+
+        panel._write_widget_value(w, "#C13B2B")
+        assert w.color() == "#C03A2A"
