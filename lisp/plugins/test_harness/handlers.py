@@ -719,6 +719,207 @@ def register_all(dispatcher, app, signal_manager):
             ),
         }
 
+    # --- Inspector ---
+    #
+    # Driving the inspector through Qt requires marshaling onto the
+    # main thread for any read that touches widget state, because the
+    # populate-and-bind path runs through QTimer.singleShot — even
+    # "look up the current page name" can race against an in-flight
+    # rebuild kicked off by a selection change.
+
+    def _inspector():
+        return app.window.inspectorPanel
+
+    def _mixed_indicator_active(widget):
+        """True when ``widget`` is currently displaying the "—" dash.
+
+        Mirrors the conventions in lisp.ui.inspector.mixed_values:
+        each widget class has its own "no single value" rendering.
+        """
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtWidgets import (
+            QAbstractSpinBox,
+            QCheckBox,
+            QComboBox,
+            QLineEdit,
+        )
+        from lisp.ui.inspector.mixed_values import MIXED_PLACEHOLDER
+
+        if isinstance(widget, QLineEdit):
+            return widget.placeholderText() == MIXED_PLACEHOLDER
+        if isinstance(widget, QCheckBox):
+            return widget.checkState() == Qt.PartiallyChecked
+        if isinstance(widget, QAbstractSpinBox):
+            return widget.specialValueText() == MIXED_PLACEHOLDER
+        if isinstance(widget, QComboBox):
+            return widget.currentIndex() == -1
+        return False
+
+    def handle_inspector_state(params):
+        """Snapshot of the inspector pane: visibility, bound cues, tabs."""
+        def _read():
+            panel = _inspector()
+            tabs = panel._tabs
+            current_idx = tabs.currentIndex()
+            current_name = (
+                tabs.tabText(current_idx) if current_idx >= 0 else None
+            )
+            return {
+                "visible": panel.isVisible(),
+                "cue_ids": panel.active_cue_ids(),
+                "page_names": panel.page_names(),
+                "current_page": current_name,
+                "tab_count": tabs.count(),
+            }
+
+        return invoke_on_main_thread(_read)
+
+    def handle_inspector_toggle(params):
+        """Show or hide the inspector pane via the View action."""
+        action = app.window.showInspectorAction
+
+        def _do():
+            target = params.get("visible")
+            if target is None:
+                action.trigger()
+            else:
+                # setChecked alone doesn't fire the toggled handler
+                # when the state already matches — use trigger to
+                # mirror what the menu item does.
+                if bool(target) != action.isChecked():
+                    action.trigger()
+            return _inspector().isVisible()
+
+        visible = invoke_on_main_thread(_do)
+        return {"visible": visible}
+
+    def handle_inspector_bind(params):
+        """Force the inspector to a specific cue selection."""
+        cue_ids = params.get("cue_ids")
+        if cue_ids is None:
+            raise AppError("cue_ids is required")
+
+        cues = [_get_cue(cid) for cid in cue_ids]
+
+        def _do():
+            _inspector().bind(cues)
+            return _inspector().active_cue_ids()
+
+        return {"cue_ids": invoke_on_main_thread(_do)}
+
+    def handle_inspector_flush(params):
+        """Commit any pending inspector edits."""
+        invoke_on_main_thread(_inspector().flush)
+        return {"ok": True}
+
+    def handle_inspector_set_active_page(params):
+        """Switch the visible inspector tab by translated name."""
+        page_name = params.get("page_name")
+        if not page_name:
+            raise AppError("page_name is required")
+
+        def _do():
+            panel = _inspector()
+            tabs = panel._tabs
+            for i in range(tabs.count()):
+                if tabs.tabText(i) == page_name:
+                    tabs.setCurrentIndex(i)
+                    return True
+            return False
+
+        ok = invoke_on_main_thread(_do)
+        if not ok:
+            raise AppError(f"Inspector page not found: {page_name}")
+        return {"ok": True}
+
+    def handle_inspector_set_field(params):
+        """Drive a widget on a specific inspector page.
+
+        The widget's normal change/focus pathway is responsible for
+        flushing — but harness callers usually want their edit
+        committed immediately, so we follow up with an explicit
+        flush before returning.
+        """
+        page_name = params.get("page_name")
+        object_name = params.get("object_name")
+        if not page_name or not object_name:
+            raise AppError(
+                "page_name and object_name are required"
+            )
+        if "value" not in params:
+            raise AppError("value is required")
+        value = params["value"]
+
+        def _do():
+            panel = _inspector()
+            ok = panel.set_field_value(page_name, object_name, value)
+            if ok:
+                panel.flush()
+            return ok
+
+        ok = invoke_on_main_thread(_do)
+        if not ok:
+            raise AppError(
+                f"Field not found: {page_name}/{object_name}"
+            )
+        return {"ok": True}
+
+    def handle_inspector_set_group_enabled(params):
+        """Toggle a multi-edit group's "apply to all" checkbox.
+
+        No-op for single-cue selections (groups aren't checkable then).
+        """
+        page_name = params.get("page_name")
+        group_name = params.get("group_name")
+        if not page_name or not group_name:
+            raise AppError(
+                "page_name and group_name are required"
+            )
+        if "enabled" not in params:
+            raise AppError("enabled is required")
+        enabled = bool(params["enabled"])
+
+        def _do():
+            return _inspector().set_group_enabled(
+                page_name, group_name, enabled
+            )
+
+        ok = invoke_on_main_thread(_do)
+        if not ok:
+            raise AppError(
+                f"Group not found or not checkable: "
+                f"{page_name}/{group_name}"
+            )
+        return {"ok": True}
+
+    def handle_inspector_get_field(params):
+        """Read a widget's current displayed value + mixed-state flag."""
+        from lisp.ui.inspector.panel import _widget_value
+
+        page_name = params.get("page_name")
+        object_name = params.get("object_name")
+        if not page_name or not object_name:
+            raise AppError(
+                "page_name and object_name are required"
+            )
+
+        def _do():
+            widget = _inspector().find_field(page_name, object_name)
+            if widget is None:
+                return None
+            return {
+                "value": _widget_value(widget),
+                "mixed": _mixed_indicator_active(widget),
+                "class": type(widget).__name__,
+            }
+
+        result = invoke_on_main_thread(_do)
+        if result is None:
+            raise AppError(
+                f"Field not found: {page_name}/{object_name}"
+            )
+        return result
+
     # --- Settings ---
 
     def handle_settings_list_cue_pages(params):
@@ -837,6 +1038,15 @@ def register_all(dispatcher, app, signal_manager):
         "playback_monitor.toggle": handle_playback_monitor_toggle,
         # Settings
         "settings.list_cue_pages": handle_settings_list_cue_pages,
+        # Inspector
+        "inspector.state": handle_inspector_state,
+        "inspector.toggle": handle_inspector_toggle,
+        "inspector.bind": handle_inspector_bind,
+        "inspector.flush": handle_inspector_flush,
+        "inspector.set_active_page": handle_inspector_set_active_page,
+        "inspector.set_field": handle_inspector_set_field,
+        "inspector.set_group_enabled": handle_inspector_set_group_enabled,
+        "inspector.get_field": handle_inspector_get_field,
     }
 
     for method_name, handler in methods.items():

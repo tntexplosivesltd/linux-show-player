@@ -348,8 +348,18 @@ class CueListView(QTreeWidget):
         if item is None:
             return
 
-        # Remove from current parent
         parent = item.parent()
+        current_parent_id = parent.cue.id if parent is not None else None
+        new_parent_id = cue.group_id or None
+        # property_changed fires on every setattr, so undo of an
+        # unrelated edit re-emits group_id with its existing value.
+        # Skip the take-and-reinsert round-trip when the item is
+        # already under the right parent — otherwise we'd wipe the
+        # tree's selection as a side-effect.
+        if current_parent_id == new_parent_id:
+            return
+
+        # Remove from current parent
         if parent is not None:
             parent.removeChild(item)
         else:

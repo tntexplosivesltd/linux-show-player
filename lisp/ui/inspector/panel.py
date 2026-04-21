@@ -137,6 +137,7 @@ class InspectorPanel(QWidget):
 
         self._engine = InspectorCommitEngine()
         self._layout = None
+        self._observed_cue_model = None
 
         # State backing the "same selection shape" short-circuit.
         self._cues: list = []
@@ -183,6 +184,13 @@ class InspectorPanel(QWidget):
         self._layout = layout
         if layout is not None:
             layout.selection_changed.connect(self._on_selection_changed)
+            # Direct-bind callers (RPC, plugins) can bypass selection,
+            # so we also listen for removals to drop dead references
+            # without depending on the tree re-selecting something.
+            cue_model = getattr(layout, "cue_model", None)
+            if cue_model is not None:
+                cue_model.item_removed.connect(self._on_cue_removed)
+                self._observed_cue_model = cue_model
             # Seed initial state from whatever's already selected.
             self._on_selection_changed()
 
@@ -196,8 +204,28 @@ class InspectorPanel(QWidget):
         except (TypeError, ValueError):
             # Signal may already be cleared during teardown.
             pass
+        cue_model = getattr(self, "_observed_cue_model", None)
+        if cue_model is not None:
+            try:
+                cue_model.item_removed.disconnect(self._on_cue_removed)
+            except (TypeError, ValueError):
+                pass
+            self._observed_cue_model = None
         self._layout = None
         self.bind([])
+
+    def _on_cue_removed(self, cue) -> None:
+        """Drop ``cue`` from the bound selection if present.
+
+        Called regardless of how the inspector got bound — selection
+        follow or direct `bind()`. If the removed cue was the only
+        one, the panel collapses to empty; otherwise it stays bound
+        to the survivors and reloads them.
+        """
+        if cue not in self._cues:
+            return
+        remaining = [c for c in self._cues if c is not cue]
+        self.bind(remaining)
 
     # ------------------------------------------------------------------
     # Public hooks
@@ -256,25 +284,59 @@ class InspectorPanel(QWidget):
     def page_names(self) -> list:
         return [self._tabs.tabText(i) for i in range(self._tabs.count())]
 
+    def find_field(self, page_name: str, field_name: str) -> Optional[QWidget]:
+        """Locate a field on a named page.
+
+        Tries Qt's `objectName` registry first, then falls back to a
+        Python attribute lookup on the page — settings pages don't
+        normally call `setObjectName()`, but they do expose their
+        editable widgets as instance attributes (e.g. `cueName`,
+        `spinLoop`), so the attribute path is the practical one.
+        """
+        for i in range(self._tabs.count()):
+            if self._tabs.tabText(i) != page_name:
+                continue
+            page = self._tabs.widget(i)
+            widget = page.findChild(QWidget, field_name)
+            if widget is not None:
+                return widget
+            attr = getattr(page, field_name, None)
+            if isinstance(attr, QWidget):
+                return attr
+            return None
+        return None
+
     def set_field_value(
-        self, page_name: str, object_name: str, value
+        self, page_name: str, field_name: str, value
     ) -> bool:
-        """Drive a field by object name — used by the E2E harness.
+        """Drive a field by name — used by the E2E harness.
 
         Returns True if the field was found and updated. The
         corresponding commit follows the normal focus-out /
         signal path, so callers must emit the right final event
         (e.g. focus-out for a QLineEdit) to push the command.
         """
-        for i in range(self._tabs.count()):
-            if self._tabs.tabText(i) != page_name:
-                continue
-            page = self._tabs.widget(i)
-            widget = page.findChild(QWidget, object_name)
-            if widget is None:
-                return False
-            return self._write_widget_value(widget, value)
-        return False
+        widget = self.find_field(page_name, field_name)
+        if widget is None:
+            return False
+        return self._write_widget_value(widget, value)
+
+    def set_group_enabled(
+        self, page_name: str, group_name: str, enabled: bool
+    ) -> bool:
+        """Toggle a multi-edit group's "apply this property" checkbox.
+
+        In multi-cue mode, pages wrap each editable property in a
+        checkable `QGroupBox`; only checked groups contribute to
+        `getSettings()` and therefore to the diff. The harness uses
+        this to fan an edit out across a selection without having
+        to simulate a mouse click on the group header.
+        """
+        widget = self.find_field(page_name, group_name)
+        if widget is None or not widget.isCheckable():
+            return False
+        widget.setChecked(bool(enabled))
+        return True
 
     # ------------------------------------------------------------------
     # Selection plumbing
