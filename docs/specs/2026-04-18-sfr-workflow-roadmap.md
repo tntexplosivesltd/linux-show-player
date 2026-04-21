@@ -20,35 +20,43 @@ Group targets fan out via the existing `GroupCue` cascade.
 - [ ] QA review (`voltagent-qa-sec:qa-expert`)
 - [ ] Code review (`voltagent-qa-sec:code-reviewer`)
 
-## Part 2 — Fade & Resume cue — **not started**
+## Part 2 — Fade & Resume cue — **in progress**
+
+Spec: [`2026-04-21-fade-and-resume-cue-design.md`](2026-04-21-fade-and-resume-cue-design.md)
 
 Symmetric counterpart to Fade & Stop. Fades `live_volume` / `live_alpha`
 from 0 back up while dispatching `Resume`, so one cue owns both ends of an
 intermission fade without relying on the target's own `fadein_duration`.
 
-Open questions to brainstorm:
+Resolved brainstorming questions:
 
-- [ ] Does it need its own duration + fade-in curve, or inherit from a
-      paired Fade & Stop cue? (Likely: own settings, matches Part 1.)
-- [ ] What happens if the target isn't in a paused state when fired?
-      (Error? No-op? Start from scratch?)
-- [ ] Does it set `live_volume` / `live_alpha` to `0` *before* calling
-      Resume (to avoid a pop at resume-tick-0), or trust the target was left
-      at 0 by the previous Fade & Stop?
-- [ ] Can it target a non-Media cue (e.g. a paused Command cue)? Probably
-      same graceful degradation as Part 1 — no fader, delayed Resume.
-- [ ] Should it be a separate cue type or a mode flag on `StopCue`?
-      (Leaning separate for clarity, matches `VolumeControl` single-purpose
-      convention.)
+- Own `duration` + `fade_type` (mirrors Part 1; pre-show fade-in often
+  differs from post-show fade-out).
+- Target-state policy: Paused → happy path; Running → fade-up fallback, no
+  Resume dispatched; Stopped/Error → `_error()`; Pre/PostWait → treated as
+  Running.
+- Zero `live_volume`/`live_alpha` before dispatching Resume (Paused happy
+  path only, and only when a fade is actually going to run — skipped when
+  `duration == 0`).
+- Non-Media targets: graceful degradation, same as Part 1 ("delayed
+  resume").
+- Separate `ResumeCue` class (not a mode flag on `StopCue`).
 
-Checklist once brainstormed:
+Implementation note: Part 2 introduces `_fader_coordinator.py` as shared
+infrastructure. The Part 1 plan gets retrofitted to use it from the first
+commit (Part 1 is specced but not yet implemented).
 
-- [ ] Brainstorm
-- [ ] Spec
-- [ ] Plan
-- [ ] Implement
-- [ ] Tests (unit + E2E)
-- [ ] QA + code review
+Checklist:
+
+- [x] Brainstorm
+- [x] Spec
+- [ ] Retrofit Part 1 plan to use `_fader_coordinator`
+- [ ] Write Part 2 implementation plan
+- [ ] Implement `_fader_coordinator` + `ResumeCue` + `ResumeCueSettings`
+- [ ] Unit tests (coordinator + ResumeCue + updated StopCue tests)
+- [ ] E2E test — full intermission workflow (Stop then Resume)
+- [ ] QA review (`voltagent-qa-sec:qa-expert`)
+- [ ] Code review (`voltagent-qa-sec:code-reviewer`)
 
 ## Part 3 — Hibernating state & active-cues panel filtering — **not started**
 
