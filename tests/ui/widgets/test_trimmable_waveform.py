@@ -309,3 +309,32 @@ class TestTrimmableWaveformWidgetKeyboard:
 
         QTest.keyClick(widget, Qt.Key_Right, Qt.ShiftModifier)
         assert widget.stopTime() == 6_000
+
+
+class TestTrimmableTimelineWidget:
+    def test_has_trim_api(self, qtbot):
+        """Same API surface as TrimmableWaveformWidget."""
+        from lisp.ui.widgets.waveform import TrimmableTimelineWidget
+
+        widget = TrimmableTimelineWidget(duration_ms=10_000)
+        qtbot.addWidget(widget)
+
+        assert widget.startTime() == 0
+        assert widget.stopTime() == 10_000
+
+    def test_set_duration_rescales_stop(self, qtbot):
+        """Post-construction duration change snaps stop marker."""
+        from lisp.ui.widgets.waveform import TrimmableTimelineWidget
+
+        widget = TrimmableTimelineWidget(duration_ms=0)
+        qtbot.addWidget(widget)
+        widget.setDuration(5_000)
+        assert widget.stopTime() == 5_000
+
+    def test_paint_survives(self, qtbot):
+        from lisp.ui.widgets.waveform import TrimmableTimelineWidget
+        widget = TrimmableTimelineWidget(duration_ms=10_000)
+        qtbot.addWidget(widget)
+        widget.resize(400, 120)
+        widget.show()
+        qtbot.waitExposed(widget)
