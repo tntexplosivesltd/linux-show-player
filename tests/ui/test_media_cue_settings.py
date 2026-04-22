@@ -105,8 +105,15 @@ class TestStopTimeSentinelMapping:
 
         assert page.stopEdit.time() == QTime.fromMSecsSinceStartOfDay(60_000)
 
-    def test_get_settings_returns_typed_value_verbatim(self, qtbot):
-        """No sentinel translation on save — what the user sees is what persists."""
+    def test_get_settings_roundtrips_zero_sentinel(self, qtbot):
+        """stop_time == 0 (play to natural end) must survive load→save.
+
+        The backend treats stop_time == 0 as SeekType.NONE ("don't set a
+        stop position"), distinct from stop_time == duration which is
+        SeekType.SET. Map duration back to 0 on save so a user who loads
+        and immediately re-saves doesn't silently alter GStreamer seek
+        semantics.
+        """
         page = MediaCueSettings()
         qtbot.addWidget(page)
         page.loadSettings(
@@ -114,7 +121,32 @@ class TestStopTimeSentinelMapping:
         )
 
         settings = page.getSettings()
-        assert settings["media"]["stop_time"] == 180_000
+        assert settings["media"]["stop_time"] == 0
+
+    def test_get_settings_preserves_user_stop_at_end(self, qtbot):
+        """If the user explicitly drags stop to duration, save verbatim.
+
+        (Without a duration context it cannot be distinguished from the
+        sentinel case — but once user interaction has occurred we prefer
+        preserving their value. Policy choice: map to 0 uniformly so
+        SeekType.NONE is always used when stop == duration. Re-evaluate
+        if users complain.)
+        """
+        page = MediaCueSettings()
+        qtbot.addWidget(page)
+        page.loadSettings(
+            {
+                "media": {
+                    "stop_time": 120_000,
+                    "duration": 180_000,
+                    "start_time": 0,
+                }
+            }
+        )
+        # User drags stop to end.
+        page.stopEdit.setTime(QTime.fromMSecsSinceStartOfDay(180_000))
+        settings = page.getSettings()
+        assert settings["media"]["stop_time"] == 0
 
     def test_zero_duration_leaves_zero(self, qtbot):
         """When duration is unknown, the 0 sentinel can't be translated."""
@@ -285,6 +317,63 @@ class TestWaveformTrimmerSync:
             page.stopEdit.minimumTime()
             == QTime.fromMSecsSinceStartOfDay(3_001)
         )
+
+    def test_bound_clamp_does_not_re_enter_handler(
+        self, qtbot, _with_backend
+    ):
+        """Setting startEdit past its old max clamps and must not recurse.
+
+        Scenario: stopEdit is at 5_000 (so startEdit max is 4_999); user
+        types 8_000 into startEdit. Qt clamps to 4_999 and re-emits
+        timeChanged. Without blockSignals, the handler re-enters and
+        recomputes bounds — with stacked clamps and double trimmer pushes.
+        """
+        page = MediaCueSettings()
+        qtbot.addWidget(page)
+        self._load_with_waveform(page, qtbot, _with_backend)
+
+        # Establish a known stop position so startEdit max is 4_999.
+        page.stopEdit.setTime(QTime.fromMSecsSinceStartOfDay(5_000))
+        qtbot.wait(10)
+
+        handler_calls = {"n": 0}
+        original = page._on_start_edit_changed
+
+        def counting(qtime):
+            handler_calls["n"] += 1
+            return original(qtime)
+
+        page._on_start_edit_changed = counting
+        page.startEdit.timeChanged.disconnect(original)
+        page.startEdit.timeChanged.connect(counting)
+
+        # Type a value above the current max. Qt will clamp to 4_999
+        # and emit timeChanged. Handler must fire at most once.
+        page.startEdit.setTime(QTime.fromMSecsSinceStartOfDay(8_000))
+        qtbot.wait(20)
+
+        assert handler_calls["n"] == 1, (
+            f"handler re-entered {handler_calls['n']} times"
+        )
+
+    def test_clamped_field_value_syncs_to_trimmer(
+        self, qtbot, _with_backend
+    ):
+        """User-typed value clamped by Qt must still land on the trimmer."""
+        page = MediaCueSettings()
+        qtbot.addWidget(page)
+        self._load_with_waveform(page, qtbot, _with_backend)
+
+        # Force max on startEdit by setting stop first.
+        page.stopEdit.setTime(QTime.fromMSecsSinceStartOfDay(5_000))
+        qtbot.wait(10)
+
+        # Typing 8_000 clamps to 4_999; trimmer must follow the clamp.
+        page.startEdit.setTime(QTime.fromMSecsSinceStartOfDay(8_000))
+        qtbot.wait(10)
+
+        assert page.startEdit.time() == QTime.fromMSecsSinceStartOfDay(4_999)
+        assert page.trimmer.startTime() == 4_999
 
     def test_sync_does_not_recurse(self, qtbot, _with_backend):
         """Typing a value must not re-enter via the marker signal."""

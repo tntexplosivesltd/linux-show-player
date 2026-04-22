@@ -338,3 +338,39 @@ class TestTrimmableTimelineWidget:
         widget.resize(400, 120)
         widget.show()
         qtbot.waitExposed(widget)
+
+
+class TestWaveformWidgetDetach:
+    def test_detach_breaks_ready_connection(self, qtbot):
+        """After detach(), a late ready emission must not hit the widget.
+
+        Real scenario: user navigates away from a cue before its decode
+        pipeline finishes. The page calls waveform.clear() + schedules
+        the widget for deletion; a queued ready emission still fires
+        and would land on a Qt-dead widget.
+        """
+        from lisp.ui.widgets.waveform import TrimmableWaveformWidget
+
+        waveform = _FakeWaveform(duration_ms=0)
+        widget = TrimmableWaveformWidget(waveform)
+        qtbot.addWidget(widget)
+
+        calls = {"ready": 0}
+        original = widget._ready
+
+        def counting():
+            calls["ready"] += 1
+            return original()
+
+        widget._ready = counting
+        # Re-connect so our counter sees the emission.
+        waveform.ready.disconnect(original)
+        from lisp.core.signal import Connection
+        waveform.ready.connect(counting, Connection.QtQueued)
+
+        widget.detach()
+        waveform.duration = 5_000
+        waveform.mark_ready()
+        qtbot.wait(20)
+
+        assert calls["ready"] == 0

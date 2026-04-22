@@ -100,6 +100,9 @@ class MediaCueSettings(SettingsPage):
         self.trimmer = None
         self._cue = None
         self._current_waveform = None
+        # Stashed at loadSettings time so getSettings can map a displayed
+        # stop_time == duration back to the 0 sentinel (SeekType.NONE).
+        self._last_duration = 0
 
         self.retranslateUi()
 
@@ -128,6 +131,12 @@ class MediaCueSettings(SettingsPage):
             settings["start_time"] = time
         if self.isGroupEnabled(self.stopGroup):
             time = self.stopEdit.time().msecsSinceStartOfDay()
+            # Backend uses stop_time == 0 as SeekType.NONE ("play to
+            # natural end"), distinct from SeekType.SET duration. When
+            # the displayed stop equals the known duration, map back to
+            # the sentinel so the seek semantics survive a save cycle.
+            if self._last_duration > 0 and time == self._last_duration:
+                time = 0
             settings["stop_time"] = time
         if self.isGroupEnabled(self.loopGroup):
             settings["loop"] = self.spinLoop.value()
@@ -155,6 +164,7 @@ class MediaCueSettings(SettingsPage):
         media = settings.get("media", {})
         is_image = self._is_image_cue(media)
         duration = media.get("duration", 0)
+        self._last_duration = duration
 
         if "loop" in media:
             self.spinLoop.setValue(media["loop"])
@@ -236,6 +246,10 @@ class MediaCueSettings(SettingsPage):
                 )
             except TypeError:
                 pass
+            # Break the waveform→widget ready link before deleteLater
+            # so a queued ready emission can't land on a Qt-dead widget.
+            if hasattr(self._waveformSlot, "detach"):
+                self._waveformSlot.detach()
             self.layout().removeWidget(self._waveformSlot)
             self._waveformSlot.deleteLater()
             self._waveformSlot = None

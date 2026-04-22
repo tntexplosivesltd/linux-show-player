@@ -35,6 +35,15 @@ class WaveformWidget(QWidget):
         self.setMaximum(self._waveform.duration)
         self.update()
 
+    def detach(self):
+        # Drop the ready-signal connection so a late queued emission
+        # after the widget is scheduled for deletion can't fire _ready()
+        # on a Qt-dead instance.
+        try:
+            self._waveform.ready.disconnect(self._ready)
+        except (TypeError, ValueError):
+            pass
+
     def maximum(self):
         return self._maximum
 
