@@ -339,6 +339,85 @@ class TestTrimmableTimelineWidget:
         widget.show()
         qtbot.waitExposed(widget)
 
+    def test_mouse_drag_moves_nearest_marker(self, qtbot):
+        """Same click-nearest-marker UX as TrimmableWaveformWidget."""
+        from PyQt5.QtCore import QPoint
+        from PyQt5.QtGui import QMouseEvent
+        from lisp.ui.widgets.waveform import TrimmableTimelineWidget
+
+        widget = TrimmableTimelineWidget(duration_ms=10_000)
+        qtbot.addWidget(widget)
+        widget.resize(400, 120)
+        widget.show()
+        qtbot.waitExposed(widget)
+
+        # Click near start (x=0 maps to 0 ms); drag to x=100 → 2_500 ms.
+        press = QMouseEvent(
+            QMouseEvent.MouseButtonPress,
+            QPoint(5, 60),
+            Qt.LeftButton,
+            Qt.LeftButton,
+            Qt.NoModifier,
+        )
+        widget.mousePressEvent(press)
+        move = QMouseEvent(
+            QMouseEvent.MouseMove,
+            QPoint(100, 60),
+            Qt.NoButton,
+            Qt.LeftButton,
+            Qt.NoModifier,
+        )
+        widget.mouseMoveEvent(move)
+        assert widget.startTime() == 2_500
+
+    def test_keyboard_nudge_moves_active_marker(self, qtbot):
+        from PyQt5.QtGui import QKeyEvent
+        from lisp.ui.widgets.waveform import TrimmableTimelineWidget
+
+        widget = TrimmableTimelineWidget(duration_ms=10_000)
+        qtbot.addWidget(widget)
+        widget.focusStartMarker()
+        widget.setStartTime(500)
+
+        evt = QKeyEvent(
+            QKeyEvent.KeyPress, Qt.Key_Right, Qt.NoModifier
+        )
+        widget.keyPressEvent(evt)
+        assert widget.startTime() == 600  # 100 ms step
+
+    def test_mouse_release_emits_trim_released(self, qtbot):
+        from PyQt5.QtCore import QPoint
+        from PyQt5.QtGui import QMouseEvent
+        from lisp.ui.widgets.waveform import TrimmableTimelineWidget
+
+        widget = TrimmableTimelineWidget(duration_ms=10_000)
+        qtbot.addWidget(widget)
+        widget.resize(400, 120)
+
+        fired = {"n": 0}
+        widget.trimReleased.connect(
+            lambda: fired.__setitem__("n", fired["n"] + 1)
+        )
+
+        press = QMouseEvent(
+            QMouseEvent.MouseButtonPress,
+            QPoint(5, 60),
+            Qt.LeftButton,
+            Qt.LeftButton,
+            Qt.NoModifier,
+        )
+        release = QMouseEvent(
+            QMouseEvent.MouseButtonRelease,
+            QPoint(100, 60),
+            Qt.LeftButton,
+            Qt.NoButton,
+            Qt.NoModifier,
+        )
+        widget.mousePressEvent(press)
+        widget.mouseReleaseEvent(release)
+
+        assert fired["n"] == 1
+
 
 class TestWaveformWidgetDetach:
     def test_detach_breaks_ready_connection(self, qtbot):
