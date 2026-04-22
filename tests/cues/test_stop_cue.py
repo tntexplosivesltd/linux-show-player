@@ -243,3 +243,65 @@ class TestAbort:
         cue = StopCue(app=mock_app)
         assert cue._runner is None
         assert cue.__stop__() is True  # no exception raised
+
+
+class TestStopCueSettings:
+    """Settings-page round-trip. Requires QApplication via qapp fixture."""
+
+    @pytest.fixture(autouse=True)
+    def _icon_theme(self):
+        """FadeEdit → FadeComboBox looks up icons via IconTheme.get; init a
+        theme so _GlobalTheme isn't None when the settings page is built."""
+        from lisp.ui.icons import IconTheme
+        if IconTheme._GlobalTheme is None:
+            IconTheme.set_theme_name("lisp")
+        yield
+
+    def test_get_settings_empty_when_checkable_and_unchecked(self, qapp):
+        """enableCheck(True) makes groups checkable and leaves them
+        unchecked; getSettings should skip every group in that state.
+        This mirrors the 'apply to group of cues' dialog flow."""
+        from lisp.plugins.action_cues.stop_cue import StopCueSettings
+
+        page = StopCueSettings()
+        page.enableCheck(True)
+        assert page.getSettings() == {}
+
+    def test_load_then_get_round_trip(self, qapp, monkeypatch):
+        from lisp.plugins.action_cues.stop_cue import StopCueSettings
+
+        fake_target = MagicMock()
+        fake_target.name = "Target Cue"
+        monkeypatch.setattr(
+            "lisp.plugins.action_cues.stop_cue.Application",
+            lambda: MagicMock(cue_model=MagicMock(
+                get=lambda _id: fake_target, filter=lambda *_: [],
+            )),
+        )
+
+        page = StopCueSettings()
+        # Default state: groups are NOT checkable → isGroupEnabled() is True,
+        # so getSettings() reads every group. This matches the single-cue
+        # dialog flow.
+        page.loadSettings({
+            "target_id": "abc",
+            "action": CueAction.Pause.value,
+            "duration": 2500,
+            "fade_type": "Linear",
+        })
+
+        settings = page.getSettings()
+        assert settings["target_id"] == "abc"
+        assert settings["action"] == CueAction.Pause.value
+        assert settings["duration"] == 2500
+        assert settings["fade_type"] == "Linear"
+
+    def test_registry_association(self):
+        from lisp.ui.settings.cue_settings import CueSettingsRegistry
+        from lisp.plugins.action_cues.stop_cue import (
+            StopCue, StopCueSettings,
+        )
+
+        pages = list(CueSettingsRegistry().filter(StopCue))
+        assert StopCueSettings in pages, \
+            "StopCueSettings not registered for StopCue"

@@ -17,8 +17,12 @@
 
 import logging
 
-from PyQt5.QtCore import QT_TRANSLATE_NOOP
+from PyQt5.QtCore import QT_TRANSLATE_NOOP, Qt
+from PyQt5.QtWidgets import (
+    QComboBox, QGroupBox, QLabel, QPushButton, QVBoxLayout,
+)
 
+from lisp.application import Application
 from lisp.core.decorators import async_function
 from lisp.core.fade_functions import FadeOutType
 from lisp.core.properties import Property
@@ -28,7 +32,11 @@ from lisp.plugins.action_cues._fader_coordinator import (
     collect_live_faders,
     ParallelFadeRunner,
 )
+from lisp.ui.cuelistdialog import CueSelectDialog
+from lisp.ui.settings.cue_settings import CueSettingsRegistry
+from lisp.ui.settings.pages import SettingsPage
 from lisp.ui.ui_utils import translate
+from lisp.ui.widgets import FadeEdit
 
 logger = logging.getLogger(__name__)
 
@@ -115,3 +123,110 @@ class StopCue(Cue):
         return True
 
     __interrupt__ = __stop__
+
+
+class StopCueSettings(SettingsPage):
+    Name = QT_TRANSLATE_NOOP("SettingsPageName", "Fade & Stop Settings")
+    SortOrder = 30
+
+    SupportedActions = [
+        CueAction.Stop,
+        CueAction.Pause,
+        CueAction.Interrupt,
+    ]
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.setLayout(QVBoxLayout())
+        self.layout().setAlignment(Qt.AlignTop)
+
+        self.cue_id = ""
+        self.cueDialog = CueSelectDialog(
+            cues=Application().cue_model.filter(Cue), parent=self,
+        )
+
+        # Target-cue selector
+        self.cueGroup = QGroupBox(self)
+        self.cueGroup.setLayout(QVBoxLayout())
+        self.layout().addWidget(self.cueGroup)
+
+        self.cueLabel = QLabel(self.cueGroup)
+        self.cueLabel.setAlignment(Qt.AlignCenter)
+        self.cueLabel.setStyleSheet("font-weight: bold;")
+        self.cueGroup.layout().addWidget(self.cueLabel)
+
+        self.cueButton = QPushButton(self.cueGroup)
+        self.cueButton.clicked.connect(self.select_cue)
+        self.cueGroup.layout().addWidget(self.cueButton)
+
+        # Action combo
+        self.actionGroup = QGroupBox(self)
+        self.actionGroup.setLayout(QVBoxLayout(self.actionGroup))
+        self.layout().addWidget(self.actionGroup)
+
+        self.actionCombo = QComboBox(self.actionGroup)
+        for a in self.SupportedActions:
+            self.actionCombo.addItem(
+                translate("CueAction", a.name), a.value,
+            )
+        self.actionGroup.layout().addWidget(self.actionCombo)
+
+        # Fade settings
+        self.fadeGroup = QGroupBox(self)
+        self.fadeGroup.setLayout(QVBoxLayout())
+        self.layout().addWidget(self.fadeGroup)
+
+        self.fadeEdit = FadeEdit(self.fadeGroup)
+        self.fadeGroup.layout().addWidget(self.fadeEdit)
+
+        self.retranslateUi()
+
+    def retranslateUi(self):
+        self.cueGroup.setTitle(translate("StopCue", "Cue"))
+        self.cueButton.setText(translate("StopCue", "Click to select"))
+        self.cueLabel.setText(translate("StopCue", "Not selected"))
+        self.actionGroup.setTitle(translate("StopCue", "Action"))
+        self.fadeGroup.setTitle(translate("StopCue", "Fade"))
+
+    def select_cue(self):
+        dialog = self.cueDialog
+        if dialog.exec() == dialog.Accepted:
+            selected = dialog.selected_cue()
+            if selected is not None:
+                self.cue_id = selected.id
+                self.cueLabel.setText(selected.name)
+
+    def enableCheck(self, enabled):
+        self.setGroupEnabled(self.cueGroup, enabled)
+        self.setGroupEnabled(self.actionGroup, enabled)
+        self.setGroupEnabled(self.fadeGroup, enabled)
+
+    def getSettings(self):
+        settings = {}
+        if self.isGroupEnabled(self.cueGroup):
+            settings["target_id"] = self.cue_id
+        if self.isGroupEnabled(self.actionGroup):
+            settings["action"] = self.actionCombo.currentData()
+        if self.isGroupEnabled(self.fadeGroup):
+            settings["duration"] = int(self.fadeEdit.duration() * 1000)
+            settings["fade_type"] = self.fadeEdit.fadeType()
+        return settings
+
+    def loadSettings(self, settings):
+        target = Application().cue_model.get(settings.get("target_id", ""))
+        if target is not None:
+            self.cue_id = settings["target_id"]
+            self.cueLabel.setText(target.name)
+
+        action_value = settings.get("action", CueAction.Stop.value)
+        index = self.actionCombo.findData(action_value)
+        if index >= 0:
+            self.actionCombo.setCurrentIndex(index)
+
+        self.fadeEdit.setDuration(settings.get("duration", 0) / 1000)
+        self.fadeEdit.setFadeType(
+            settings.get("fade_type", FadeOutType.Linear.name)
+        )
+
+
+CueSettingsRegistry().add(StopCueSettings, StopCue)
