@@ -286,6 +286,18 @@ class TestCueGeneralColorGroupEmission:
 
         assert "stylesheet" not in settings
 
+    def test_font_size_spin_has_legible_minimum(self, qtbot):
+        """QSpinBox defaults to a minimum of 0, which would let a
+        user nudge the font size down to 0pt or round-trip a
+        corrupted session that had ``font-size:0pt`` and render the
+        cue name unreadable. Clamp to 6pt — below that Qt's default
+        style can't realistically paint the list-layout text.
+        """
+        page = CueGeneralSettingsPage(MediaCue)
+        qtbot.addWidget(page)
+
+        assert page.fontSizeSpin.minimum() >= 6
+
 
 class TestCueGeneralFadeGating:
     def test_fade_groups_disabled_when_actions_lack_fade(self, qtbot):

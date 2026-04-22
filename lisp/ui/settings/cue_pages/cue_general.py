@@ -209,6 +209,9 @@ class CueGeneralSettingsPage(CueSettingsPage):
         self.fontSizeGroup.layout().setContentsMargins(0, 0, 0, 0)
 
         self.fontSizeSpin = QSpinBox(self.fontSizeGroup)
+        # QSpinBox defaults to [0, 99]; 0pt fonts render as invisible
+        # labels and a corrupted session could round-trip one.
+        self.fontSizeSpin.setMinimum(6)
         self.fontSizeSpin.setValue(QLabel().fontInfo().pointSize())
         self.fontSizeGroup.layout().addWidget(self.fontSizeSpin)
         self.fontSizeGroup.layout().addStretch(1)
