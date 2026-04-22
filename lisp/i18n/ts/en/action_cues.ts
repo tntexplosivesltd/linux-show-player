@@ -65,7 +65,7 @@
   <context>
     <name>CueCategory</name>
     <message>
-      <location filename="../../../plugins/action_cues/volume_control.py" line="55" />
+      <location filename="../../../plugins/action_cues/stop_cue.py" line="47" />
       <source>Action cues</source>
       <translation type="unfinished" />
     </message>
@@ -106,6 +106,49 @@
       <location filename="../../../plugins/action_cues/volume_control.py" line="54" />
       <source>Volume Control</source>
       <translation>Volume Control</translation>
+    </message>
+    <message>
+      <location filename="../../../plugins/action_cues/stop_cue.py" line="46" />
+      <source>Fade &amp; Stop</source>
+      <translation type="unfinished" />
+    </message>
+  </context>
+  <context>
+    <name>GroupCue</name>
+    <message>
+      <location filename="../../../plugins/action_cues/group_cue.py" line="503" />
+      <source>Parallel</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../plugins/action_cues/group_cue.py" line="506" />
+      <source>Playlist</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../plugins/action_cues/group_cue.py" line="509" />
+      <source>Mode</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../plugins/action_cues/group_cue.py" line="518" />
+      <source>Crossfade</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../plugins/action_cues/group_cue.py" line="523" />
+      <source>Loop</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../plugins/action_cues/group_cue.py" line="528" />
+      <source>Shuffle</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../plugins/action_cues/group_cue.py" line="539" />
+      <source>Group Settings</source>
+      <translation type="unfinished" />
     </message>
   </context>
   <context>
@@ -244,6 +287,11 @@
       <source>Volume Settings</source>
       <translation>Volume Settings</translation>
     </message>
+    <message>
+      <location filename="../../../plugins/action_cues/stop_cue.py" line="141" />
+      <source>Fade &amp; Stop Settings</source>
+      <translation type="unfinished" />
+    </message>
   </context>
   <context>
     <name>StopAll</name>
@@ -251,6 +299,34 @@
       <location filename="../../../plugins/action_cues/stop_all.py" line="84" />
       <source>Stop Action</source>
       <translation>Stop Action</translation>
+    </message>
+  </context>
+  <context>
+    <name>StopCue</name>
+    <message>
+      <location filename="../../../plugins/action_cues/stop_cue.py" line="220" />
+      <source>Target</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../plugins/action_cues/stop_cue.py" line="221" />
+      <source>Click to select</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../plugins/action_cues/stop_cue.py" line="222" />
+      <source>Not selected</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../plugins/action_cues/stop_cue.py" line="223" />
+      <source>Action:</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../plugins/action_cues/stop_cue.py" line="224" />
+      <source>Fade</source>
+      <translation type="unfinished" />
     </message>
   </context>
   <context>
