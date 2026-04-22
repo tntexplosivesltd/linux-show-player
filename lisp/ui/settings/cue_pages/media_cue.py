@@ -103,6 +103,11 @@ class MediaCueSettings(SettingsPage):
         # Stashed at loadSettings time so getSettings can map a displayed
         # stop_time == duration back to the 0 sentinel (SeekType.NONE).
         self._last_duration = 0
+        # Pinned reference to the per-install 'failed' closure so LiSP's
+        # weakref-based Signal can hold it alive. Clearing this drops
+        # the reference; queued emissions held only by weakref become
+        # no-ops, which is exactly what we want after teardown.
+        self._failed_slot = None
 
         self.retranslateUi()
 
@@ -135,7 +140,15 @@ class MediaCueSettings(SettingsPage):
             # natural end"), distinct from SeekType.SET duration. When
             # the displayed stop equals the known duration, map back to
             # the sentinel so the seek semantics survive a save cycle.
-            if self._last_duration > 0 and time == self._last_duration:
+            # Prefer the live waveform's duration: it may have been
+            # resolved after loadSettings (duration=0 at load is common
+            # for cues inspected before decode completes).
+            effective_duration = self._last_duration
+            if self._current_waveform is not None:
+                effective_duration = (
+                    self._current_waveform.duration or effective_duration
+                )
+            if effective_duration > 0 and time == effective_duration:
                 time = 0
             settings["stop_time"] = time
         if self.isGroupEnabled(self.loopGroup):
@@ -205,7 +218,13 @@ class MediaCueSettings(SettingsPage):
             self._show_image_placeholder()
         else:
             waveform = get_backend().media_waveform(cue.media)
-            self._install_waveform(waveform, use_timeline=False)
+            # Backend returns None for audio-less media (e.g. a video
+            # without audio track). Fall back to the flat timeline
+            # rather than handing None to WaveformWidget.
+            if waveform is None:
+                self._install_waveform(duration, use_timeline=True)
+            else:
+                self._install_waveform(waveform, use_timeline=False)
             # Seed new trimmer from the field values — the trimmer was
             # just built with defaults (0, duration) and the field edits
             # above fired into no handler (we connect them in install).
@@ -218,17 +237,22 @@ class MediaCueSettings(SettingsPage):
         # connections so a late failed/ready emission on an orphan
         # waveform can't swap the current trimmer for a different cue.
         if self._current_waveform is not None:
-            try:
-                self._current_waveform.failed.disconnect(
-                    self._on_waveform_failed
-                )
-            except Exception:
-                pass
+            if self._failed_slot is not None:
+                try:
+                    self._current_waveform.failed.disconnect(
+                        self._failed_slot
+                    )
+                except Exception:
+                    pass
             try:
                 self._current_waveform.clear()
             except Exception:
                 pass
             self._current_waveform = None
+        # Drop the pinned reference. Any Qt event still in the queue
+        # holds the closure only via weakref; once this ref is cleared
+        # and Python GC reclaims the closure, dispatch is a no-op.
+        self._failed_slot = None
 
         if self._waveformSlot is not None:
             # Detach field handlers so a later edit on a torn-down page
@@ -306,9 +330,21 @@ class MediaCueSettings(SettingsPage):
         else:
             slot = TrimmableWaveformWidget(waveform_or_duration, parent=self)
             self._current_waveform = waveform_or_duration
-            # Custom Signal uses weakrefs — bound method, not lambda.
-            waveform_or_duration.failed.connect(
-                self._on_waveform_failed, Connection.QtQueued
+            # Per-install closure captures the specific emitter so a
+            # queued 'failed' event posted before teardown but delivered
+            # after a new waveform is installed can't misattribute the
+            # failure to the new cue. LiSP's Signal uses weakrefs, so
+            # we pin the closure on self to keep it alive.
+            waveform = waveform_or_duration
+
+            def _on_failed():
+                if waveform is not self._current_waveform:
+                    return
+                self._swap_to_timeline(waveform.duration)
+
+            self._failed_slot = _on_failed
+            waveform.failed.connect(
+                self._failed_slot, Connection.QtQueued
             )
 
         slot.setMinimumHeight(120)
@@ -324,12 +360,6 @@ class MediaCueSettings(SettingsPage):
         self.trimmer.startTimeChanged.connect(self._on_trim_start_changed)
         self.trimmer.stopTimeChanged.connect(self._on_trim_stop_changed)
         self.trimmer.trimReleased.connect(self.commit_requested.emit)
-
-    def _on_waveform_failed(self):
-        wf = self._current_waveform
-        if wf is None:
-            return
-        self._swap_to_timeline(wf.duration)
 
     def _swap_to_timeline(self, duration_ms: int):
         if isinstance(self._waveformSlot, TrimmableTimelineWidget):

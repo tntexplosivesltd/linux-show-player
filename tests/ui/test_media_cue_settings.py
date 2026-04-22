@@ -158,6 +158,55 @@ class TestStopTimeSentinelMapping:
 
         assert page.stopEdit.time() == QTime.fromMSecsSinceStartOfDay(0)
 
+    def test_sentinel_survives_late_resolved_duration(self, qtbot, monkeypatch):
+        """duration=0 at load → waveform resolves → save must map stop to 0.
+
+        Real flow: cue is loaded before decode completes (duration=0).
+        User opens inspector, waveform decodes and reports 60_000 ms.
+        The stop marker snaps to the resolved duration. Without updating
+        the cached _last_duration, getSettings would save 60_000 as-is —
+        losing the SeekType.NONE sentinel.
+        """
+        waveform = _FakeWaveform(duration_ms=0)
+
+        class _Backend:
+            def media_waveform(self, media):
+                return waveform
+
+        monkeypatch.setattr(
+            "lisp.ui.settings.cue_pages.media_cue.get_backend",
+            lambda: _Backend(),
+        )
+
+        class _FakeMedia:
+            def __init__(self):
+                self.duration = 0
+                self.elements = {}
+
+        class _FakeCue:
+            def __init__(self):
+                self.media = _FakeMedia()
+
+        page = MediaCueSettings()
+        qtbot.addWidget(page)
+        page.setCue(_FakeCue())
+        page.loadSettings(
+            {"media": {"duration": 0, "start_time": 0, "stop_time": 0}}
+        )
+        qtbot.wait(10)
+
+        # Waveform resolves late with a real duration.
+        waveform.duration = 60_000
+        waveform.mark_ready()
+        qtbot.wait(10)
+
+        # stopEdit must reflect the resolved duration.
+        page.stopEdit.setMaximumTime(QTime.fromMSecsSinceStartOfDay(60_000))
+        page.stopEdit.setTime(QTime.fromMSecsSinceStartOfDay(60_000))
+
+        settings = page.getSettings()
+        assert settings["media"]["stop_time"] == 0
+
 
 class TestImageCueHandling:
     def test_image_cue_disables_trim_fields(self, qtbot):
@@ -616,6 +665,40 @@ class TestLifecycle:
         # The current (new) trimmer must NOT be swapped to a timeline.
         assert isinstance(page.trimmer, TrimmableWaveformWidget)
 
+    def test_failed_queued_before_navigation_does_not_corrupt_new(
+        self, qtbot, monkeypatch
+    ):
+        """Simulate queued 'failed' emission whose dispatch races teardown.
+
+        Scenario: OLD waveform emits 'failed' on the GStreamer bus thread
+        (posts a queued event). User navigates before Qt pumps the event:
+        teardown disconnects the OLD waveform's signal, but the already-
+        queued event is still in flight. When it finally dispatches,
+        self._current_waveform has been replaced with the NEW waveform.
+        Without emitter-identity cross-check, the dispatch would operate
+        on the new waveform's duration and swap its healthy trimmer.
+
+        Capture the OLD waveform's slot closure before navigation; after
+        navigation, invoke it directly — that's what the Qt event pump
+        does when it dispatches the already-posted event.
+        """
+        page = MediaCueSettings()
+        qtbot.addWidget(page)
+        self._install(page, qtbot, monkeypatch)
+        old_slot = page._failed_slot
+        self._install(page, qtbot, monkeypatch)
+
+        from lisp.ui.widgets.waveform import TrimmableWaveformWidget
+        assert isinstance(page.trimmer, TrimmableWaveformWidget)
+
+        # Dispatch the orphan closure as the Qt event pump would.
+        old_slot()
+        qtbot.wait(10)
+
+        # The current (new) trimmer must still be the waveform widget.
+        # Without the identity check, it would have been swapped.
+        assert isinstance(page.trimmer, TrimmableWaveformWidget)
+
     def test_time_change_handlers_not_duplicated_across_navigations(
         self, qtbot, monkeypatch
     ):
@@ -644,6 +727,50 @@ class TestLifecycle:
         assert page.stopEdit.minimumTime() == QTime.fromMSecsSinceStartOfDay(
             2_001
         )
+
+
+class TestNoneWaveform:
+    def test_none_waveform_falls_back_to_timeline(self, qtbot, monkeypatch):
+        """Backend returns None for audio-less media that isn't an image.
+
+        Without a fallback, TrimmableWaveformWidget(None) dereferences
+        None.duration and crashes. Treat it like a decode failure: mount
+        the flat-timeline widget with the duration from media settings.
+        """
+        class _FakeMedia:
+            def __init__(self):
+                self.duration = 10_000
+                self.elements = {}
+
+        class _FakeCue:
+            def __init__(self):
+                self.media = _FakeMedia()
+
+        class _Backend:
+            def media_waveform(self, media):
+                return None  # audio-less non-image
+
+        monkeypatch.setattr(
+            "lisp.ui.settings.cue_pages.media_cue.get_backend",
+            lambda: _Backend(),
+        )
+
+        page = MediaCueSettings()
+        qtbot.addWidget(page)
+        page.setCue(_FakeCue())
+        page.loadSettings(
+            {
+                "media": {
+                    "duration": 10_000,
+                    "start_time": 0,
+                    "stop_time": 0,
+                }
+            }
+        )
+        qtbot.wait(10)
+
+        from lisp.ui.widgets.waveform import TrimmableTimelineWidget
+        assert isinstance(page.trimmer, TrimmableTimelineWidget)
 
 
 class TestWaveformFailureFallback:

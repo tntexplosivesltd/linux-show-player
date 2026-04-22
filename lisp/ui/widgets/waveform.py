@@ -400,8 +400,6 @@ class TrimmableWaveformWidget(_TrimMarkerInteractionMixin, WaveformWidget):
             self.stopTimeChanged.emit(ms)
         self.update()
 
-    _HIT_THRESHOLD_PX = 8
-
     def _ms_per_px(self) -> float:
         return self._valueToPx or 1.0
 
