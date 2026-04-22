@@ -394,3 +394,47 @@ class TestCueInstallation:
         qtbot.wait(10)
 
         assert page.trimmer is None
+
+
+class TestWaveformFailureFallback:
+    def test_failed_signal_swaps_to_timeline(self, qtbot, monkeypatch):
+        fake_waveform = _FakeWaveform(duration_ms=10_000)
+
+        class _FakeMedia:
+            def __init__(self):
+                self.duration = 10_000
+                self.elements = {}
+
+            def input_uri(self):
+                return "file:///fake.mp4"
+
+        class _FakeCue:
+            def __init__(self):
+                self.media = _FakeMedia()
+
+            def properties(self, **_):
+                return {"media": {"duration": 10_000}}
+
+        monkeypatch.setattr(
+            "lisp.ui.settings.cue_pages.media_cue.get_backend",
+            lambda: type(
+                "_B", (), {"media_waveform": lambda s, m: fake_waveform}
+            )(),
+        )
+
+        page = MediaCueSettings()
+        qtbot.addWidget(page)
+        page.setCue(_FakeCue())
+        page.loadSettings({"media": {"duration": 10_000}})
+        qtbot.wait(10)
+
+        from lisp.ui.widgets.waveform import (
+            TrimmableTimelineWidget,
+            TrimmableWaveformWidget,
+        )
+        assert isinstance(page.trimmer, TrimmableWaveformWidget)
+
+        fake_waveform.mark_failed()
+        qtbot.wait(10)
+
+        assert isinstance(page.trimmer, TrimmableTimelineWidget)

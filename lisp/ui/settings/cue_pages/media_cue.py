@@ -26,6 +26,7 @@ from PyQt5.QtWidgets import (
 )
 
 from lisp.backend import get_backend
+from lisp.core.signal import Connection
 from lisp.ui.settings.cue_pages.cue_general import make_flat_group
 from lisp.ui.settings.pages import SettingsPage
 from lisp.ui.ui_utils import translate
@@ -98,6 +99,7 @@ class MediaCueSettings(SettingsPage):
 
         self.trimmer = None
         self._cue = None
+        self._current_waveform = None
 
         self.retranslateUi()
 
@@ -239,8 +241,14 @@ class MediaCueSettings(SettingsPage):
                 else int(waveform_or_duration)
             )
             slot = TrimmableTimelineWidget(duration_ms=duration, parent=self)
+            self._current_waveform = None
         else:
             slot = TrimmableWaveformWidget(waveform_or_duration, parent=self)
+            self._current_waveform = waveform_or_duration
+            # Custom Signal uses weakrefs — bound method, not lambda.
+            waveform_or_duration.failed.connect(
+                self._on_waveform_failed, Connection.QtQueued
+            )
 
         slot.setMinimumHeight(120)
         row, row_span = self._waveformRow
@@ -255,6 +263,21 @@ class MediaCueSettings(SettingsPage):
         self.trimmer.startTimeChanged.connect(self._on_trim_start_changed)
         self.trimmer.stopTimeChanged.connect(self._on_trim_stop_changed)
         self.trimmer.trimReleased.connect(self.commit_requested.emit)
+
+    def _on_waveform_failed(self):
+        wf = self._current_waveform
+        if wf is None:
+            return
+        self._swap_to_timeline(wf.duration)
+
+    def _swap_to_timeline(self, duration_ms: int):
+        if isinstance(self._waveformSlot, TrimmableTimelineWidget):
+            return
+        start = self.trimmer.startTime() if self.trimmer else 0
+        stop = self.trimmer.stopTime() if self.trimmer else duration_ms
+        self._install_waveform(duration_ms, use_timeline=True)
+        self.trimmer.setStartTime(start, silent=True)
+        self.trimmer.setStopTime(stop, silent=True)
 
     def _ms(self, qtime) -> int:
         return qtime.msecsSinceStartOfDay()
