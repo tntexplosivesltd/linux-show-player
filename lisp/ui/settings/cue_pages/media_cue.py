@@ -28,6 +28,10 @@ from PyQt5.QtWidgets import (
 from lisp.ui.settings.cue_pages.cue_general import make_flat_group
 from lisp.ui.settings.pages import SettingsPage
 from lisp.ui.ui_utils import translate
+from lisp.ui.widgets.waveform import (
+    TrimmableTimelineWidget,
+    TrimmableWaveformWidget,
+)
 
 
 class MediaCueSettings(SettingsPage):
@@ -90,6 +94,8 @@ class MediaCueSettings(SettingsPage):
         grid.addWidget(self.imagePlaceholder, 0, 1, 3, 1)
 
         grid.setRowStretch(3, 1)
+
+        self.trimmer = None
 
         self.retranslateUi()
 
@@ -185,3 +191,68 @@ class MediaCueSettings(SettingsPage):
 
     def _to_qtime(self, m_seconds):
         return QTime.fromMSecsSinceStartOfDay(m_seconds)
+
+    def _install_waveform(self, waveform_or_duration, use_timeline: bool):
+        # Tear down any existing trimmer first so repeated loadSettings
+        # (user navigating between cues) doesn't leak widgets or signals.
+        if self._waveformSlot is not None:
+            self.layout().removeWidget(self._waveformSlot)
+            self._waveformSlot.deleteLater()
+            self._waveformSlot = None
+            self.trimmer = None
+        self.imagePlaceholder.hide()
+
+        if use_timeline:
+            duration = (
+                waveform_or_duration.duration
+                if hasattr(waveform_or_duration, "duration")
+                else int(waveform_or_duration)
+            )
+            slot = TrimmableTimelineWidget(duration_ms=duration, parent=self)
+        else:
+            slot = TrimmableWaveformWidget(waveform_or_duration, parent=self)
+
+        slot.setMinimumHeight(120)
+        row, row_span = self._waveformRow
+        self.layout().addWidget(slot, row, 1, row_span, 1)
+        self._waveformSlot = slot
+        self.trimmer = slot
+
+        # Bidirectional sync. silent=True on the trimmer side and
+        # blockSignals on the QTimeEdit side break the cycle.
+        self.startEdit.timeChanged.connect(self._on_start_edit_changed)
+        self.stopEdit.timeChanged.connect(self._on_stop_edit_changed)
+        self.trimmer.startTimeChanged.connect(self._on_trim_start_changed)
+        self.trimmer.stopTimeChanged.connect(self._on_trim_stop_changed)
+        self.trimmer.trimReleased.connect(self.commit_requested.emit)
+
+    def _ms(self, qtime) -> int:
+        return qtime.msecsSinceStartOfDay()
+
+    def _on_start_edit_changed(self, qtime):
+        if self.trimmer is None:
+            return
+        ms = self._ms(qtime)
+        self.trimmer.setStartTime(ms, silent=True)
+        stop_max = max(0, self.trimmer.stopTime() - 1)
+        self.stopEdit.setMinimumTime(self._to_qtime(ms + 1))
+        self.startEdit.setMaximumTime(self._to_qtime(stop_max))
+
+    def _on_stop_edit_changed(self, qtime):
+        if self.trimmer is None:
+            return
+        ms = self._ms(qtime)
+        self.trimmer.setStopTime(ms, silent=True)
+        self.startEdit.setMaximumTime(self._to_qtime(max(0, ms - 1)))
+
+    def _on_trim_start_changed(self, ms: int):
+        self.startEdit.blockSignals(True)
+        self.startEdit.setTime(self._to_qtime(ms))
+        self.startEdit.blockSignals(False)
+        self.stopEdit.setMinimumTime(self._to_qtime(ms + 1))
+
+    def _on_trim_stop_changed(self, ms: int):
+        self.stopEdit.blockSignals(True)
+        self.stopEdit.setTime(self._to_qtime(ms))
+        self.stopEdit.blockSignals(False)
+        self.startEdit.setMaximumTime(self._to_qtime(max(0, ms - 1)))

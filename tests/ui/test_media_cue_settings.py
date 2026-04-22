@@ -193,3 +193,88 @@ class TestMultiSelectPlaceholder:
 
         page.enableCheck(True)
         assert page.placeholderLabel.isVisible()
+
+
+class TestWaveformTrimmerSync:
+    def _load_with_waveform(self, page, qtbot, duration=10_000):
+        waveform = _FakeWaveform(duration_ms=duration)
+        page._install_waveform(waveform, use_timeline=False)
+        page.loadSettings(
+            {
+                "media": {
+                    "duration": duration,
+                    "start_time": 0,
+                    "stop_time": 0,
+                }
+            }
+        )
+        qtbot.wait(10)
+        return waveform
+
+    def test_trimmer_created_after_install(self, qtbot):
+        page = MediaCueSettings()
+        qtbot.addWidget(page)
+        self._load_with_waveform(page, qtbot)
+        assert page.trimmer is not None
+
+    def test_typed_start_time_moves_marker(self, qtbot):
+        page = MediaCueSettings()
+        qtbot.addWidget(page)
+        self._load_with_waveform(page, qtbot)
+
+        page.startEdit.setTime(QTime.fromMSecsSinceStartOfDay(3_000))
+        qtbot.wait(10)
+        assert page.trimmer.startTime() == 3_000
+
+    def test_marker_drag_updates_start_field(self, qtbot):
+        page = MediaCueSettings()
+        qtbot.addWidget(page)
+        self._load_with_waveform(page, qtbot)
+
+        page.trimmer.setStartTime(4_000)
+        qtbot.wait(10)
+        assert page.startEdit.time() == QTime.fromMSecsSinceStartOfDay(4_000)
+
+    def test_start_field_tracks_stop_as_upper_bound(self, qtbot):
+        page = MediaCueSettings()
+        qtbot.addWidget(page)
+        self._load_with_waveform(page, qtbot)
+
+        page.stopEdit.setTime(QTime.fromMSecsSinceStartOfDay(5_000))
+        qtbot.wait(10)
+        assert (
+            page.startEdit.maximumTime()
+            == QTime.fromMSecsSinceStartOfDay(4_999)
+        )
+
+    def test_stop_field_tracks_start_as_lower_bound(self, qtbot):
+        page = MediaCueSettings()
+        qtbot.addWidget(page)
+        self._load_with_waveform(page, qtbot)
+
+        page.startEdit.setTime(QTime.fromMSecsSinceStartOfDay(3_000))
+        qtbot.wait(10)
+        assert (
+            page.stopEdit.minimumTime()
+            == QTime.fromMSecsSinceStartOfDay(3_001)
+        )
+
+    def test_sync_does_not_recurse(self, qtbot):
+        """Typing a value must not re-enter via the marker signal."""
+        page = MediaCueSettings()
+        qtbot.addWidget(page)
+        self._load_with_waveform(page, qtbot)
+
+        calls = {"field": 0, "marker": 0}
+        page.startEdit.timeChanged.connect(
+            lambda *_: calls.__setitem__("field", calls["field"] + 1)
+        )
+        page.trimmer.startTimeChanged.connect(
+            lambda *_: calls.__setitem__("marker", calls["marker"] + 1)
+        )
+
+        page.startEdit.setTime(QTime.fromMSecsSinceStartOfDay(2_500))
+        qtbot.wait(10)
+
+        assert calls["field"] == 1
+        assert calls["marker"] == 0
