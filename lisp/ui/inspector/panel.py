@@ -444,6 +444,8 @@ class InspectorPanel(QWidget):
             clear_mixed_indicator(w)
 
         # First cue seeds the baseline view.
+        if hasattr(page, "setCue"):
+            page.setCue(cues[0] if single else None)
         page.loadSettings(cues[0].properties())
         if single:
             return

@@ -25,6 +25,7 @@ from PyQt5.QtWidgets import (
     QTimeEdit,
 )
 
+from lisp.backend import get_backend
 from lisp.ui.settings.cue_pages.cue_general import make_flat_group
 from lisp.ui.settings.pages import SettingsPage
 from lisp.ui.ui_utils import translate
@@ -96,6 +97,7 @@ class MediaCueSettings(SettingsPage):
         grid.setRowStretch(3, 1)
 
         self.trimmer = None
+        self._cue = None
 
         self.retranslateUi()
 
@@ -143,14 +145,18 @@ class MediaCueSettings(SettingsPage):
         )
         self.placeholderLabel.setVisible(enabled)
 
+    def setCue(self, cue):
+        """Bind the live cue. Called by the inspector before loadSettings."""
+        self._cue = cue
+
     def loadSettings(self, settings):
         media = settings.get("media", {})
         is_image = self._is_image_cue(media)
+        duration = media.get("duration", 0)
 
         if "loop" in media:
             self.spinLoop.setValue(media["loop"])
 
-        duration = media.get("duration", 0)
         time = self._to_qtime(duration)
         self.startEdit.setMaximumTime(time)
         self.stopEdit.setMaximumTime(time)
@@ -167,6 +173,35 @@ class MediaCueSettings(SettingsPage):
         # offering knobs that don't turn anything.
         self.startEdit.setEnabled(not is_image)
         self.stopEdit.setEnabled(not is_image)
+
+        cue = self._cue
+        if cue is None:
+            self._teardown_trimmer()
+            return
+
+        if is_image:
+            self._show_image_placeholder()
+        else:
+            waveform = get_backend().media_waveform(cue.media)
+            self._install_waveform(waveform, use_timeline=False)
+
+    def _teardown_trimmer(self):
+        if self._waveformSlot is not None:
+            self.layout().removeWidget(self._waveformSlot)
+            self._waveformSlot.deleteLater()
+            self._waveformSlot = None
+            self.trimmer = None
+        self.imagePlaceholder.hide()
+
+    def _show_image_placeholder(self):
+        self._teardown_trimmer()
+        self.imagePlaceholder.setText(
+            translate(
+                "MediaCueSettings",
+                "Trimming does not apply to image cues.",
+            )
+        )
+        self.imagePlaceholder.show()
 
     @staticmethod
     def _is_image_cue(media_settings: dict) -> bool:
@@ -195,12 +230,7 @@ class MediaCueSettings(SettingsPage):
     def _install_waveform(self, waveform_or_duration, use_timeline: bool):
         # Tear down any existing trimmer first so repeated loadSettings
         # (user navigating between cues) doesn't leak widgets or signals.
-        if self._waveformSlot is not None:
-            self.layout().removeWidget(self._waveformSlot)
-            self._waveformSlot.deleteLater()
-            self._waveformSlot = None
-            self.trimmer = None
-        self.imagePlaceholder.hide()
+        self._teardown_trimmer()
 
         if use_timeline:
             duration = (

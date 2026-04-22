@@ -196,9 +196,34 @@ class TestMultiSelectPlaceholder:
 
 
 class TestWaveformTrimmerSync:
-    def _load_with_waveform(self, page, qtbot, duration=10_000):
+    @pytest.fixture
+    def _with_backend(self, monkeypatch):
+        # Shared backend stub so loadSettings can fetch a waveform.
+        state = {"waveform": None}
+
+        class _Backend:
+            def media_waveform(self, media):
+                return state["waveform"]
+
+        monkeypatch.setattr(
+            "lisp.ui.settings.cue_pages.media_cue.get_backend",
+            lambda: _Backend(),
+        )
+        return state
+
+    def _load_with_waveform(self, page, qtbot, _with_backend, duration=10_000):
         waveform = _FakeWaveform(duration_ms=duration)
-        page._install_waveform(waveform, use_timeline=False)
+        _with_backend["waveform"] = waveform
+
+        class _FakeMedia:
+            def __init__(self):
+                self.duration = duration
+                self.elements = {}
+
+        class _FakeCue:
+            media = _FakeMedia()
+
+        page.setCue(_FakeCue())
         page.loadSettings(
             {
                 "media": {
@@ -211,34 +236,34 @@ class TestWaveformTrimmerSync:
         qtbot.wait(10)
         return waveform
 
-    def test_trimmer_created_after_install(self, qtbot):
+    def test_trimmer_created_after_install(self, qtbot, _with_backend):
         page = MediaCueSettings()
         qtbot.addWidget(page)
-        self._load_with_waveform(page, qtbot)
+        self._load_with_waveform(page, qtbot, _with_backend)
         assert page.trimmer is not None
 
-    def test_typed_start_time_moves_marker(self, qtbot):
+    def test_typed_start_time_moves_marker(self, qtbot, _with_backend):
         page = MediaCueSettings()
         qtbot.addWidget(page)
-        self._load_with_waveform(page, qtbot)
+        self._load_with_waveform(page, qtbot, _with_backend)
 
         page.startEdit.setTime(QTime.fromMSecsSinceStartOfDay(3_000))
         qtbot.wait(10)
         assert page.trimmer.startTime() == 3_000
 
-    def test_marker_drag_updates_start_field(self, qtbot):
+    def test_marker_drag_updates_start_field(self, qtbot, _with_backend):
         page = MediaCueSettings()
         qtbot.addWidget(page)
-        self._load_with_waveform(page, qtbot)
+        self._load_with_waveform(page, qtbot, _with_backend)
 
         page.trimmer.setStartTime(4_000)
         qtbot.wait(10)
         assert page.startEdit.time() == QTime.fromMSecsSinceStartOfDay(4_000)
 
-    def test_start_field_tracks_stop_as_upper_bound(self, qtbot):
+    def test_start_field_tracks_stop_as_upper_bound(self, qtbot, _with_backend):
         page = MediaCueSettings()
         qtbot.addWidget(page)
-        self._load_with_waveform(page, qtbot)
+        self._load_with_waveform(page, qtbot, _with_backend)
 
         page.stopEdit.setTime(QTime.fromMSecsSinceStartOfDay(5_000))
         qtbot.wait(10)
@@ -247,10 +272,10 @@ class TestWaveformTrimmerSync:
             == QTime.fromMSecsSinceStartOfDay(4_999)
         )
 
-    def test_stop_field_tracks_start_as_lower_bound(self, qtbot):
+    def test_stop_field_tracks_start_as_lower_bound(self, qtbot, _with_backend):
         page = MediaCueSettings()
         qtbot.addWidget(page)
-        self._load_with_waveform(page, qtbot)
+        self._load_with_waveform(page, qtbot, _with_backend)
 
         page.startEdit.setTime(QTime.fromMSecsSinceStartOfDay(3_000))
         qtbot.wait(10)
@@ -259,11 +284,11 @@ class TestWaveformTrimmerSync:
             == QTime.fromMSecsSinceStartOfDay(3_001)
         )
 
-    def test_sync_does_not_recurse(self, qtbot):
+    def test_sync_does_not_recurse(self, qtbot, _with_backend):
         """Typing a value must not re-enter via the marker signal."""
         page = MediaCueSettings()
         qtbot.addWidget(page)
-        self._load_with_waveform(page, qtbot)
+        self._load_with_waveform(page, qtbot, _with_backend)
 
         calls = {"field": 0, "marker": 0}
         page.startEdit.timeChanged.connect(
@@ -278,3 +303,94 @@ class TestWaveformTrimmerSync:
 
         assert calls["field"] == 1
         assert calls["marker"] == 0
+
+
+class TestCueInstallation:
+    def test_set_cue_installs_waveform_for_audio(self, qtbot, monkeypatch):
+        """Wiring the live cue auto-mounts a TrimmableWaveformWidget."""
+        fake_waveform = _FakeWaveform(duration_ms=10_000)
+
+        class _FakeMedia:
+            def __init__(self):
+                self.duration = 10_000
+                self.elements = {}
+
+            def input_uri(self):
+                return "file:///fake.wav"
+
+        class _FakeCue:
+            def __init__(self):
+                self.media = _FakeMedia()
+
+            def properties(self, **_):
+                return {"media": {"duration": 10_000}}
+
+        class _FakeBackend:
+            def media_waveform(self, media):
+                return fake_waveform
+
+        monkeypatch.setattr(
+            "lisp.ui.settings.cue_pages.media_cue.get_backend",
+            lambda: _FakeBackend(),
+        )
+
+        page = MediaCueSettings()
+        qtbot.addWidget(page)
+        page.setCue(_FakeCue())
+        page.loadSettings(
+            {"media": {"duration": 10_000, "start_time": 0, "stop_time": 0}}
+        )
+        qtbot.wait(10)
+
+        from lisp.ui.widgets.waveform import TrimmableWaveformWidget
+        assert isinstance(page.trimmer, TrimmableWaveformWidget)
+
+    def test_set_cue_shows_image_placeholder(self, qtbot, monkeypatch):
+        """Image cues: no trimmer widget, placeholder caption in the slot."""
+        class _FakeMedia:
+            def __init__(self):
+                self.duration = 5_000
+                self.elements = {"ImageInput": object()}
+
+            def input_uri(self):
+                return "file:///fake.jpg"
+
+        class _FakeCue:
+            def __init__(self):
+                self.media = _FakeMedia()
+
+            def properties(self, **_):
+                return {
+                    "media": {
+                        "duration": 5_000,
+                        "ImageInput": {},
+                    }
+                }
+
+        page = MediaCueSettings()
+        qtbot.addWidget(page)
+        page.setCue(_FakeCue())
+        page.loadSettings(
+            {
+                "media": {
+                    "duration": 5_000,
+                    "ImageInput": {},
+                    "start_time": 0,
+                    "stop_time": 0,
+                }
+            }
+        )
+        page.show()
+        qtbot.waitExposed(page)
+
+        assert page.trimmer is None
+        assert page.imagePlaceholder.isVisible()
+
+    def test_set_cue_none_hides_waveform(self, qtbot):
+        page = MediaCueSettings()
+        qtbot.addWidget(page)
+        page.setCue(None)  # multi-select path
+        page.loadSettings({"media": {"duration": 0}})
+        qtbot.wait(10)
+
+        assert page.trimmer is None
