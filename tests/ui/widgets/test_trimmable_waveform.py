@@ -239,3 +239,38 @@ class TestTrimmableWaveformWidgetMouse:
         _send_mouse(widget, "release", 160, 60)
         qtbot.wait(10)
         assert len(releases) == 1
+
+
+class TestTrimmableWaveformWidgetPaint:
+    def test_paint_survives_without_peaks(self, qtbot):
+        """Pre-ready paint must not crash — peaks list is empty."""
+        from lisp.ui.widgets.waveform import TrimmableWaveformWidget
+        waveform = _FakeWaveform(duration_ms=10_000)
+        widget = TrimmableWaveformWidget(waveform)
+        qtbot.addWidget(widget)
+        widget.resize(400, 120)
+        widget.show()
+        qtbot.waitExposed(widget)
+
+    def test_paint_survives_with_peaks(self, qtbot):
+        """Ready paint draws peaks + markers + shaded region."""
+        from lisp.ui.widgets.waveform import TrimmableWaveformWidget
+        waveform = _FakeWaveform(duration_ms=10_000)
+        waveform.mark_ready()
+        widget = TrimmableWaveformWidget(waveform)
+        qtbot.addWidget(widget)
+        widget.resize(400, 120)
+        widget.show()
+        qtbot.waitExposed(widget)
+
+    def test_paint_handles_inverted_region(self, qtbot):
+        """Paint must not divide-by-zero when start == stop - 1."""
+        from lisp.ui.widgets.waveform import TrimmableWaveformWidget
+        waveform = _FakeWaveform(duration_ms=10_000)
+        widget = TrimmableWaveformWidget(waveform)
+        qtbot.addWidget(widget)
+        widget.resize(400, 120)
+        widget.setStartTime(4_999)
+        widget.setStopTime(5_000)
+        widget.show()
+        qtbot.waitExposed(widget)

@@ -350,3 +350,27 @@ class TrimmableWaveformWidget(WaveformWidget):
             return
         self._active_marker = None
         self.trimReleased.emit()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+
+        painter = QPainter()
+        painter.begin(self)
+        x_start = self._x_for(self._start_ms)
+        x_stop = self._x_for(self._stop_ms)
+
+        if x_stop > x_start:
+            region_brush = QBrush(QColor(75, 154, 250, 40))
+            painter.setPen(QPen(QColor(0, 0, 0, 0)))
+            painter.setBrush(region_brush)
+            painter.drawRect(
+                x_start, 0, x_stop - x_start, self.height()
+            )
+
+        marker_pen = QPen(QColor(75, 154, 250))
+        marker_pen.setWidth(2)
+        painter.setPen(marker_pen)
+        painter.drawLine(x_start, 0, x_start, self.height())
+        painter.drawLine(x_stop, 0, x_stop, self.height())
+
+        painter.end()
