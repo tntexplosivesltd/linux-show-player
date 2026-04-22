@@ -142,3 +142,13 @@ class ParallelFadeRunner:
             fader.fade(self._duration_seconds, self._to_value, self._curve)
         except Exception:
             logger.exception("ParallelFadeRunner: fader.fade() raised")
+
+    def current_time(self):
+        """Elapsed fade time in ms, taken from the first fader.
+
+        All faders run in parallel with the same duration, so any one of
+        them is representative. Returns 0 if the fader set is empty.
+        """
+        if not self._faders:
+            return 0
+        return self._faders[0].current_time()

@@ -237,18 +237,55 @@ class TestParallelFadeRunner:
         )
         assert runner.run_until_complete() is True
 
-    def test_fader_exception_does_not_deadlock_runner(self):
+    def test_current_time_delegates_to_first_fader(self):
+        from lisp.core.fade_functions import FadeOutType
+        from lisp.plugins.action_cues._fader_coordinator import (
+            ParallelFadeRunner,
+        )
+        f = MagicMock()
+        f.current_time.return_value = 42
+        runner = ParallelFadeRunner(
+            [f], to_value=0.0, curve=FadeOutType.Linear,
+            duration_seconds=1.0,
+        )
+        assert runner.current_time() == 42
+
+    def test_current_time_with_no_faders_is_zero(self):
+        from lisp.core.fade_functions import FadeOutType
+        from lisp.plugins.action_cues._fader_coordinator import (
+            ParallelFadeRunner,
+        )
+        runner = ParallelFadeRunner(
+            [], to_value=0.0, curve=FadeOutType.Linear,
+            duration_seconds=1.0,
+        )
+        assert runner.current_time() == 0
+
+    def test_fader_exception_does_not_deadlock_runner(self, caplog):
+        """A misbehaving fader must not block the runner from joining.
+
+        The runner's `_run_single` catches + logs the exception via
+        `logger.exception`. We capture via `caplog` at WARNING level so
+        the ERROR-level traceback doesn't spam pytest's console output;
+        the test still asserts the error was logged.
+        """
+        import logging
         from lisp.core.fade_functions import FadeOutType
         from lisp.plugins.action_cues._fader_coordinator import (
             ParallelFadeRunner,
         )
         bad = MagicMock()
-        bad.fade.side_effect = RuntimeError("boom")
+        bad.fade.side_effect = RuntimeError("simulated")
         good = MagicMock()
         runner = ParallelFadeRunner(
             [bad, good], to_value=0.0, curve=FadeOutType.Linear,
             duration_seconds=0.01,
         )
-        # Should complete (not hang) even though one fader raised
-        assert runner.run_until_complete() is True
+
+        with caplog.at_level(
+            logging.CRITICAL,  # suppress ERROR from logger.exception
+            logger="lisp.plugins.action_cues._fader_coordinator",
+        ):
+            assert runner.run_until_complete() is True
+
         good.fade.assert_called_once()

@@ -280,7 +280,11 @@ class MainWindow(QMainWindow, metaclass=QSingleton):
         """
 
         action = QAction(self)
-        action.setText(translate("CueName", name))
+        # QAction treats `&` in setText as a menu mnemonic. Cue names are
+        # display strings, not accelerators — escape `&` to `&&` so names
+        # like "Fade & Stop" render literally instead of losing the `&`
+        # and underlining the next character.
+        action.setText(translate("CueName", name).replace("&", "&&"))
         action.triggered.connect(function)
         if shortcut != "":
             action.setShortcut(translate("CueCategory", shortcut))

@@ -124,6 +124,17 @@ class StopCue(Cue):
 
     __interrupt__ = __stop__
 
+    def current_time(self):
+        """Elapsed fade time in ms (delegates to the runner).
+
+        The list-layout `CueTime` widget polls this to advance the
+        countdown. Returns 0 when no fade is in flight.
+        """
+        runner = self._runner
+        if runner is None:
+            return 0
+        return runner.current_time()
+
 
 class StopCueSettings(SettingsPage):
     Name = QT_TRANSLATE_NOOP("SettingsPageName", "Fade & Stop Settings")

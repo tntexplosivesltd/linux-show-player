@@ -245,6 +245,20 @@ class TestAbort:
         assert cue.__stop__() is True  # no exception raised
 
 
+class TestCurrentTime:
+    def test_no_runner_returns_zero(self, mock_app):
+        cue = StopCue(app=mock_app)
+        assert cue._runner is None
+        assert cue.current_time() == 0
+
+    def test_delegates_to_runner(self, mock_app):
+        cue = StopCue(app=mock_app)
+        cue._runner = MagicMock()
+        cue._runner.current_time.return_value = 1250
+
+        assert cue.current_time() == 1250
+
+
 class TestStopCueSettings:
     """Settings-page round-trip. Requires QApplication via qapp fixture."""
 
@@ -257,11 +271,26 @@ class TestStopCueSettings:
             IconTheme.set_theme_name("lisp")
         yield
 
-    def test_get_settings_empty_when_checkable_and_unchecked(self, qapp):
+    def test_get_settings_empty_when_checkable_and_unchecked(
+        self, qapp, monkeypatch,
+    ):
         """enableCheck(True) makes groups checkable and leaves them
         unchecked; getSettings should skip every group in that state.
-        This mirrors the 'apply to group of cues' dialog flow."""
+        This mirrors the 'apply to group of cues' dialog flow.
+
+        Note: StopCueSettings.__init__ calls Application() to populate
+        the CueSelectDialog; monkeypatching avoids creating the real
+        singleton (which would register the base General/Timing pages
+        into the shared CueSettingsRegistry and pollute other tests).
+        """
         from lisp.plugins.action_cues.stop_cue import StopCueSettings
+
+        monkeypatch.setattr(
+            "lisp.plugins.action_cues.stop_cue.Application",
+            lambda: MagicMock(cue_model=MagicMock(
+                get=lambda _id: None, filter=lambda *_: [],
+            )),
+        )
 
         page = StopCueSettings()
         page.enableCheck(True)
