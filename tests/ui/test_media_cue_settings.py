@@ -173,3 +173,23 @@ class TestImageCueHandling:
         )
         assert page.startEdit.isEnabled()
         assert page.stopEdit.isEnabled()
+
+
+class TestMultiSelectPlaceholder:
+    def test_single_cue_shows_waveform_slot(self, qtbot):
+        page = MediaCueSettings()
+        qtbot.addWidget(page)
+        page.loadSettings({"media": {"duration": 10_000}})
+        page.show()
+        qtbot.waitExposed(page)
+        assert not page.placeholderLabel.isVisible()
+
+    def test_enable_check_true_shows_placeholder(self, qtbot):
+        """enableCheck(True) is how the inspector signals multi-select."""
+        page = MediaCueSettings()
+        qtbot.addWidget(page)
+        page.show()
+        qtbot.waitExposed(page)
+
+        page.enableCheck(True)
+        assert page.placeholderLabel.isVisible()

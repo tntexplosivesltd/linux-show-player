@@ -128,6 +128,14 @@ class MediaCueSettings(SettingsPage):
         self.setGroupEnabled(self.startGroup, enabled)
         self.setGroupEnabled(self.stopGroup, enabled)
         self.setGroupEnabled(self.loopGroup, enabled)
+        # Multi-select: waveforms don't compose across cues, so hide
+        # the trimmer slot and show a placeholder caption.
+        self.placeholderLabel.setText(
+            translate("MediaCueSettings", "Select a single cue")
+            if enabled
+            else ""
+        )
+        self.placeholderLabel.setVisible(enabled)
 
     def loadSettings(self, settings):
         media = settings.get("media", {})
