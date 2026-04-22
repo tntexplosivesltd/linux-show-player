@@ -277,6 +277,15 @@ class TrimmableWaveformWidget(WaveformWidget):
         self._stop_ms = self._waveform.duration
         self._active_marker = None
 
+    def _ready(self):
+        super()._ready()
+        # Snap stop to the now-known duration, but only if the user
+        # hasn't moved it past the previous default.
+        if self._stop_ms == 0 or self._stop_ms > self._waveform.duration:
+            self._stop_ms = self._waveform.duration
+            self.stopTimeChanged.emit(self._stop_ms)
+            self.update()
+
     def startTime(self) -> int:
         return self._start_ms
 

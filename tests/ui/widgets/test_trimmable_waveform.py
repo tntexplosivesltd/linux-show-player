@@ -72,3 +72,23 @@ class TestTrimmableWaveformWidgetDefaults:
 
         assert widget.startTime() == 0
         assert widget.stopTime() == 5_000
+
+    def test_ready_updates_stop_to_duration(self, qtbot):
+        """Late-arriving duration must update the stop marker.
+
+        Real Waveforms are often constructed with ``duration=0`` and
+        learn the real duration after the pipeline probes the file.
+        """
+        from lisp.ui.widgets.waveform import TrimmableWaveformWidget
+
+        waveform = _FakeWaveform(duration_ms=0)
+        widget = TrimmableWaveformWidget(waveform)
+        qtbot.addWidget(widget)
+
+        assert widget.stopTime() == 0  # initial snap
+
+        waveform.duration = 8_000
+        waveform.mark_ready()
+        qtbot.wait(10)
+
+        assert widget.stopTime() == 8_000
