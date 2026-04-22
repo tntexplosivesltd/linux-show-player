@@ -23,6 +23,11 @@ from lisp.core.decorators import async_function
 from lisp.core.fade_functions import FadeOutType
 from lisp.core.properties import Property
 from lisp.cues.cue import Cue, CueAction
+from lisp.plugins.action_cues._fader_coordinator import (
+    build_affected_set,
+    collect_live_faders,
+    ParallelFadeRunner,
+)
 from lisp.ui.ui_utils import translate
 
 logger = logging.getLogger(__name__)
@@ -61,6 +66,38 @@ class StopCue(Cue):
             self._error()
             return False
 
-        # Affected-set assembly, fader collection, and fade-then-action
-        # are added in subsequent tasks.
+        affected = build_affected_set(target)
+        faders = collect_live_faders(affected)
+
+        if self.duration > 0 and faders:
+            self._runner = ParallelFadeRunner(
+                faders,
+                to_value=0.0,
+                curve=FadeOutType[self.fade_type],
+                duration_seconds=self.duration / 1000,
+            )
+            self._run_fade_then_action(target)
+            return True
+
+        # Instant path: no fade to run, dispatch action synchronously.
+        target.execute(CueAction(self.action))
         return False
+
+    @async_function
+    def _run_fade_then_action(self, target):
+        """Drive the runner to completion (in a daemon thread), then
+        dispatch the action. Skip dispatch if the runner was aborted.
+        """
+        try:
+            completed = self._runner.run_until_complete()
+            if not completed:
+                return  # aborted — caller's __stop__ handled state
+            target.execute(CueAction(self.action))
+        except Exception:
+            logger.exception("StopCue: error during fade-and-action")
+            self._error()
+            return
+        finally:
+            self._runner = None
+
+        self._ended()
