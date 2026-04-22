@@ -19,7 +19,8 @@ import logging
 
 from PyQt5.QtCore import QT_TRANSLATE_NOOP, Qt
 from PyQt5.QtWidgets import (
-    QComboBox, QGroupBox, QLabel, QPushButton, QVBoxLayout,
+    QComboBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel,
+    QPushButton, QVBoxLayout, QWidget,
 )
 
 from lisp.application import Application
@@ -150,53 +151,76 @@ class StopCueSettings(SettingsPage):
         super().__init__(**kwargs)
         self.setLayout(QVBoxLayout())
         self.layout().setAlignment(Qt.AlignTop)
+        self.layout().setContentsMargins(6, 6, 6, 6)
+        self.layout().setSpacing(6)
 
         self.cue_id = ""
-        self.cueDialog = CueSelectDialog(
-            cues=Application().cue_model.filter(Cue), parent=self,
-        )
+        # Exclude StopCues from the target picker — a StopCue targeting
+        # itself (or another StopCue) has no useful semantics: StopCue
+        # isn't a MediaCue, so no faders would be collected, and the
+        # cascade would just re-dispatch the action onto a non-playing
+        # target.
+        all_cues = Application().cue_model.filter(Cue)
+        targets = [c for c in all_cues if not isinstance(c, StopCue)]
+        self.cueDialog = CueSelectDialog(cues=targets, parent=self)
 
-        # Target-cue selector
-        self.cueGroup = QGroupBox(self)
-        self.cueGroup.setLayout(QVBoxLayout())
-        self.layout().addWidget(self.cueGroup)
+        # Combined Target + Action group: cue picker on the left, action
+        # combo on the right. One group, one border, one title — less
+        # visual weight than three stacked boxes.
+        self.targetGroup = QGroupBox(self)
+        targetLayout = QHBoxLayout(self.targetGroup)
+        targetLayout.setContentsMargins(8, 6, 8, 6)
+        targetLayout.setSpacing(12)
 
-        self.cueLabel = QLabel(self.cueGroup)
+        # Left column: cue picker (label + button stacked)
+        cueColumn = QVBoxLayout()
+        cueColumn.setContentsMargins(0, 0, 0, 0)
+        cueColumn.setSpacing(4)
+        self.cueLabel = QLabel(self.targetGroup)
         self.cueLabel.setAlignment(Qt.AlignCenter)
         self.cueLabel.setStyleSheet("font-weight: bold;")
-        self.cueGroup.layout().addWidget(self.cueLabel)
-
-        self.cueButton = QPushButton(self.cueGroup)
+        self.cueButton = QPushButton(self.targetGroup)
         self.cueButton.clicked.connect(self.select_cue)
-        self.cueGroup.layout().addWidget(self.cueButton)
+        cueColumn.addWidget(self.cueLabel)
+        cueColumn.addWidget(self.cueButton)
 
-        # Action combo
-        self.actionGroup = QGroupBox(self)
-        self.actionGroup.setLayout(QVBoxLayout(self.actionGroup))
-        self.layout().addWidget(self.actionGroup)
+        cueColumnWidget = QWidget(self.targetGroup)
+        cueColumnWidget.setLayout(cueColumn)
+        targetLayout.addWidget(cueColumnWidget, stretch=3)
 
-        self.actionCombo = QComboBox(self.actionGroup)
+        # Right column: action combo with its own sub-label
+        actionColumn = QFormLayout()
+        actionColumn.setContentsMargins(0, 0, 0, 0)
+        actionColumn.setSpacing(4)
+        self.actionLabel = QLabel(self.targetGroup)
+        self.actionCombo = QComboBox(self.targetGroup)
         for a in self.SupportedActions:
             self.actionCombo.addItem(
                 translate("CueAction", a.name), a.value,
             )
-        self.actionGroup.layout().addWidget(self.actionCombo)
+        actionColumn.addRow(self.actionLabel, self.actionCombo)
 
-        # Fade settings
+        actionColumnWidget = QWidget(self.targetGroup)
+        actionColumnWidget.setLayout(actionColumn)
+        targetLayout.addWidget(actionColumnWidget, stretch=2)
+
+        self.layout().addWidget(self.targetGroup)
+
+        # Fade settings (unchanged)
         self.fadeGroup = QGroupBox(self)
-        self.fadeGroup.setLayout(QVBoxLayout())
-        self.layout().addWidget(self.fadeGroup)
-
+        fadeLayout = QVBoxLayout(self.fadeGroup)
+        fadeLayout.setContentsMargins(8, 6, 8, 6)
         self.fadeEdit = FadeEdit(self.fadeGroup)
-        self.fadeGroup.layout().addWidget(self.fadeEdit)
+        fadeLayout.addWidget(self.fadeEdit)
+        self.layout().addWidget(self.fadeGroup)
 
         self.retranslateUi()
 
     def retranslateUi(self):
-        self.cueGroup.setTitle(translate("StopCue", "Cue"))
+        self.targetGroup.setTitle(translate("StopCue", "Target"))
         self.cueButton.setText(translate("StopCue", "Click to select"))
         self.cueLabel.setText(translate("StopCue", "Not selected"))
-        self.actionGroup.setTitle(translate("StopCue", "Action"))
+        self.actionLabel.setText(translate("StopCue", "Action:"))
         self.fadeGroup.setTitle(translate("StopCue", "Fade"))
 
     def select_cue(self):
@@ -208,15 +232,13 @@ class StopCueSettings(SettingsPage):
                 self.cueLabel.setText(selected.name)
 
     def enableCheck(self, enabled):
-        self.setGroupEnabled(self.cueGroup, enabled)
-        self.setGroupEnabled(self.actionGroup, enabled)
+        self.setGroupEnabled(self.targetGroup, enabled)
         self.setGroupEnabled(self.fadeGroup, enabled)
 
     def getSettings(self):
         settings = {}
-        if self.isGroupEnabled(self.cueGroup):
+        if self.isGroupEnabled(self.targetGroup):
             settings["target_id"] = self.cue_id
-        if self.isGroupEnabled(self.actionGroup):
             settings["action"] = self.actionCombo.currentData()
         if self.isGroupEnabled(self.fadeGroup):
             settings["duration"] = int(self.fadeEdit.duration() * 1000)

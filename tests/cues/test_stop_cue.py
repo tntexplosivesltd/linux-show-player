@@ -325,6 +325,40 @@ class TestStopCueSettings:
         assert settings["duration"] == 2500
         assert settings["fade_type"] == "Linear"
 
+    def test_target_picker_excludes_stop_cues(self, qapp, monkeypatch):
+        """The target picker must not list StopCue instances — a StopCue
+        targeting itself (or any StopCue) has no meaningful semantics:
+        StopCues aren't MediaCues, so the fader set is empty; targeting
+        itself would also recursively trigger the action on itself."""
+        from lisp.plugins.action_cues.stop_cue import StopCue, StopCueSettings
+
+        # Mix of StopCue + non-StopCue in the model
+        other_stop = MagicMock(spec=StopCue)
+        non_stop = MagicMock()
+
+        captured = {}
+
+        class _FakeDialog:
+            def __init__(self, cues=None, parent=None):
+                captured["cues"] = list(cues)
+
+        monkeypatch.setattr(
+            "lisp.plugins.action_cues.stop_cue.CueSelectDialog",
+            _FakeDialog,
+        )
+        monkeypatch.setattr(
+            "lisp.plugins.action_cues.stop_cue.Application",
+            lambda: MagicMock(cue_model=MagicMock(
+                filter=lambda _cls: [other_stop, non_stop],
+                get=lambda _id: None,
+            )),
+        )
+
+        StopCueSettings()
+
+        assert other_stop not in captured["cues"]
+        assert non_stop in captured["cues"]
+
     def test_registry_association(self):
         from lisp.ui.settings.cue_settings import CueSettingsRegistry
         from lisp.plugins.action_cues.stop_cue import (

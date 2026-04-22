@@ -390,9 +390,16 @@ class InspectorPanel(QWidget):
             # cue selection → enableCheck(False); multi-cue →
             # enableCheck(True).
             widget.enableCheck(len(cues) > 1)
-            self._tabs.addTab(
-                widget, translate("SettingsPageName", page_cls.Name)
+            # QTabWidget.addTab treats `&` in the tab label as a mnemonic.
+            # Settings-page names are display strings, not accelerators —
+            # escape `&` to `&&` so names like "Fade & Stop Settings"
+            # render literally rather than losing the `&` and underlining
+            # the next character.
+            tab_text = (
+                translate("SettingsPageName", page_cls.Name)
+                .replace("&", "&&")
             )
+            self._tabs.addTab(widget, tab_text)
 
     def _clear_tabs(self) -> None:
         while self._tabs.count():
