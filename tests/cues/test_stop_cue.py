@@ -178,6 +178,58 @@ class TestFadeThenAction:
                 CueAction.FadeOutInterrupt,
             )
 
+    def test_ended_signal_fires_on_clean_completion(self, mock_app,
+                                                     monkeypatch):
+        """After the fade + dispatch land, the StopCue itself must
+        signal end so its state machine transitions out of Running.
+        Without _ended(), the list layout would show the StopCue as
+        permanently running."""
+        from lisp.cues.cue import CueState
+        from lisp.cues.media_cue import MediaCue
+
+        fake_runner = MagicMock()
+        fake_runner.run_until_complete.return_value = True
+        monkeypatch.setattr(
+            "lisp.plugins.action_cues.stop_cue.ParallelFadeRunner",
+            MagicMock(return_value=fake_runner),
+        )
+
+        class _FakeThread:
+            def __init__(self, target=None, args=(), kwargs=None,
+                         daemon=False, name=None):
+                self._target = target
+                self._args = args
+                self._kwargs = kwargs or {}
+
+            def start(self):
+                self._target(*self._args, **self._kwargs)
+        monkeypatch.setattr("lisp.core.decorators.Thread", _FakeThread)
+
+        volume_el = MagicMock()
+        volume_el.get_fader.return_value = MagicMock()
+        target = MagicMock(spec=MediaCue)
+        target.state = CueState.Running
+        target.media = MagicMock()
+        target.media.element = lambda n: volume_el if n == "Volume" else None
+        mock_app.cue_model.get.return_value = target
+
+        cue = StopCue(app=mock_app)
+        cue.target_id = "t1"
+        cue.duration = 500
+        cue.action = CueAction.Stop.value
+
+        end_fired = []
+
+        def on_end(*_):
+            end_fired.append(True)
+
+        cue.end.connect(on_end)
+
+        cue.__start__()
+
+        assert end_fired == [True]
+        assert cue._runner is None  # cleaned up in finally
+
     def test_runner_abort_skips_action_dispatch(self, mock_app, monkeypatch):
         """If the runner returns False (aborted), action is NOT dispatched."""
         from lisp.cues.cue import CueState
@@ -243,6 +295,35 @@ class TestAbort:
         cue = StopCue(app=mock_app)
         assert cue._runner is None
         assert cue.__stop__() is True  # no exception raised
+
+
+class TestSessionRoundTrip:
+    """All configured properties must survive a session save/load cycle —
+    what lands on disk (via `properties()`) must load back (via
+    `update_properties()`) into a cue whose __start__ still works."""
+
+    def test_round_trip_preserves_all_configured_properties(self, mock_app):
+        cue = StopCue(app=mock_app)
+        cue.target_id = "abc-123"
+        cue.action = CueAction.Pause.value
+        cue.duration = 2500
+        cue.fade_type = "Quadratic"
+
+        dumped = cue.properties()
+
+        assert dumped["target_id"] == "abc-123"
+        assert dumped["action"] == CueAction.Pause.value
+        assert dumped["duration"] == 2500
+        assert dumped["fade_type"] == "Quadratic"
+
+        # Reload into a fresh cue
+        restored = StopCue(app=mock_app)
+        restored.update_properties(dumped)
+
+        assert restored.target_id == "abc-123"
+        assert restored.action == CueAction.Pause.value
+        assert restored.duration == 2500
+        assert restored.fade_type == "Quadratic"
 
 
 class TestCurrentTime:

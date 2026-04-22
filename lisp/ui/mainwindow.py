@@ -51,7 +51,7 @@ from lisp.ui.logging.status import LogStatusIcon, LogMessageWidget
 from lisp.ui.logging.viewer import LogViewer
 from lisp.ui.settings.app_configuration import AppConfigurationDialog
 from lisp.core.signal import Connection
-from lisp.ui.ui_utils import translate
+from lisp.ui.ui_utils import escape_mnemonic, translate
 from lisp.ui.widgets import DigitalLabelClock
 from lisp.ui.widgets.notification import NotificationToast
 
@@ -280,11 +280,7 @@ class MainWindow(QMainWindow, metaclass=QSingleton):
         """
 
         action = QAction(self)
-        # QAction treats `&` in setText as a menu mnemonic. Cue names are
-        # display strings, not accelerators — escape `&` to `&&` so names
-        # like "Fade & Stop" render literally instead of losing the `&`
-        # and underlining the next character.
-        action.setText(translate("CueName", name).replace("&", "&&"))
+        action.setText(escape_mnemonic(translate("CueName", name)))
         action.triggered.connect(function)
         if shortcut != "":
             action.setShortcut(translate("CueCategory", shortcut))

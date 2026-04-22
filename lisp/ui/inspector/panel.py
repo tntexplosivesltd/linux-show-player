@@ -64,7 +64,7 @@ from lisp.ui.settings.cue_settings import (
     cue_page_sort_key,
 )
 from lisp.ui.settings.pages import CuePageMixin
-from lisp.ui.ui_utils import translate
+from lisp.ui.ui_utils import escape_mnemonic, translate
 from lisp.ui.widgets.cue_color_palette import CueColorPalette
 
 
@@ -390,16 +390,12 @@ class InspectorPanel(QWidget):
             # cue selection → enableCheck(False); multi-cue →
             # enableCheck(True).
             widget.enableCheck(len(cues) > 1)
-            # QTabWidget.addTab treats `&` in the tab label as a mnemonic.
-            # Settings-page names are display strings, not accelerators —
-            # escape `&` to `&&` so names like "Fade & Stop Settings"
-            # render literally rather than losing the `&` and underlining
-            # the next character.
-            tab_text = (
-                translate("SettingsPageName", page_cls.Name)
-                .replace("&", "&&")
+            self._tabs.addTab(
+                widget,
+                escape_mnemonic(
+                    translate("SettingsPageName", page_cls.Name)
+                ),
             )
-            self._tabs.addTab(widget, tab_text)
 
     def _clear_tabs(self) -> None:
         while self._tabs.count():

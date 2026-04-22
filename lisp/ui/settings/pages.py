@@ -19,7 +19,7 @@ from PyQt5.QtCore import QModelIndex, Qt, pyqtSignal
 from PyQt5.QtWidgets import QWidget, QTabWidget, QVBoxLayout, QGroupBox
 
 from lisp.core.util import dict_merge
-from lisp.ui.ui_utils import translate
+from lisp.ui.ui_utils import escape_mnemonic, translate
 from lisp.ui.widgets.pagestreewidget import PagesTreeWidget
 
 
@@ -104,7 +104,10 @@ class SettingsPagesTabWidget(SettingsPage):
 
     def addPage(self, page):
         self._pages.append(page)
-        self.tabWidget.addTab(page, translate("SettingsPageName", page.Name))
+        self.tabWidget.addTab(
+            page,
+            escape_mnemonic(translate("SettingsPageName", page.Name)),
+        )
 
     def removePage(self, index):
         self.tabWidget.removeTab(index)

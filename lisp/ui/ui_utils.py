@@ -144,6 +144,18 @@ def translate_many(context, texts):
         yield translate(context, item)
 
 
+def escape_mnemonic(text):
+    """Escape `&` for Qt widgets that interpret it as a menu mnemonic.
+
+    QAction, QMenu, QPushButton, and QTabWidget all treat a single `&`
+    in their text as an Alt-accelerator (and hide the `&` itself). For
+    content strings (cue names, settings-page names) this mangles the
+    display. Apply this helper anywhere user-visible content hits one
+    of those widgets.
+    """
+    return text.replace("&", "&&")
+
+
 def tr_sorted(context, iterable, key=None, reverse=False):
     """Return a new sorted list from the items in iterable.
 

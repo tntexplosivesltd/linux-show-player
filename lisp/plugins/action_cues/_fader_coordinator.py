@@ -15,8 +15,13 @@
 # You should have received a copy of the GNU General Public License
 # along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 """Shared fader-orchestration helpers for the Fade & Stop / Fade & Resume
-action cues. Underscore prefix keeps this module out of ActionCues'
-load_classes cue-registration loop.
+action cues.
+
+The leading underscore keeps the module out of the class-name lookup
+performed by `ActionCues.load_classes` — the module is still imported
+(which is fine, since nothing here is cue-like) but the loader's
+filename-to-class-name conversion strips the prefix and finds no
+`FaderCoordinator` class to register.
 """
 
 import logging
@@ -146,8 +151,14 @@ class ParallelFadeRunner:
     def current_time(self):
         """Elapsed fade time in ms, taken from the first fader.
 
-        All faders run in parallel with the same duration, so any one of
-        them is representative. Returns 0 if the fader set is empty.
+        Deliberate approximation: all faders are started in a tight loop
+        with the same `duration_seconds`, so in practice they're within
+        microseconds of each other — well under the 10ms resolution the
+        list-layout CueTime widget polls at. If a caller ever needs
+        strict monotonicity across the fader set, this should become
+        `max(f.current_time() for f in self._faders)`.
+
+        Returns 0 if the fader set is empty.
         """
         if not self._faders:
             return 0

@@ -56,7 +56,12 @@ def test_1_instant_stop(t, ids):
 
 
 def test_2_fade_then_pause(t, ids):
-    """duration=500ms + action=Pause: volume fades to 0, target pauses."""
+    """duration=500ms + action=Pause: target pauses after the fade runs.
+
+    Timing assertion proves the fade actually ran — if StopCue skipped
+    the fade and dispatched Pause immediately, the signal would fire in
+    well under the 500ms duration.
+    """
     print("\n=== Test 2: Fade 500ms then Pause ===")
     stop_all()
 
@@ -67,11 +72,17 @@ def test_2_fade_then_pause(t, ids):
     assert wait_state(target, "Running")
 
     with cue_signal(target, "paused") as sub:
+        start = time.monotonic()
         call("cue.execute", {"id": sfr, "action": "Start"})
         ev = wait_for_signal(sub, timeout=3.0)
+        elapsed = time.monotonic() - start
 
     t.check("target received paused signal", ev is not None)
     t.check("target is Pause state", cue_state(target) == "Pause")
+    t.check(
+        f"pause fired after fade duration (got {elapsed * 1000:.0f}ms)",
+        0.4 < elapsed < 1.5,
+    )
 
 
 def test_3_group_fan_out(t, ids):
@@ -105,9 +116,9 @@ def test_3_group_fan_out(t, ids):
     t.check("child B stopped", ev_b is not None)
 
 
-def test_5_abort_midfade(t, ids):
+def test_4_abort_midfade(t, ids):
     """Stopping the StopCue mid-fade leaves target running."""
-    print("\n=== Test 5: Abort mid-fade ===")
+    print("\n=== Test 4: Abort mid-fade ===")
     stop_all()
 
     target = ids["tone_A"]
@@ -127,9 +138,9 @@ def test_5_abort_midfade(t, ids):
     )
 
 
-def test_4_non_media_target_graceful(t, ids):
+def test_5_non_media_target_graceful(t, ids):
     """StopCue on a target without faders still dispatches the action."""
-    print("\n=== Test 4: Non-media target ===")
+    print("\n=== Test 5: Non-media target ===")
     stop_all()
 
     cmd = call("cue.add", {
@@ -152,8 +163,8 @@ def run_tests(t):
     test_1_instant_stop(t, ids)
     test_2_fade_then_pause(t, ids)
     test_3_group_fan_out(t, ids)
-    test_4_non_media_target_graceful(t, ids)
-    test_5_abort_midfade(t, ids)
+    test_4_abort_midfade(t, ids)
+    test_5_non_media_target_graceful(t, ids)
 
 
 if __name__ == "__main__":
