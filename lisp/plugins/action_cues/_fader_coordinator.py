@@ -21,7 +21,46 @@ load_classes cue-registration loop.
 
 import logging
 
+from lisp.cues.cue import CueState
+from lisp.cues.media_cue import MediaCue
+
 logger = logging.getLogger(__name__)
+
+
+_FADEABLE_ELEMENTS = (
+    ("Volume", "live_volume"),
+    ("VideoAlpha", "live_alpha"),
+)
+
+
+def collect_live_faders(cues, states=CueState.IsRunning):
+    """Return a list of Fader objects for cues whose state matches `states`.
+
+    For each MediaCue in `cues` whose `state & states` is non-zero, ask
+    its Volume / VideoAlpha elements for a fader on their live
+    properties. Non-MediaCues and cues without the requisite elements
+    contribute nothing.
+
+    Default `states=CueState.IsRunning` matches StopCue's use case
+    (fading things that are actively playing). ResumeCue passes
+    `states=CueState.Pause | CueState.IsRunning` to pick up paused
+    cues it's about to resume.
+    """
+    faders = []
+    for cue in cues:
+        if not (cue.state & states):
+            continue
+        if not isinstance(cue, MediaCue):
+            continue
+        media = getattr(cue, "media", None)
+        if media is None:
+            continue
+        for element_name, fader_prop in _FADEABLE_ELEMENTS:
+            element = media.element(element_name)
+            if element is None:
+                continue
+            faders.append(element.get_fader(fader_prop))
+    return faders
 
 
 def build_affected_set(target):
