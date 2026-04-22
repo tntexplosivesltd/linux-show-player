@@ -277,6 +277,7 @@ class TrimmableWaveformWidget(WaveformWidget):
         self._stop_ms = self._waveform.duration
         self._active_marker = None
         self.setMouseTracking(True)
+        self.setFocusPolicy(Qt.StrongFocus)
 
     def _ready(self):
         super()._ready()
@@ -349,6 +350,37 @@ class TrimmableWaveformWidget(WaveformWidget):
         if event.button() != Qt.LeftButton or self._active_marker is None:
             return
         self._active_marker = None
+        self.trimReleased.emit()
+
+    def focusStartMarker(self):
+        self._active_marker = "start"
+        self.setFocus(Qt.OtherFocusReason)
+        self.update()
+
+    def focusStopMarker(self):
+        self._active_marker = "stop"
+        self.setFocus(Qt.OtherFocusReason)
+        self.update()
+
+    def keyPressEvent(self, event):
+        if self._active_marker is None:
+            super().keyPressEvent(event)
+            return
+
+        step = 1_000 if event.modifiers() & Qt.ShiftModifier else 100
+        key = event.key()
+        if key == Qt.Key_Left:
+            delta = -step
+        elif key == Qt.Key_Right:
+            delta = step
+        else:
+            super().keyPressEvent(event)
+            return
+
+        if self._active_marker == "start":
+            self.setStartTime(self._start_ms + delta)
+        else:
+            self.setStopTime(self._stop_ms + delta)
         self.trimReleased.emit()
 
     def paintEvent(self, event):

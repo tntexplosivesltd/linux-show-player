@@ -274,3 +274,38 @@ class TestTrimmableWaveformWidgetPaint:
         widget.setStopTime(5_000)
         widget.show()
         qtbot.waitExposed(widget)
+
+
+class TestTrimmableWaveformWidgetKeyboard:
+    def test_left_nudges_start_back_100ms(self, qtbot):
+        from PyQt5.QtTest import QTest
+        from lisp.ui.widgets.waveform import TrimmableWaveformWidget
+
+        waveform = _FakeWaveform(duration_ms=10_000)
+        widget = TrimmableWaveformWidget(waveform)
+        qtbot.addWidget(widget)
+        widget.resize(400, 120)
+        widget.show()
+        qtbot.waitExposed(widget)
+        widget.setStartTime(5_000, silent=True)
+        widget.focusStartMarker()
+
+        QTest.keyClick(widget, Qt.Key_Left)
+        assert widget.startTime() == 4_900
+
+    def test_shift_right_nudges_stop_forward_1000ms(self, qtbot):
+        from PyQt5.QtTest import QTest
+        from lisp.ui.widgets.waveform import TrimmableWaveformWidget
+
+        waveform = _FakeWaveform(duration_ms=10_000)
+        widget = TrimmableWaveformWidget(waveform)
+        qtbot.addWidget(widget)
+        widget.resize(400, 120)
+        widget.show()
+        qtbot.waitExposed(widget)
+        widget.setStartTime(1_000, silent=True)
+        widget.setStopTime(5_000, silent=True)
+        widget.focusStopMarker()
+
+        QTest.keyClick(widget, Qt.Key_Right, Qt.ShiftModifier)
+        assert widget.stopTime() == 6_000
