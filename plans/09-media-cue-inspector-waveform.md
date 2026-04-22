@@ -2194,6 +2194,135 @@ git -c commit.gpgsign=false commit -m "chore: lint fixups for waveform trimmer" 
 
 ---
 
+## Task 17: Code review via `voltagent-qa-sec:code-reviewer`
+
+Run an independent code review pass now that tests are green and lint is clean. The subagent has no conversation context — the brief below is self-contained.
+
+- [ ] **Step 1: Dispatch the code-reviewer subagent**
+
+Invoke `Agent` with `subagent_type: "voltagent-qa-sec:code-reviewer"` and the following prompt:
+
+> Review the Media Cue Inspector waveform implementation on branch `master`. The feature adds a draggable-marker waveform to the Media Cue settings page so users can set start/stop trim points visually, and maps the opaque `stop_time == 0` sentinel to `duration` on display.
+>
+> **Files changed:**
+> - `lisp/ui/widgets/waveform.py` — two new classes: `TrimmableWaveformWidget(WaveformWidget)` and `TrimmableTimelineWidget(QWidget)`.
+> - `lisp/ui/settings/cue_pages/media_cue.py` — restructured to a two-column grid with bidirectional sync between numeric fields and the waveform trimmer.
+> - `tests/ui/widgets/test_trimmable_waveform.py` — unit tests.
+> - `tests/ui/test_media_cue_settings.py` — integration tests.
+> - Possibly one-line change to an inspector page-dispatch site to call `page.setCue(cue)`.
+>
+> **Design doc:** `docs/specs/2026-04-22-media-cue-inspector-waveform-design.md`
+> **Implementation plan:** `plans/09-media-cue-inspector-waveform.md`
+>
+> **Focus areas — report only high-priority issues:**
+> 1. **Signal cycles:** the bidirectional sync uses `silent=True` on the trimmer and `blockSignals()` on the `QTimeEdit`. Verify there's no path that can recurse (e.g., `setMinimumTime`/`setMaximumTime` firing `timeChanged`).
+> 2. **Clamp invariants:** `start_ms < stop_ms` with 1 ms precision. Confirm both drag and numeric paths converge on the setters so the invariant holds.
+> 3. **Lifecycle correctness:** `_install_waveform` tears down any previous trimmer and disposes Qt widgets with `deleteLater()`. Verify no dangling signal connections after swap (especially across repeated `loadSettings` calls when the user navigates between cues in the inspector).
+> 4. **Stop-time sentinel semantics:** load maps `0 → duration`, save is verbatim. Verify backend equivalence holds — `stop_time >= duration` and `stop_time == 0` both fall through the `0 < stop_time < duration` guard at `lisp/plugins/gst_backend/gst_media.py:182`.
+> 5. **Image-cue path:** uses `_show_image_placeholder()` (plain label), not `TrimmableTimelineWidget`. Fields disabled. Verify no crash path when `cue.media` has an `ImageInput` element but the dict-based `_is_image_cue` detection runs on a partial settings dict.
+> 6. **Widget composition:** `TrimmableWaveformWidget` inherits from `WaveformWidget` and overrides `paintEvent`, `mousePress/Move/Release`, `keyPressEvent`, and `_ready`. Verify base-class state (`_maximum`, `_valueToPx`) stays consistent — especially during `resizeEvent` after a marker drag.
+> 7. **Test robustness:** the `_FakeWaveform` double stands in for `Waveform`. Verify the double matches the surface the real widget actually touches (attributes, signals).
+>
+> **Out of scope:**
+> - The running-cue panel (`lisp/plugins/list_layout/playing_widgets.py`) — unchanged, shouldn't regress.
+> - Backend, session format, cue model — all unchanged.
+> - Pixel-exact paint output — explicitly excluded per spec.
+> - Zoom/scroll — deferred.
+>
+> Report findings with **file:line** references, severity (critical / high / medium), and a concrete proposed fix for each. Suppress nits.
+
+- [ ] **Step 2: Triage findings**
+
+For each finding:
+- **Critical / High** → add a fix task inline, write a failing test, fix, verify.
+- **Medium** → judgment call: fix now if small, log as follow-up if large.
+- **Nit / style** → ignore unless it blocks something.
+
+- [ ] **Step 3: Commit fixes (if any)**
+
+```bash
+git add -u
+git -c commit.gpgsign=false commit -m "fix(media-cue-waveform): address code-review findings
+
+<list each finding addressed>"
+```
+
+---
+
+## Task 18: QA review via `voltagent-qa-sec:qa-expert`
+
+End-to-end QA sweep focused on behaviour, not code. The subagent will look at the feature through a user's eyes and probe edge cases the automated tests don't cover.
+
+- [ ] **Step 1: Dispatch the qa-expert subagent**
+
+Invoke `Agent` with `subagent_type: "voltagent-qa-sec:qa-expert"` and the following prompt:
+
+> QA the Media Cue Inspector waveform feature. This is a PyQt5 desktop application (Linux Show Player); the feature is a draggable-marker waveform inside the Media Cue settings inspector page.
+>
+> **What the feature does:**
+> - Shows a peak/RMS waveform of the media file inside the Media Cue inspector page.
+> - Two full-height vertical markers (start + stop) overlay the waveform. Dragging a marker moves it; the region between is shaded. Mouse-release commits.
+> - Start/Stop numeric fields (`HH:mm:ss.zzz`) live in a left column; the waveform fills the right column. Edits in either surface propagate to the other — cycle broken with `silent=True` + `blockSignals`.
+> - `stop_time == 0` (backend sentinel for "play to natural end") is displayed as `duration` so the field is never `0:00:00` for a never-trimmed cue.
+> - Image cues: start/stop fields disabled, waveform slot shows "Trimming does not apply to image cues." caption.
+> - Multi-select: waveform slot shows "Select a single cue" caption; numeric fields continue to multi-edit via the existing checkable-group mechanism.
+> - Decode failure (audio-less video, corrupted file): waveform swaps to a flat timeline widget with the same marker API so the user keeps a trim surface.
+> - Keyboard: focused marker → `Left`/`Right` = ±100 ms, `Shift+Left`/`Right` = ±1000 ms.
+>
+> **Design doc:** `docs/specs/2026-04-22-media-cue-inspector-waveform-design.md`
+> **Implementation plan:** `plans/09-media-cue-inspector-waveform.md`
+>
+> **QA sweep — produce a prioritized bug list:**
+> 1. **Core user flows:** open a media cue → inspector → Media Cue tab. Waveform renders, markers draggable, numeric fields and markers stay in sync both directions, mouse-release commits, undo/redo works.
+> 2. **Sentinel display:** a brand-new cue with `stop_time == 0` should show `duration` in the field. Save, reload session — verify the persisted value is duration (not 0).
+> 3. **Crossover:** drag start past stop → should clamp at `stop - 1 ms`. Same for stop past start. Type values that would cross → same clamp.
+> 4. **Image cue:** add an image cue, open inspector. Start/stop fields should be disabled (greyed). Placeholder caption should be visible in the waveform slot. Loop field should still be editable.
+> 5. **Multi-select:** select two or more media cues in the layout → inspector shows multi-select page. Waveform hidden, "Select a single cue" caption shown. Numeric fields work via checkable groups.
+> 6. **Decode failure:** load a video with no audio track → waveform should fall back to the flat timeline widget, markers still draggable.
+> 7. **Audio vs video:** confirm audio cues and video cues (with audio) both produce waveforms.
+> 8. **Keyboard:** focus a marker (tab in), arrow keys nudge ±100 ms, Shift+arrow nudge ±1000 ms.
+> 9. **Resize:** resize the inspector dialog — waveform should grow horizontally and vertically (min height 120 px).
+> 10. **Regression checks:**
+>     - Running-cue panel in the list layout still shows its waveform slider (unchanged).
+>     - Existing cue types (Stop All, Group, Fade & Stop) open their inspector without errors.
+>     - Session save/load round-trips correctly.
+> 11. **Edge cases:**
+>     - Media file with `duration = 0` (unknown/streaming source).
+>     - Very long file (1h+) — does the marker dispatch-by-proximity still work at tiny pixel ratios?
+>     - Very short file (< 1 s) — does the 1 ms clamp still allow sensible marker positions?
+>     - Rapid cue navigation in the inspector (click cue A, then B, then C): no leaked waveform pipelines, no stale signals.
+>
+> **Environment:**
+> - Start the app: `poetry run linux-show-player -l debug`
+> - Test harness available for E2E poking: see `CLAUDE.md` → "Test Harness Plugin".
+>
+> **Out of scope:**
+> - Zoom/scroll (deferred).
+> - Scrub-audition (deferred).
+> - Performance benchmarking of waveform decode.
+>
+> Report: critical (blocks merge) / high (visible user bug) / medium (polish). Include reproduction steps with file paths and any console/log output.
+
+- [ ] **Step 2: Triage QA findings**
+
+For each critical/high bug:
+- Write a failing test reproducing it.
+- Fix. Verify.
+- Commit.
+
+For medium polish: judgment call — fix now if small, open a follow-up note in `plans/` if large.
+
+- [ ] **Step 3: Commit fixes**
+
+```bash
+git add -u
+git -c commit.gpgsign=false commit -m "fix(media-cue-waveform): address QA findings
+
+<list each bug addressed>"
+```
+
+---
+
 ## Verification Checklist
 
 Before declaring the plan done, confirm:
@@ -2203,3 +2332,5 @@ Before declaring the plan done, confirm:
 - [ ] Manual smoke: dragging a marker moves the numeric field; typing into the field moves the marker; Stop Time shows duration on first load of a never-trimmed cue; image cue disables fields; multi-select hides waveform.
 - [ ] Running-cue panel (`lisp/plugins/list_layout/playing_widgets.py`) and existing `WaveformSlider` remain unchanged.
 - [ ] No changes to `lisp/backend/waveform.py`, `gst_waveform.py`, or session file format.
+- [ ] Code-reviewer findings (Task 17) triaged — critical/high addressed with tests.
+- [ ] QA-expert findings (Task 18) triaged — critical/high addressed with tests.
