@@ -15,11 +15,12 @@
 # You should have received a copy of the GNU General Public License
 # along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
-from PyQt5.QtCore import QT_TRANSLATE_NOOP, QTime
+from PyQt5.QtCore import QT_TRANSLATE_NOOP, QTime, Qt
 from PyQt5.QtWidgets import (
     QDateTimeEdit,
     QGridLayout,
     QHBoxLayout,
+    QLabel,
     QSpinBox,
     QTimeEdit,
 )
@@ -36,20 +37,16 @@ class MediaCueSettings(SettingsPage):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
-        # Two-column flat-grid mirroring the Timing tab: start-time and
-        # stop-time pair naturally as HH:mm:ss.zzz editors, with the
-        # loop counter spanning beneath. Tooltips replace the verbose
-        # "Start/Stop position of the media" sub-labels — the group
-        # title already names each field.
         grid = QGridLayout(self)
         grid.setContentsMargins(8, 4, 8, 4)
         grid.setHorizontalSpacing(12)
         grid.setVerticalSpacing(2)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 3)
 
         self.startGroup = make_flat_group()
         self.startGroup.setLayout(QHBoxLayout())
         self.startGroup.layout().setContentsMargins(0, 0, 0, 0)
-
         self.startEdit = QTimeEdit(self.startGroup)
         self.startEdit.setDisplayFormat("HH:mm:ss.zzz")
         self.startEdit.setCurrentSection(QDateTimeEdit.SecondSection)
@@ -59,25 +56,40 @@ class MediaCueSettings(SettingsPage):
         self.stopGroup = make_flat_group()
         self.stopGroup.setLayout(QHBoxLayout())
         self.stopGroup.layout().setContentsMargins(0, 0, 0, 0)
-
         self.stopEdit = QTimeEdit(self.stopGroup)
         self.stopEdit.setDisplayFormat("HH:mm:ss.zzz")
         self.stopEdit.setCurrentSection(QDateTimeEdit.SecondSection)
         self.stopGroup.layout().addWidget(self.stopEdit)
-        grid.addWidget(self.stopGroup, 0, 1)
+        grid.addWidget(self.stopGroup, 1, 0)
 
         self.loopGroup = make_flat_group()
         self.loopGroup.setLayout(QHBoxLayout())
         self.loopGroup.layout().setContentsMargins(0, 0, 0, 0)
-
         self.spinLoop = QSpinBox(self.loopGroup)
         self.spinLoop.setRange(-1, 1_000_000)
         self.loopGroup.layout().addWidget(self.spinLoop)
-        grid.addWidget(self.loopGroup, 1, 0, 1, 2)
+        grid.addWidget(self.loopGroup, 2, 0)
 
-        # Pin rows to the top so a tall inspector pane doesn't
-        # vertically centre the three controls.
-        grid.setRowStretch(2, 1)
+        # Column 1 reserved for the waveform trimmer. The trimmer is
+        # mounted lazily in loadSettings() once the cue's media source
+        # (or lack of one) is known. Two placeholder captions live in
+        # the same grid cell — only one is ever visible at a time.
+        self._waveformSlot = None
+        self._waveformRow = (0, 3)
+
+        self.placeholderLabel = QLabel("", self)
+        self.placeholderLabel.setAlignment(Qt.AlignCenter)
+        self.placeholderLabel.setStyleSheet("color: #888;")
+        self.placeholderLabel.hide()
+        grid.addWidget(self.placeholderLabel, 0, 1, 3, 1)
+
+        self.imagePlaceholder = QLabel("", self)
+        self.imagePlaceholder.setAlignment(Qt.AlignCenter)
+        self.imagePlaceholder.setStyleSheet("color: #888;")
+        self.imagePlaceholder.hide()
+        grid.addWidget(self.imagePlaceholder, 0, 1, 3, 1)
+
+        grid.setRowStretch(3, 1)
 
         self.retranslateUi()
 
