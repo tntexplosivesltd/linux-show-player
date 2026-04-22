@@ -198,15 +198,35 @@ class PlaybackMonitorWindow(QWidget):
         ) or time < 0:
             time = 0
 
-        elapsed_str = format_monitor_time(time)
-
-        if cue.duration > 0:
-            remaining = cue.duration - time
-            remaining_str = format_monitor_time(
-                max(0, remaining)
+        # Trim awareness: for MediaCues the CueTime emits raw
+        # pipeline position, not elapsed-since-cue-start. Without
+        # this adjustment a cue trimmed to 30s–150s reports 30s
+        # elapsed the instant it starts and 30s remaining the
+        # instant it ends. Non-media cues have no ``media`` attr
+        # and fall through to the legacy raw-duration formula.
+        media = getattr(cue, "media", None)
+        if media is not None:
+            effective_end = (
+                media.stop_time
+                if media.stop_time > 0
+                else cue.duration
             )
+            elapsed_ms = max(0, time - media.start_time)
+            if effective_end > 0:
+                remaining_ms = max(0, effective_end - time)
+                remaining_str = format_monitor_time(remaining_ms)
+            else:
+                remaining_str = "--:--"
+            elapsed_str = format_monitor_time(elapsed_ms)
         else:
-            remaining_str = "--:--"
+            elapsed_str = format_monitor_time(time)
+            if cue.duration > 0:
+                remaining = cue.duration - time
+                remaining_str = format_monitor_time(
+                    max(0, remaining)
+                )
+            else:
+                remaining_str = "--:--"
 
         self._set_times(elapsed_str, remaining_str)
 
