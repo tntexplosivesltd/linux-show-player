@@ -71,8 +71,16 @@ class _ColorStripe(QWidget):
 
     def setColor(self, hex_color: str) -> None:
         self._color = hex_color or ""
-        if self._color:
-            self.setStyleSheet(f"background-color: {self._color};")
+        # Validate before interpolating: cue.stylesheet can be hand-
+        # edited or carry a legacy format that css_to_dict surfaces
+        # verbatim, and an unchecked value would slot into our own
+        # selector. QColor.isValid() is Qt's canonical gate.
+        if self._color and QColor(self._color).isValid():
+            # Scoped selector — future descendants of _ColorStripe
+            # must not inherit the background fill.
+            self.setStyleSheet(
+                f"_ColorStripe {{ background-color: {self._color}; }}"
+            )
             self.setVisible(True)
         else:
             self.setStyleSheet("")

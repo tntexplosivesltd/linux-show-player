@@ -163,3 +163,48 @@ class TestRunningCueWidgetColorStripe:
         qtbot.wait(10)
 
         assert widget.colorStripe.color() == "#7848A6"
+
+    def test_stripe_stylesheet_is_scoped_to_class(
+        self, qtbot, mock_app
+    ):
+        """The stripe's stylesheet must be scoped to ``_ColorStripe``.
+
+        An unscoped ``background-color`` rule cascades to every
+        descendant widget; the stripe has none today but a future
+        child (tooltip, overlay label) would inherit the fill.
+        Scoping the selector keeps the paint confined to the stripe
+        itself regardless of what gets nested inside later.
+        """
+        cue = _make_cue(mock_app, stylesheet="background:#3E8A3B;")
+        widget = RunningCueWidget(cue, _Config())
+        qtbot.addWidget(widget)
+
+        stripe_css = widget.colorStripe.styleSheet()
+        assert "_ColorStripe" in stripe_css, (
+            f"stripe stylesheet must be scoped, got: {stripe_css!r}"
+        )
+
+    def test_stripe_rejects_malformed_hex(self, qtbot, mock_app):
+        """Invalid hex from a corrupted session must not paint.
+
+        ``css_to_dict`` parses whatever's between ``background:`` and
+        ``;`` without validating it's a real colour. A terminator-free
+        payload lets arbitrary stylesheet syntax ride into
+        ``self._color`` — the stripe must refuse to interpolate it
+        into its own selector rather than echo it back verbatim.
+        """
+        # Single-colon payload with brace injection — survives
+        # css_to_dict's 2-part split and lands in ``self._color``
+        # verbatim. The stripe's stylesheet assignment must refuse
+        # to echo it into its own selector.
+        cue = _make_cue(
+            mock_app,
+            stylesheet="background:red } QWidget { color #fff",
+        )
+        widget = RunningCueWidget(cue, _Config())
+        qtbot.addWidget(widget)
+
+        stripe_css = widget.colorStripe.styleSheet()
+        assert "QWidget" not in stripe_css, (
+            f"foreign selector leaked through: {stripe_css!r}"
+        )
