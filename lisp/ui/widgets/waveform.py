@@ -35,6 +35,15 @@ class WaveformWidget(QWidget):
         self.setMaximum(self._waveform.duration)
         self.update()
 
+    def detach(self):
+        # Drop the ready-signal connection so a late queued emission
+        # after the widget is scheduled for deletion can't fire _ready()
+        # on a Qt-dead instance.
+        try:
+            self._waveform.ready.disconnect(self._ready)
+        except (TypeError, ValueError):
+            pass
+
     def maximum(self):
         return self._maximum
 
@@ -256,3 +265,264 @@ class WaveformSlider(DynamicFontSizeMixin, WaveformWidget):
             painter.drawText(rect, Qt.AlignCenter, text)
 
             painter.end()
+
+
+class _TrimMarkerInteractionMixin:
+    """Shared mouse + keyboard handling for trimmable widgets.
+
+    Expects the host to provide: ``_start_ms``, ``_stop_ms``,
+    ``_active_marker``, ``setStartTime``, ``setStopTime``,
+    ``trimReleased`` (pyqtSignal), ``_ms_per_px``, and ``_x_for``.
+    """
+
+    _NUDGE_STEP_MS = 100
+    _NUDGE_COARSE_MS = 1_000
+
+    def _ms_for(self, x: int) -> int:
+        return int(round(x * self._ms_per_px()))
+
+    def mousePressEvent(self, event):
+        if event.button() != Qt.LeftButton:
+            return
+        x = event.x()
+        dist_start = abs(x - self._x_for(self._start_ms))
+        dist_stop = abs(x - self._x_for(self._stop_ms))
+        if dist_start <= dist_stop:
+            self._active_marker = "start"
+        else:
+            self._active_marker = "stop"
+
+    def mouseMoveEvent(self, event):
+        if self._active_marker is None:
+            return
+        ms = self._ms_for(event.x())
+        if self._active_marker == "start":
+            self.setStartTime(ms)
+        else:
+            self.setStopTime(ms)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() != Qt.LeftButton or self._active_marker is None:
+            return
+        self._active_marker = None
+        self.trimReleased.emit()
+
+    def focusStartMarker(self):
+        self._active_marker = "start"
+        self.setFocus(Qt.OtherFocusReason)
+        self.update()
+
+    def focusStopMarker(self):
+        self._active_marker = "stop"
+        self.setFocus(Qt.OtherFocusReason)
+        self.update()
+
+    def keyPressEvent(self, event):
+        if self._active_marker is None:
+            super().keyPressEvent(event)
+            return
+
+        step = (
+            self._NUDGE_COARSE_MS
+            if event.modifiers() & Qt.ShiftModifier
+            else self._NUDGE_STEP_MS
+        )
+        key = event.key()
+        if key == Qt.Key_Left:
+            delta = -step
+        elif key == Qt.Key_Right:
+            delta = step
+        else:
+            super().keyPressEvent(event)
+            return
+
+        if self._active_marker == "start":
+            self.setStartTime(self._start_ms + delta)
+        else:
+            self.setStopTime(self._stop_ms + delta)
+        self.trimReleased.emit()
+
+
+class TrimmableWaveformWidget(_TrimMarkerInteractionMixin, WaveformWidget):
+    """Waveform with draggable start/stop trim markers.
+
+    Overlays two full-height vertical lines on top of the inherited
+    peak/RMS paint. Emits per-frame signals during drag and a single
+    ``trimReleased`` on mouse-up, so the inspector page can debounce
+    its own commit logic.
+    """
+
+    startTimeChanged = pyqtSignal(int)
+    stopTimeChanged = pyqtSignal(int)
+    trimReleased = pyqtSignal()
+
+    def __init__(self, waveform: Waveform, **kwargs):
+        super().__init__(waveform, **kwargs)
+        self._start_ms = 0
+        self._stop_ms = self._waveform.duration
+        self._active_marker = None
+        self.setMouseTracking(True)
+        self.setFocusPolicy(Qt.StrongFocus)
+
+    def _ready(self):
+        super()._ready()
+        # Snap stop to the now-known duration, but only if the user
+        # hasn't moved it past the previous default.
+        if self._stop_ms == 0 or self._stop_ms > self._waveform.duration:
+            self._stop_ms = self._waveform.duration
+            self.stopTimeChanged.emit(self._stop_ms)
+            self.update()
+
+    def startTime(self) -> int:
+        return self._start_ms
+
+    def stopTime(self) -> int:
+        return self._stop_ms
+
+    def setStartTime(self, ms: int, silent: bool = False) -> None:
+        upper = self._stop_ms - 1 if self._stop_ms > 0 else 0
+        ms = max(0, min(int(ms), upper))
+        if ms == self._start_ms:
+            return
+        self._start_ms = ms
+        if not silent:
+            self.startTimeChanged.emit(ms)
+        self.update()
+
+    def setStopTime(self, ms: int, silent: bool = False) -> None:
+        upper = self._waveform.duration
+        lower = self._start_ms + 1
+        ms = max(lower, min(int(ms), upper))
+        if ms == self._stop_ms:
+            return
+        self._stop_ms = ms
+        if not silent:
+            self.stopTimeChanged.emit(ms)
+        self.update()
+
+    def _ms_per_px(self) -> float:
+        return self._valueToPx or 1.0
+
+    def _x_for(self, ms: int) -> int:
+        return int(ms / self._ms_per_px())
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+
+        painter = QPainter()
+        painter.begin(self)
+        x_start = self._x_for(self._start_ms)
+        x_stop = self._x_for(self._stop_ms)
+
+        if x_stop > x_start:
+            region_brush = QBrush(QColor(75, 154, 250, 40))
+            painter.setPen(QPen(QColor(0, 0, 0, 0)))
+            painter.setBrush(region_brush)
+            painter.drawRect(
+                x_start, 0, x_stop - x_start, self.height()
+            )
+
+        marker_pen = QPen(QColor(75, 154, 250))
+        marker_pen.setWidth(2)
+        painter.setPen(marker_pen)
+        painter.drawLine(x_start, 0, x_start, self.height())
+        painter.drawLine(x_stop, 0, x_stop, self.height())
+
+        painter.end()
+
+
+class TrimmableTimelineWidget(_TrimMarkerInteractionMixin, QWidget):
+    """Flat-timeline fallback with the same trim API.
+
+    Used when peak data isn't available (image cues, audio-less video,
+    decode failure). Paints a flat horizontal line under the same
+    marker overlay that TrimmableWaveformWidget uses.
+    """
+
+    startTimeChanged = pyqtSignal(int)
+    stopTimeChanged = pyqtSignal(int)
+    trimReleased = pyqtSignal()
+
+    def __init__(self, duration_ms: int = 0, **kwargs):
+        super().__init__(**kwargs)
+        self._duration = max(0, int(duration_ms))
+        self._start_ms = 0
+        self._stop_ms = self._duration
+        self._active_marker = None
+        self.setMouseTracking(True)
+        self.setFocusPolicy(Qt.StrongFocus)
+
+        self.backgroundColor = QColor(32, 32, 32)
+        self.lineColor = QColor(130, 130, 130)
+        self.markerColor = QColor(75, 154, 250)
+        self.regionColor = QColor(75, 154, 250, 40)
+
+    def startTime(self) -> int:
+        return self._start_ms
+
+    def stopTime(self) -> int:
+        return self._stop_ms
+
+    def setDuration(self, ms: int):
+        self._duration = max(0, int(ms))
+        if self._stop_ms == 0 or self._stop_ms > self._duration:
+            self._stop_ms = self._duration
+            self.stopTimeChanged.emit(self._stop_ms)
+        self.update()
+
+    def setStartTime(self, ms: int, silent: bool = False) -> None:
+        upper = self._stop_ms - 1 if self._stop_ms > 0 else 0
+        ms = max(0, min(int(ms), upper))
+        if ms == self._start_ms:
+            return
+        self._start_ms = ms
+        if not silent:
+            self.startTimeChanged.emit(ms)
+        self.update()
+
+    def setStopTime(self, ms: int, silent: bool = False) -> None:
+        upper = self._duration
+        lower = self._start_ms + 1
+        ms = max(lower, min(int(ms), upper))
+        if ms == self._stop_ms:
+            return
+        self._stop_ms = ms
+        if not silent:
+            self.stopTimeChanged.emit(ms)
+        self.update()
+
+    def _ms_per_px(self) -> float:
+        if self.width() == 0 or self._duration == 0:
+            return 1.0
+        return self._duration / self.width()
+
+    def _x_for(self, ms: int) -> int:
+        return int(ms / self._ms_per_px())
+
+    def paintEvent(self, event):
+        painter = QPainter()
+        painter.begin(self)
+        painter.setPen(QPen(QColor(0, 0, 0, 0)))
+        painter.setBrush(QBrush(self.backgroundColor))
+        painter.drawRoundedRect(self.rect(), 6, 6)
+
+        mid = self.height() / 2
+        painter.setPen(QPen(self.lineColor))
+        painter.drawLine(QLineF(0, mid, self.width(), mid))
+
+        x_start = self._x_for(self._start_ms)
+        x_stop = self._x_for(self._stop_ms)
+        if x_stop > x_start:
+            painter.setPen(QPen(QColor(0, 0, 0, 0)))
+            painter.setBrush(QBrush(self.regionColor))
+            painter.drawRect(
+                x_start, 0, x_stop - x_start, self.height()
+            )
+
+        marker_pen = QPen(self.markerColor)
+        marker_pen.setWidth(2)
+        painter.setPen(marker_pen)
+        painter.drawLine(x_start, 0, x_start, self.height())
+        painter.drawLine(x_stop, 0, x_stop, self.height())
+
+        painter.end()

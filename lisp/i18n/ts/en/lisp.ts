@@ -124,12 +124,12 @@
   <context>
     <name>ApplicationError</name>
     <message>
-      <location filename="../../../application.py" line="156" />
+      <location filename="../../../application.py" line="165" />
       <source>Startup error</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../application.py" line="207" />
+      <location filename="../../../application.py" line="216" />
       <source>Saving your session failed due to bad data.
 The file still contains your last successful save and has not been overwritten.
 
@@ -137,12 +137,12 @@ This is likely because of corrupted data from a plugin. Try to revert recent cha
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../application.py" line="263" />
+      <location filename="../../../application.py" line="272" />
       <source>Error while reading the session file "{}"</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../application.py" line="252" />
+      <location filename="../../../application.py" line="261" />
       <source>Unable to create the cue "{}"</source>
       <translation type="unfinished" />
     </message>
@@ -260,51 +260,74 @@ This is likely because of corrupted data from a plugin. Try to revert recent cha
   <context>
     <name>CueAppearanceSettings</name>
     <message>
-      <location filename="../../../ui/settings/cue_pages/cue_appearance.py" line="85" />
+      <location filename="../../../ui/settings/cue_pages/cue_appearance.py" line="76" />
+      <source>Select an Icon</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="274" />
+      <source>Change icon</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="270" />
+      <source>Cue Name and Icon</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="272" />
+      <source>NoName</source>
+      <translation>NoName</translation>
+    </message>
+    <message>
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="277" />
+      <source>Description/Note</source>
+      <translation>Description/Note</translation>
+    </message>
+    <message>
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="279" />
+      <source>Color</source>
+      <translation>Color</translation>
+    </message>
+    <message>
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="281" />
+      <source>Set Font Size</source>
+      <translation>Set Font Size</translation>
+    </message>
+    <message>
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="284" />
       <source>The appearance depends on the layout</source>
       <translation>The appearance depends on the layout</translation>
     </message>
     <message>
       <location filename="../../../ui/settings/cue_pages/cue_appearance.py" line="97" />
       <source>Cue name</source>
-      <translation>Cue name</translation>
-    </message>
-    <message>
-      <location filename="../../../ui/settings/cue_pages/cue_appearance.py" line="99" />
-      <source>NoName</source>
-      <translation>NoName</translation>
-    </message>
-    <message>
-      <location filename="../../../ui/settings/cue_pages/cue_appearance.py" line="101" />
-      <source>Description/Note</source>
-      <translation>Description/Note</translation>
-    </message>
-    <message>
-      <location filename="../../../ui/settings/cue_pages/cue_appearance.py" line="104" />
-      <source>Set Font Size</source>
-      <translation>Set Font Size</translation>
-    </message>
-    <message>
-      <location filename="../../../ui/settings/cue_pages/cue_appearance.py" line="106" />
-      <source>Color</source>
-      <translation>Color</translation>
+      <translation type="obsolete">Cue name</translation>
     </message>
     <message>
       <location filename="../../../ui/settings/cue_pages/cue_appearance.py" line="108" />
       <source>Select background color</source>
-      <translation>Select background color</translation>
+      <translation type="obsolete">Select background color</translation>
     </message>
     <message>
       <location filename="../../../ui/settings/cue_pages/cue_appearance.py" line="111" />
       <source>Select font color</source>
-      <translation>Select font color</translation>
+      <translation type="obsolete">Select font color</translation>
     </message>
   </context>
   <context>
     <name>CueCategory</name>
     <message>
-      <location filename="../../../ui/mainwindow.py" line="270" />
+      <location filename="../../../ui/mainwindow.py" line="308" />
       <source>Misc cues</source>
+      <translation type="unfinished" />
+    </message>
+  </context>
+  <context>
+    <name>CueColorPalette</name>
+    <message>
+      <location filename="../../../ui/widgets/cue_color_palette.py" line="224" />
+      <source>No color</source>
       <translation type="unfinished" />
     </message>
   </context>
@@ -324,7 +347,7 @@ This is likely because of corrupted data from a plugin. Try to revert recent cha
   <context>
     <name>CueName</name>
     <message>
-      <location filename="../../../cues/media_cue.py" line="29" />
+      <location filename="../../../cues/media_cue.py" line="30" />
       <source>Media Cue</source>
       <translation>Media Cue</translation>
     </message>
@@ -360,6 +383,51 @@ This is likely because of corrupted data from a plugin. Try to revert recent cha
   <context>
     <name>CueSettings</name>
     <message>
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="289" />
+      <source>Default Start action</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="292" />
+      <source>Default Stop action</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="296" />
+      <source>Exclusive</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="298" />
+      <source>While playing, prevent other cues from starting</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="473" />
+      <source>Pre wait</source>
+      <translation>Pre wait</translation>
+    </message>
+    <message>
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="475" />
+      <source>Wait before cue execution</source>
+      <translation>Wait before cue execution</translation>
+    </message>
+    <message>
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="477" />
+      <source>Post wait</source>
+      <translation>Post wait</translation>
+    </message>
+    <message>
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="479" />
+      <source>Wait after cue execution</source>
+      <translation>Wait after cue execution</translation>
+    </message>
+    <message>
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="481" />
+      <source>Next action</source>
+      <translation>Next action</translation>
+    </message>
+    <message>
       <location filename="../../../ui/settings/app_pages/cue.py" line="64" />
       <source>Interrupt fade</source>
       <translation type="unfinished" />
@@ -382,47 +450,22 @@ This is likely because of corrupted data from a plugin. Try to revert recent cha
     <message>
       <location filename="../../../ui/settings/cue_pages/cue_general.py" line="114" />
       <source>Start action</source>
-      <translation>Start action</translation>
+      <translation type="obsolete">Start action</translation>
     </message>
     <message>
       <location filename="../../../ui/settings/cue_pages/cue_general.py" line="116" />
       <source>Default action to start the cue</source>
-      <translation>Default action to start the cue</translation>
+      <translation type="obsolete">Default action to start the cue</translation>
     </message>
     <message>
       <location filename="../../../ui/settings/cue_pages/cue_general.py" line="120" />
       <source>Stop action</source>
-      <translation>Stop action</translation>
+      <translation type="obsolete">Stop action</translation>
     </message>
     <message>
       <location filename="../../../ui/settings/cue_pages/cue_general.py" line="122" />
       <source>Default action to stop the cue</source>
-      <translation>Default action to stop the cue</translation>
-    </message>
-    <message>
-      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="205" />
-      <source>Pre wait</source>
-      <translation>Pre wait</translation>
-    </message>
-    <message>
-      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="207" />
-      <source>Wait before cue execution</source>
-      <translation>Wait before cue execution</translation>
-    </message>
-    <message>
-      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="210" />
-      <source>Post wait</source>
-      <translation>Post wait</translation>
-    </message>
-    <message>
-      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="212" />
-      <source>Wait after cue execution</source>
-      <translation>Wait after cue execution</translation>
-    </message>
-    <message>
-      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="215" />
-      <source>Next action</source>
-      <translation>Next action</translation>
+      <translation type="obsolete">Default action to stop the cue</translation>
     </message>
   </context>
   <context>
@@ -459,12 +502,12 @@ This is likely because of corrupted data from a plugin. Try to revert recent cha
   <context>
     <name>FadeSettings</name>
     <message>
-      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="280" />
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="294" />
       <source>Fade In</source>
       <translation>Fade In</translation>
     </message>
     <message>
-      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="281" />
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="295" />
       <source>Fade Out</source>
       <translation>Fade Out</translation>
     </message>
@@ -474,6 +517,14 @@ This is likely because of corrupted data from a plugin. Try to revert recent cha
     <message>
       <location filename="../../../ui/widgets/hotkeyedit.py" line="125" />
       <source>Press shortcut</source>
+      <translation type="unfinished" />
+    </message>
+  </context>
+  <context>
+    <name>InspectorPanel</name>
+    <message>
+      <location filename="../../../ui/inspector/panel.py" line="169" />
+      <source>No cue selected</source>
       <translation type="unfinished" />
     </message>
   </context>
@@ -541,16 +592,6 @@ This is likely because of corrupted data from a plugin. Try to revert recent cha
     <message>
       <location filename="../../../ui/logging/viewer.py" line="126" />
       <source>Showing {} of {} records</source>
-      <translation type="unfinished" />
-    </message>
-    <message>
-      <location filename="../../../ui/logging/dialog.py" line="79" />
-      <source>Dismiss all</source>
-      <translation type="unfinished" />
-    </message>
-    <message>
-      <location filename="../../../ui/logging/dialog.py" line="86" />
-      <source>Show details</source>
       <translation type="unfinished" />
     </message>
     <message>
@@ -653,154 +694,174 @@ This is likely because of corrupted data from a plugin. Try to revert recent cha
       <source>Exception info</source>
       <translation type="unfinished" />
     </message>
+    <message>
+      <location filename="../../../ui/logging/dialog.py" line="79" />
+      <source>Dismiss all</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../ui/logging/dialog.py" line="86" />
+      <source>Show details</source>
+      <translation type="unfinished" />
+    </message>
   </context>
   <context>
     <name>MainWindow</name>
     <message>
-      <location filename="../../../ui/mainwindow.py" line="191" />
+      <location filename="../../../ui/mainwindow.py" line="226" />
       <source>&amp;File</source>
       <translation>&amp;File</translation>
     </message>
     <message>
-      <location filename="../../../ui/mainwindow.py" line="192" />
+      <location filename="../../../ui/mainwindow.py" line="227" />
       <source>New session</source>
       <translation>New session</translation>
     </message>
     <message>
-      <location filename="../../../ui/mainwindow.py" line="194" />
+      <location filename="../../../ui/mainwindow.py" line="229" />
       <source>Open</source>
       <translation>Open</translation>
     </message>
     <message>
-      <location filename="../../../ui/mainwindow.py" line="196" />
+      <location filename="../../../ui/mainwindow.py" line="231" />
       <source>Save session</source>
       <translation>Save session</translation>
     </message>
     <message>
-      <location filename="../../../ui/mainwindow.py" line="198" />
+      <location filename="../../../ui/mainwindow.py" line="233" />
       <source>Preferences</source>
       <translation>Preferences</translation>
     </message>
     <message>
-      <location filename="../../../ui/mainwindow.py" line="200" />
+      <location filename="../../../ui/mainwindow.py" line="235" />
       <source>Save as</source>
       <translation>Save as</translation>
     </message>
     <message>
-      <location filename="../../../ui/mainwindow.py" line="202" />
+      <location filename="../../../ui/mainwindow.py" line="237" />
       <source>Full Screen</source>
       <translation>Full Screen</translation>
     </message>
     <message>
-      <location filename="../../../ui/mainwindow.py" line="204" />
+      <location filename="../../../ui/mainwindow.py" line="239" />
       <source>Exit</source>
       <translation>Exit</translation>
     </message>
     <message>
-      <location filename="../../../ui/mainwindow.py" line="207" />
+      <location filename="../../../ui/mainwindow.py" line="242" />
       <source>&amp;Edit</source>
       <translation>&amp;Edit</translation>
     </message>
     <message>
-      <location filename="../../../ui/mainwindow.py" line="208" />
+      <location filename="../../../ui/mainwindow.py" line="243" />
       <source>Undo</source>
       <translation>Undo</translation>
     </message>
     <message>
-      <location filename="../../../ui/mainwindow.py" line="210" />
+      <location filename="../../../ui/mainwindow.py" line="245" />
       <source>Redo</source>
       <translation>Redo</translation>
     </message>
     <message>
-      <location filename="../../../ui/mainwindow.py" line="212" />
+      <location filename="../../../ui/mainwindow.py" line="247" />
       <source>Select all</source>
       <translation>Select all</translation>
     </message>
     <message>
-      <location filename="../../../ui/mainwindow.py" line="214" />
+      <location filename="../../../ui/mainwindow.py" line="249" />
       <source>Select all media cues</source>
       <translation>Select all media cues</translation>
     </message>
     <message>
-      <location filename="../../../ui/mainwindow.py" line="217" />
+      <location filename="../../../ui/mainwindow.py" line="252" />
       <source>Deselect all</source>
       <translation>Deselect all</translation>
     </message>
     <message>
-      <location filename="../../../ui/mainwindow.py" line="218" />
+      <location filename="../../../ui/mainwindow.py" line="253" />
       <source>CTRL+SHIFT+A</source>
       <translation>CTRL+SHIFT+A</translation>
     </message>
     <message>
-      <location filename="../../../ui/mainwindow.py" line="220" />
+      <location filename="../../../ui/mainwindow.py" line="255" />
       <source>Invert selection</source>
       <translation>Invert selection</translation>
     </message>
     <message>
-      <location filename="../../../ui/mainwindow.py" line="222" />
+      <location filename="../../../ui/mainwindow.py" line="257" />
       <source>CTRL+I</source>
       <translation>CTRL+I</translation>
     </message>
     <message>
-      <location filename="../../../ui/mainwindow.py" line="223" />
-      <source>Edit selected</source>
-      <translation>Edit selected</translation>
-    </message>
-    <message>
-      <location filename="../../../ui/mainwindow.py" line="224" />
-      <source>CTRL+SHIFT+E</source>
-      <translation>CTRL+SHIFT+E</translation>
-    </message>
-    <message>
-      <location filename="../../../ui/mainwindow.py" line="226" />
+      <location filename="../../../ui/mainwindow.py" line="259" />
       <source>&amp;Layout</source>
       <translation>&amp;Layout</translation>
     </message>
     <message>
-      <location filename="../../../ui/mainwindow.py" line="228" />
+      <location filename="../../../ui/mainwindow.py" line="261" />
+      <source>&amp;View</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../ui/mainwindow.py" line="263" />
+      <source>Show Inspector</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../ui/mainwindow.py" line="267" />
       <source>&amp;Tools</source>
       <translation>&amp;Tools</translation>
     </message>
     <message>
-      <location filename="../../../ui/mainwindow.py" line="229" />
-      <source>Edit selection</source>
-      <translation>Edit selection</translation>
-    </message>
-    <message>
-      <location filename="../../../ui/mainwindow.py" line="231" />
+      <location filename="../../../ui/mainwindow.py" line="269" />
       <source>&amp;About</source>
       <translation>&amp;About</translation>
     </message>
     <message>
-      <location filename="../../../ui/mainwindow.py" line="232" />
+      <location filename="../../../ui/mainwindow.py" line="270" />
       <source>About</source>
       <translation>About</translation>
     </message>
     <message>
-      <location filename="../../../ui/mainwindow.py" line="233" />
+      <location filename="../../../ui/mainwindow.py" line="271" />
       <source>About Qt</source>
       <translation>About Qt</translation>
     </message>
     <message>
-      <location filename="../../../ui/mainwindow.py" line="402" />
+      <location filename="../../../ui/mainwindow.py" line="506" />
       <source>Close session</source>
       <translation>Close session</translation>
     </message>
     <message>
-      <location filename="../../../ui/mainwindow.py" line="403" />
+      <location filename="../../../ui/mainwindow.py" line="507" />
       <source>The current session contains changes that have not been saved.</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../ui/mainwindow.py" line="411" />
+      <location filename="../../../ui/mainwindow.py" line="515" />
       <source>Do you want to save them now?</source>
       <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../ui/mainwindow.py" line="223" />
+      <source>Edit selected</source>
+      <translation type="obsolete">Edit selected</translation>
+    </message>
+    <message>
+      <location filename="../../../ui/mainwindow.py" line="224" />
+      <source>CTRL+SHIFT+E</source>
+      <translation type="obsolete">CTRL+SHIFT+E</translation>
+    </message>
+    <message>
+      <location filename="../../../ui/mainwindow.py" line="229" />
+      <source>Edit selection</source>
+      <translation type="obsolete">Edit selection</translation>
     </message>
   </context>
   <context>
     <name>MainWindowDebug</name>
     <message>
-      <location filename="../../../ui/mainwindow.py" line="261" />
+      <location filename="../../../ui/mainwindow.py" line="299" />
       <source>Registered cue menu: "{}"</source>
       <translation type="unfinished" />
     </message>
@@ -808,7 +869,12 @@ This is likely because of corrupted data from a plugin. Try to revert recent cha
   <context>
     <name>MainWindowError</name>
     <message>
-      <location filename="../../../ui/mainwindow.py" line="346" />
+      <location filename="../../../ui/mainwindow.py" line="421" />
+      <source>Could not persist inspector visibility state</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../ui/mainwindow.py" line="452" />
       <source>Cannot create cue {}</source>
       <translation type="unfinished" />
     </message>
@@ -816,33 +882,43 @@ This is likely because of corrupted data from a plugin. Try to revert recent cha
   <context>
     <name>MediaCueSettings</name>
     <message>
-      <location filename="../../../ui/settings/cue_pages/media_cue.py" line="84" />
+      <location filename="../../../ui/settings/cue_pages/media_cue.py" line="107" />
       <source>Start time</source>
       <translation>Start time</translation>
     </message>
     <message>
-      <location filename="../../../ui/settings/cue_pages/media_cue.py" line="86" />
-      <source>Stop position of the media</source>
-      <translation>Stop position of the media</translation>
-    </message>
-    <message>
-      <location filename="../../../ui/settings/cue_pages/media_cue.py" line="88" />
-      <source>Stop time</source>
-      <translation>Stop time</translation>
-    </message>
-    <message>
-      <location filename="../../../ui/settings/cue_pages/media_cue.py" line="90" />
+      <location filename="../../../ui/settings/cue_pages/media_cue.py" line="109" />
       <source>Start position of the media</source>
       <translation>Start position of the media</translation>
     </message>
     <message>
-      <location filename="../../../ui/settings/cue_pages/media_cue.py" line="92" />
+      <location filename="../../../ui/settings/cue_pages/media_cue.py" line="111" />
+      <source>Stop time</source>
+      <translation>Stop time</translation>
+    </message>
+    <message>
+      <location filename="../../../ui/settings/cue_pages/media_cue.py" line="113" />
+      <source>Stop position of the media</source>
+      <translation>Stop position of the media</translation>
+    </message>
+    <message>
+      <location filename="../../../ui/settings/cue_pages/media_cue.py" line="115" />
       <source>Loop</source>
       <translation>Loop</translation>
     </message>
     <message>
-      <location filename="../../../ui/settings/cue_pages/media_cue.py" line="94" />
+      <location filename="../../../ui/settings/cue_pages/media_cue.py" line="117" />
       <source>Repetition after first play (-1 = infinite)</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../ui/settings/cue_pages/media_cue.py" line="201" />
+      <source>Trimming does not apply to image cues.</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../ui/settings/cue_pages/media_cue.py" line="144" />
+      <source>Select a single cue</source>
       <translation type="unfinished" />
     </message>
   </context>
@@ -862,13 +938,8 @@ This is likely because of corrupted data from a plugin. Try to revert recent cha
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../core/plugins_manager.py" line="78" />
+      <location filename="../../../core/plugins_manager.py" line="79" />
       <source>A plugin by the name of "{}" already exists.</source>
-      <translation type="unfinished" />
-    </message>
-    <message>
-      <location filename="../../../core/plugins_manager.py" line="131" />
-      <source>The requested plugin is not loaded: "{}"</source>
       <translation type="unfinished" />
     </message>
     <message>
@@ -877,7 +948,12 @@ This is likely because of corrupted data from a plugin. Try to revert recent cha
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../core/plugins_manager.py" line="151" />
+      <location filename="../../../core/plugins_manager.py" line="134" />
+      <source>The requested plugin is not loaded: "{}"</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../core/plugins_manager.py" line="153" />
       <source>Failed to terminate plugin: "{}"</source>
       <translation type="unfinished" />
     </message>
@@ -890,7 +966,7 @@ This is likely because of corrupted data from a plugin. Try to revert recent cha
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../core/plugins_manager.py" line="145" />
+      <location filename="../../../core/plugins_manager.py" line="148" />
       <source>Plugin terminated: "{}"</source>
       <translation type="unfinished" />
     </message>
@@ -941,25 +1017,30 @@ This is likely because of corrupted data from a plugin. Try to revert recent cha
     <message>
       <location filename="../../../ui/widgets/colorbutton.py" line="38" />
       <source>Right click to reset</source>
-      <translation>Right click to reset</translation>
+      <translation type="obsolete">Right click to reset</translation>
     </message>
   </context>
   <context>
     <name>SettingsPageName</name>
     <message>
-      <location filename="../../../ui/settings/app_pages/cue.py" line="27" />
-      <source>Cue Settings</source>
-      <translation>Cue Settings</translation>
-    </message>
-    <message>
-      <location filename="../../../ui/settings/app_pages/layouts.py" line="26" />
-      <source>Layouts</source>
-      <translation type="unfinished" />
-    </message>
-    <message>
       <location filename="../../../ui/settings/app_pages/general.py" line="38" />
       <source>General</source>
       <translation>General</translation>
+    </message>
+    <message>
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="420" />
+      <source>Timing</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../ui/settings/cue_pages/media_cue.py" line="40" />
+      <source>Media Cue</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../ui/settings/app_pages/cue.py" line="27" />
+      <source>Cue Settings</source>
+      <translation>Cue Settings</translation>
     </message>
     <message>
       <location filename="../../../ui/settings/app_pages/plugins.py" line="36" />
@@ -967,34 +1048,34 @@ This is likely because of corrupted data from a plugin. Try to revert recent cha
       <translation type="unfinished" />
     </message>
     <message>
+      <location filename="../../../ui/settings/app_pages/layouts.py" line="26" />
+      <source>Layouts</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
       <location filename="../../../ui/settings/cue_pages/cue_general.py" line="44" />
       <source>Cue</source>
-      <translation>Cue</translation>
+      <translation type="obsolete">Cue</translation>
     </message>
     <message>
       <location filename="../../../ui/settings/cue_pages/cue_general.py" line="54" />
       <source>Behaviours</source>
-      <translation>Behaviours</translation>
+      <translation type="obsolete">Behaviours</translation>
     </message>
     <message>
       <location filename="../../../ui/settings/cue_pages/cue_general.py" line="157" />
       <source>Pre/Post Wait</source>
-      <translation>Pre/Post Wait</translation>
+      <translation type="obsolete">Pre/Post Wait</translation>
     </message>
     <message>
       <location filename="../../../ui/settings/cue_pages/cue_general.py" line="245" />
       <source>Fade In/Out</source>
-      <translation>Fade In/Out</translation>
+      <translation type="obsolete">Fade In/Out</translation>
     </message>
     <message>
       <location filename="../../../ui/settings/cue_pages/cue_appearance.py" line="36" />
       <source>Appearance</source>
-      <translation>Appearance</translation>
-    </message>
-    <message>
-      <location filename="../../../ui/settings/cue_pages/media_cue.py" line="34" />
-      <source>Media Cue</source>
-      <translation type="unfinished" />
+      <translation type="obsolete">Appearance</translation>
     </message>
   </context>
 </TS>

@@ -23,10 +23,15 @@ It's the playback-panel analogue to the list view's row tint — same
 source (``cue.stylesheet``), same palette, smaller footprint.
 """
 
+from unittest.mock import MagicMock
+
 import pytest
 
 from lisp.cues.cue import Cue
-from lisp.plugins.list_layout.playing_widgets import RunningCueWidget
+from lisp.plugins.list_layout.playing_widgets import (
+    RunningCueWidget,
+    RunningMediaCueWidget,
+)
 from lisp.ui.icons import IconTheme
 
 
@@ -208,3 +213,157 @@ class TestRunningCueWidgetColorStripe:
         assert "QWidget" not in stripe_css, (
             f"foreign selector leaked through: {stripe_css!r}"
         )
+
+
+class _FakeMedia:
+    """Bare-minimum media stub for trim-aware countdown tests.
+
+    We only care about the three trim-relevant properties the widget
+    reads in ``_update_timers``; the rest of the Media interface is
+    irrelevant here.
+    """
+
+    def __init__(self, duration=0, start_time=0, stop_time=0):
+        self.duration = duration
+        self.start_time = start_time
+        self.stop_time = stop_time
+
+
+class _FakeMediaCue:
+    """Cue stub that mirrors ``MediaCue`` attributes consumed by the
+    timer-update path. Full ``MediaCue`` construction requires a live
+    GStreamer pipeline and signal graph that would drown out the unit
+    under test."""
+
+    def __init__(self, duration=0, start_time=0, stop_time=0):
+        self.media = _FakeMedia(
+            duration=duration,
+            start_time=start_time,
+            stop_time=stop_time,
+        )
+        self.duration = duration
+
+
+def _bare_media_widget(cue):
+    """Instantiate ``RunningMediaCueWidget`` without running the Qt
+    constructor — it requires a gstreamer backend, control icons, and
+    cue signals we don't care about here. ``__new__`` bypasses that,
+    and we wire just the attributes the method under test touches.
+    """
+    widget = RunningMediaCueWidget.__new__(RunningMediaCueWidget)
+    widget.cue = cue
+    widget.timeDisplay = MagicMock()
+    widget.seekSlider = MagicMock()
+    widget._accurate_time = False
+    return widget
+
+
+class TestRunningMediaCueWidgetTrimmedCountdown:
+    """The countdown shown in the playback panel must respect the
+    cue's trim (``media.start_time`` / ``media.stop_time``) — the raw
+    media file length is irrelevant once the operator has trimmed the
+    clip from the inspector. Regression test for a bug where a cue
+    with ``stop_time`` set would freeze mid-countdown rather than
+    reach 00:00."""
+
+    def test_countdown_at_trim_start_shows_full_trimmed_duration(self):
+        """Trim 30s–150s of a 180s file: when the pipeline first
+        emits ``time == start_time``, the display should show the
+        full trimmed length (120s), not the raw file length."""
+        cue = _FakeMediaCue(
+            duration=180000, start_time=30000, stop_time=150000
+        )
+        widget = _bare_media_widget(cue)
+
+        widget._update_timers(30000)
+
+        widget.timeDisplay.display.assert_called_with("02:00.00")
+
+    def test_countdown_reaches_zero_at_trim_stop(self):
+        """When the pipeline hits ``stop_time``, countdown is zero.
+        Previously the widget would show ``duration - stop_time``
+        (the remaining untrimmed tail) and freeze there on EOS."""
+        cue = _FakeMediaCue(
+            duration=180000, start_time=30000, stop_time=150000
+        )
+        widget = _bare_media_widget(cue)
+
+        widget._update_timers(150000)
+
+        widget.timeDisplay.display.assert_called_with("00:00.00")
+
+    def test_countdown_mid_trim_is_proportional_to_stop_time(self):
+        """Half-way through the trimmed range (90s absolute, 60s
+        trim-elapsed) must show 60s remaining."""
+        cue = _FakeMediaCue(
+            duration=180000, start_time=30000, stop_time=150000
+        )
+        widget = _bare_media_widget(cue)
+
+        widget._update_timers(90000)
+
+        widget.timeDisplay.display.assert_called_with("01:00.00")
+
+    def test_countdown_without_stop_time_uses_duration(self):
+        """A cue trimmed only at the start (stop_time==0 sentinel)
+        counts down from ``duration - start_time``."""
+        cue = _FakeMediaCue(
+            duration=180000, start_time=30000, stop_time=0
+        )
+        widget = _bare_media_widget(cue)
+
+        widget._update_timers(30000)
+
+        widget.timeDisplay.display.assert_called_with("02:30.00")
+
+    def test_countdown_untrimmed_cue_unchanged(self):
+        """No trim (both sentinels 0) preserves the legacy
+        ``duration - time`` behaviour so existing cues stay pixel-
+        identical."""
+        cue = _FakeMediaCue(
+            duration=180000, start_time=0, stop_time=0
+        )
+        widget = _bare_media_widget(cue)
+
+        widget._update_timers(60000)
+
+        widget.timeDisplay.display.assert_called_with("02:00.00")
+
+    def test_countdown_clamps_negative_to_zero(self):
+        """Defensive clamp — if the pipeline emits a stale ``time``
+        beyond ``stop_time`` before CueTime.stop takes effect, the
+        countdown must not render a negative value."""
+        cue = _FakeMediaCue(
+            duration=180000, start_time=30000, stop_time=150000
+        )
+        widget = _bare_media_widget(cue)
+
+        widget._update_timers(155000)
+
+        widget.timeDisplay.display.assert_called_with("00:00.00")
+
+    def test_indefinite_media_still_shows_elapsed(self):
+        """Zero-duration (indefinite) media cues should keep showing
+        elapsed time, not attempt a trim calculation that has no
+        meaningful endpoint."""
+        cue = _FakeMediaCue(
+            duration=0, start_time=0, stop_time=0
+        )
+        widget = _bare_media_widget(cue)
+
+        widget._update_timers(45000)
+
+        widget.timeDisplay.display.assert_called_with("00:45.00")
+
+    def test_seek_slider_always_gets_raw_time(self):
+        """The seek slider is positioned against the raw file, so it
+        continues to receive the untransformed ``time`` regardless
+        of trim — only the countdown display is trim-adjusted."""
+        cue = _FakeMediaCue(
+            duration=180000, start_time=30000, stop_time=150000
+        )
+        widget = _bare_media_widget(cue)
+
+        widget._update_timers(90000)
+
+        widget.seekSlider.setValue.assert_called_with(90000)

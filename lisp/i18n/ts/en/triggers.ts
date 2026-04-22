@@ -27,7 +27,7 @@
   <context>
     <name>SettingsPageName</name>
     <message>
-      <location filename="../../../plugins/triggers/triggers_settings.py" line="86" />
+      <location filename="../../../plugins/triggers/triggers_settings.py" line="87" />
       <source>Triggers</source>
       <translation>Triggers</translation>
     </message>
@@ -35,27 +35,27 @@
   <context>
     <name>TriggersSettings</name>
     <message>
-      <location filename="../../../plugins/triggers/triggers_settings.py" line="87" />
+      <location filename="../../../plugins/triggers/triggers_settings.py" line="88" />
       <source>Add</source>
       <translation>Add</translation>
     </message>
     <message>
-      <location filename="../../../plugins/triggers/triggers_settings.py" line="88" />
+      <location filename="../../../plugins/triggers/triggers_settings.py" line="89" />
       <source>Remove</source>
       <translation>Remove</translation>
     </message>
     <message>
-      <location filename="../../../plugins/triggers/triggers_settings.py" line="173" />
+      <location filename="../../../plugins/triggers/triggers_settings.py" line="181" />
       <source>Trigger</source>
       <translation>Trigger</translation>
     </message>
     <message>
-      <location filename="../../../plugins/triggers/triggers_settings.py" line="174" />
+      <location filename="../../../plugins/triggers/triggers_settings.py" line="182" />
       <source>Cue</source>
       <translation>Cue</translation>
     </message>
     <message>
-      <location filename="../../../plugins/triggers/triggers_settings.py" line="175" />
+      <location filename="../../../plugins/triggers/triggers_settings.py" line="183" />
       <source>Action</source>
       <translation>Action</translation>
     </message>

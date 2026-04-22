@@ -208,14 +208,14 @@
   <context>
     <name>SettingsPageName</name>
     <message>
-      <location filename="../../../plugins/midi/midi_cue.py" line="66" />
-      <source>MIDI Settings</source>
-      <translation type="unfinished" />
-    </message>
-    <message>
       <location filename="../../../plugins/midi/midi_settings.py" line="37" />
       <source>MIDI settings</source>
       <translation>MIDI settings</translation>
+    </message>
+    <message>
+      <location filename="../../../plugins/midi/midi_cue.py" line="67" />
+      <source>MIDI Settings</source>
+      <translation type="unfinished" />
     </message>
   </context>
 </TS>

@@ -337,5 +337,24 @@ class RunningMediaCueWidget(RunningCueWidget):
         self.seekSlider.setMaximum(max(0, duration))
 
     def _update_timers(self, time):
-        super()._update_timers(time)
+        # Trim-aware countdown: media.current_time() reports the raw
+        # pipeline position (absolute from file start), so the base
+        # class' "duration - time" formula misreads any clip the
+        # operator has trimmed via the inspector — a 180s file cut
+        # to 30s–150s would freeze at 30s remaining when the pipeline
+        # hit its stop_time. We key the countdown off the trimmed
+        # endpoint instead (stop_time when set, otherwise duration),
+        # and anchor elapsed time to start_time so an indefinite or
+        # start-trimmed cue still reads zero at the trim's beginning.
+        media = self.cue.media
+        effective_end = (
+            media.stop_time if media.stop_time > 0 else self.cue.duration
+        )
+        if effective_end > 0:
+            display_time = max(0, effective_end - time)
+        else:
+            display_time = max(0, time - media.start_time)
+        self.timeDisplay.display(
+            strtime(display_time, accurate=self._accurate_time)
+        )
         self.seekSlider.setValue(time)

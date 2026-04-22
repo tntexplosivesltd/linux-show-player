@@ -4,33 +4,93 @@
   <context>
     <name>CartLayout</name>
     <message>
-      <location filename="../../../plugins/cart_layout/settings.py" line="82" />
-      <source>Default behaviors (applied to new sessions)</source>
+      <location filename="../../../plugins/cart_layout/layout.py" line="176" />
+      <source>Reset volume</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/cart_layout/layout.py" line="190" />
+      <location filename="../../../plugins/cart_layout/layout.py" line="186" />
+      <source>Add page</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../plugins/cart_layout/layout.py" line="241" />
+      <source>Add pages</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../plugins/cart_layout/layout.py" line="189" />
+      <source>Remove current page</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../plugins/cart_layout/settings.py" line="86" />
       <source>Countdown mode</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/cart_layout/layout.py" line="192" />
+      <location filename="../../../plugins/cart_layout/settings.py" line="87" />
       <source>Show seek-bars</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/cart_layout/layout.py" line="194" />
+      <location filename="../../../plugins/cart_layout/settings.py" line="88" />
       <source>Show dB-meters</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/cart_layout/layout.py" line="198" />
+      <location filename="../../../plugins/cart_layout/settings.py" line="90" />
+      <source>Show volume</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../plugins/cart_layout/settings.py" line="89" />
       <source>Show accurate time</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/cart_layout/layout.py" line="196" />
-      <source>Show volume</source>
+      <location filename="../../../plugins/cart_layout/layout.py" line="242" />
+      <source>Number of Pages:</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../plugins/cart_layout/layout.py" line="260" />
+      <source>Page {number}</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../plugins/cart_layout/layout.py" line="492" />
+      <source>Warning</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../plugins/cart_layout/layout.py" line="494" />
+      <source>Every cue in the page will be lost.</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../plugins/cart_layout/layout.py" line="497" />
+      <source>Are you sure to continue?</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../plugins/cart_layout/layout.py" line="164" />
+      <source>Play</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../plugins/cart_layout/layout.py" line="167" />
+      <source>Pause</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../plugins/cart_layout/layout.py" line="170" />
+      <source>Stop</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../plugins/cart_layout/settings.py" line="82" />
+      <source>Default behaviors (applied to new sessions)</source>
       <translation type="unfinished" />
     </message>
     <message>
@@ -46,66 +106,6 @@
     <message>
       <location filename="../../../plugins/cart_layout/settings.py" line="93" />
       <source>Number of rows:</source>
-      <translation type="unfinished" />
-    </message>
-    <message>
-      <location filename="../../../plugins/cart_layout/layout.py" line="174" />
-      <source>Reset volume</source>
-      <translation type="unfinished" />
-    </message>
-    <message>
-      <location filename="../../../plugins/cart_layout/layout.py" line="184" />
-      <source>Add page</source>
-      <translation type="unfinished" />
-    </message>
-    <message>
-      <location filename="../../../plugins/cart_layout/layout.py" line="239" />
-      <source>Add pages</source>
-      <translation type="unfinished" />
-    </message>
-    <message>
-      <location filename="../../../plugins/cart_layout/layout.py" line="187" />
-      <source>Remove current page</source>
-      <translation type="unfinished" />
-    </message>
-    <message>
-      <location filename="../../../plugins/cart_layout/layout.py" line="240" />
-      <source>Number of Pages:</source>
-      <translation type="unfinished" />
-    </message>
-    <message>
-      <location filename="../../../plugins/cart_layout/layout.py" line="258" />
-      <source>Page {number}</source>
-      <translation type="unfinished" />
-    </message>
-    <message>
-      <location filename="../../../plugins/cart_layout/layout.py" line="491" />
-      <source>Warning</source>
-      <translation type="unfinished" />
-    </message>
-    <message>
-      <location filename="../../../plugins/cart_layout/layout.py" line="493" />
-      <source>Every cue in the page will be lost.</source>
-      <translation type="unfinished" />
-    </message>
-    <message>
-      <location filename="../../../plugins/cart_layout/layout.py" line="496" />
-      <source>Are you sure to continue?</source>
-      <translation type="unfinished" />
-    </message>
-    <message>
-      <location filename="../../../plugins/cart_layout/layout.py" line="162" />
-      <source>Play</source>
-      <translation type="unfinished" />
-    </message>
-    <message>
-      <location filename="../../../plugins/cart_layout/layout.py" line="165" />
-      <source>Pause</source>
-      <translation type="unfinished" />
-    </message>
-    <message>
-      <location filename="../../../plugins/cart_layout/layout.py" line="168" />
-      <source>Stop</source>
       <translation type="unfinished" />
     </message>
   </context>
@@ -156,24 +156,24 @@
   <context>
     <name>ListLayout</name>
     <message>
-      <location filename="../../../plugins/cart_layout/layout.py" line="143" />
-      <source>Edit cue</source>
-      <translation type="unfinished" />
-    </message>
-    <message>
-      <location filename="../../../plugins/cart_layout/layout.py" line="145" />
-      <source>Edit selected cues</source>
-      <translation type="unfinished" />
-    </message>
-    <message>
-      <location filename="../../../plugins/cart_layout/layout.py" line="149" />
+      <location filename="../../../plugins/cart_layout/layout.py" line="151" />
       <source>Remove cue</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/cart_layout/layout.py" line="151" />
+      <location filename="../../../plugins/cart_layout/layout.py" line="153" />
       <source>Remove selected cues</source>
       <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../plugins/cart_layout/layout.py" line="143" />
+      <source>Edit cue</source>
+      <translation type="obsolete" />
+    </message>
+    <message>
+      <location filename="../../../plugins/cart_layout/layout.py" line="145" />
+      <source>Edit selected cues</source>
+      <translation type="obsolete" />
     </message>
   </context>
   <context>
