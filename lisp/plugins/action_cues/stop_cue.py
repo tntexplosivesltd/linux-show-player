@@ -51,3 +51,16 @@ class StopCue(Cue):
         # In-flight ParallelFadeRunner, if any. Set by __start__, cleared
         # on completion/abort. Used by __stop__ to cancel the fade.
         self._runner = None
+
+    def __start__(self, fade=False):
+        target = self.app.cue_model.get(self.target_id)
+        if target is None:
+            logger.warning(
+                "StopCue: target cue %r not found", self.target_id
+            )
+            self._error()
+            return False
+
+        # Affected-set assembly, fader collection, and fade-then-action
+        # are added in subsequent tasks.
+        return False
