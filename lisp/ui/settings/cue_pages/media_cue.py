@@ -130,20 +130,33 @@ class MediaCueSettings(SettingsPage):
         self.setGroupEnabled(self.loopGroup, enabled)
 
     def loadSettings(self, settings):
-        settings = settings.get("media", {})
+        media = settings.get("media", {})
 
-        if "loop" in settings:
-            self.spinLoop.setValue(settings["loop"])
-        if "start_time" in settings:
-            time = self._to_qtime(settings["start_time"])
-            self.startEdit.setTime(time)
-        if "stop_time" in settings:
-            time = self._to_qtime(settings["stop_time"])
-            self.stopEdit.setTime(time)
+        if "loop" in media:
+            self.spinLoop.setValue(media["loop"])
 
-        time = self._to_qtime(settings.get("duration", 0))
+        duration = media.get("duration", 0)
+        time = self._to_qtime(duration)
         self.startEdit.setMaximumTime(time)
         self.stopEdit.setMaximumTime(time)
+
+        if "start_time" in media:
+            self.startEdit.setTime(self._to_qtime(media["start_time"]))
+
+        if "stop_time" in media:
+            stop_display = self._display_stop(media["stop_time"], duration)
+            self.stopEdit.setTime(self._to_qtime(stop_display))
+
+    @staticmethod
+    def _display_stop(stored_ms: int, duration_ms: int) -> int:
+        # Backend treats stop_time == 0 as "play to natural end". Showing
+        # a literal 0:00:00 is opaque; map to duration for display. Save
+        # is verbatim — persisting duration is equivalent to persisting 0
+        # (both fall through the 0 < stop_time < duration guard in
+        # gst_media.py).
+        if stored_ms == 0 and duration_ms > 0:
+            return duration_ms
+        return stored_ms
 
     def _to_qtime(self, m_seconds):
         return QTime.fromMSecsSinceStartOfDay(m_seconds)

@@ -75,3 +75,51 @@ class TestMediaCueSettingsLayout:
         grid = page.layout()
         assert grid.columnStretch(0) == 1
         assert grid.columnStretch(1) == 3
+
+
+class TestStopTimeSentinelMapping:
+    def test_zero_stop_time_displays_as_duration(self, qtbot):
+        """stop_time == 0 with a known duration displays as duration."""
+        page = MediaCueSettings()
+        qtbot.addWidget(page)
+        page.loadSettings(
+            {"media": {"stop_time": 0, "duration": 180_000, "start_time": 0}}
+        )
+
+        assert page.stopEdit.time() == QTime.fromMSecsSinceStartOfDay(180_000)
+
+    def test_nonzero_stop_time_displays_verbatim(self, qtbot):
+        page = MediaCueSettings()
+        qtbot.addWidget(page)
+        page.loadSettings(
+            {
+                "media": {
+                    "stop_time": 60_000,
+                    "duration": 180_000,
+                    "start_time": 0,
+                }
+            }
+        )
+
+        assert page.stopEdit.time() == QTime.fromMSecsSinceStartOfDay(60_000)
+
+    def test_get_settings_returns_typed_value_verbatim(self, qtbot):
+        """No sentinel translation on save — what the user sees is what persists."""
+        page = MediaCueSettings()
+        qtbot.addWidget(page)
+        page.loadSettings(
+            {"media": {"stop_time": 0, "duration": 180_000, "start_time": 0}}
+        )
+
+        settings = page.getSettings()
+        assert settings["media"]["stop_time"] == 180_000
+
+    def test_zero_duration_leaves_zero(self, qtbot):
+        """When duration is unknown, the 0 sentinel can't be translated."""
+        page = MediaCueSettings()
+        qtbot.addWidget(page)
+        page.loadSettings(
+            {"media": {"stop_time": 0, "duration": 0, "start_time": 0}}
+        )
+
+        assert page.stopEdit.time() == QTime.fromMSecsSinceStartOfDay(0)
