@@ -276,6 +276,7 @@ class TrimmableWaveformWidget(WaveformWidget):
         self._start_ms = 0
         self._stop_ms = self._waveform.duration
         self._active_marker = None
+        self.setMouseTracking(True)
 
     def _ready(self):
         super()._ready()
@@ -312,3 +313,40 @@ class TrimmableWaveformWidget(WaveformWidget):
         if not silent:
             self.stopTimeChanged.emit(ms)
         self.update()
+
+    _HIT_THRESHOLD_PX = 8
+
+    def _ms_per_px(self) -> float:
+        return self._valueToPx or 1.0
+
+    def _x_for(self, ms: int) -> int:
+        return int(ms / self._ms_per_px())
+
+    def _ms_for(self, x: int) -> int:
+        return int(round(x * self._ms_per_px()))
+
+    def mousePressEvent(self, event):
+        if event.button() != Qt.LeftButton:
+            return
+        x = event.x()
+        dist_start = abs(x - self._x_for(self._start_ms))
+        dist_stop = abs(x - self._x_for(self._stop_ms))
+        if dist_start <= dist_stop:
+            self._active_marker = "start"
+        else:
+            self._active_marker = "stop"
+
+    def mouseMoveEvent(self, event):
+        if self._active_marker is None:
+            return
+        ms = self._ms_for(event.x())
+        if self._active_marker == "start":
+            self.setStartTime(ms)
+        else:
+            self.setStopTime(ms)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() != Qt.LeftButton or self._active_marker is None:
+            return
+        self._active_marker = None
+        self.trimReleased.emit()

@@ -156,3 +156,86 @@ class TestTrimmableWaveformWidgetSetters:
         assert emitted == []
         assert widget.startTime() == 1_000
         assert widget.stopTime() == 9_000
+
+
+def _send_mouse(widget, kind, x, y, buttons=Qt.NoButton):
+    """Synchronously deliver a mouse event bypassing QTest.mouseMove flakiness."""
+    from PyQt5.QtCore import QEvent, QPoint
+    from PyQt5.QtGui import QMouseEvent
+    from PyQt5.QtWidgets import QApplication
+
+    event_type = {
+        "press": QEvent.MouseButtonPress,
+        "move": QEvent.MouseMove,
+        "release": QEvent.MouseButtonRelease,
+    }[kind]
+    button = Qt.LeftButton if kind != "move" else Qt.NoButton
+    QApplication.sendEvent(
+        widget,
+        QMouseEvent(event_type, QPoint(x, y), button, buttons, Qt.NoModifier),
+    )
+
+
+class TestTrimmableWaveformWidgetMouse:
+    def test_press_near_start_grabs_start_marker(self, qtbot):
+        from lisp.ui.widgets.waveform import TrimmableWaveformWidget
+
+        waveform = _FakeWaveform(duration_ms=10_000)
+        widget = TrimmableWaveformWidget(waveform)
+        qtbot.addWidget(widget)
+        widget.resize(400, 120)
+        widget.show()
+        qtbot.waitExposed(widget)
+        widget.setStartTime(2_000, silent=True)
+        widget.setStopTime(8_000, silent=True)
+
+        # 2000ms at 400px / 10000ms = x=80
+        _send_mouse(widget, "press", 82, 60)
+        _send_mouse(widget, "move", 200, 60, buttons=Qt.LeftButton)
+
+        # At 200px the time is ~5000ms — start should follow.
+        assert 4_500 <= widget.startTime() <= 5_500
+        _send_mouse(widget, "release", 200, 60)
+
+    def test_press_near_stop_grabs_stop_marker(self, qtbot):
+        from lisp.ui.widgets.waveform import TrimmableWaveformWidget
+
+        waveform = _FakeWaveform(duration_ms=10_000)
+        widget = TrimmableWaveformWidget(waveform)
+        qtbot.addWidget(widget)
+        widget.resize(400, 120)
+        widget.show()
+        qtbot.waitExposed(widget)
+        widget.setStartTime(2_000, silent=True)
+        widget.setStopTime(8_000, silent=True)
+
+        # 8000ms at 400px / 10000ms = x=320
+        _send_mouse(widget, "press", 318, 60)
+        _send_mouse(widget, "move", 240, 60, buttons=Qt.LeftButton)
+
+        # At 240px the time is ~6000ms — stop should follow.
+        assert 5_500 <= widget.stopTime() <= 6_500
+        _send_mouse(widget, "release", 240, 60)
+
+    def test_release_emits_trim_released_once(self, qtbot):
+        from lisp.ui.widgets.waveform import TrimmableWaveformWidget
+
+        waveform = _FakeWaveform(duration_ms=10_000)
+        widget = TrimmableWaveformWidget(waveform)
+        qtbot.addWidget(widget)
+        widget.resize(400, 120)
+        widget.show()
+        qtbot.waitExposed(widget)
+        widget.setStartTime(2_000, silent=True)
+
+        releases = []
+        widget.trimReleased.connect(lambda: releases.append(True))
+
+        _send_mouse(widget, "press", 82, 60)
+        _send_mouse(widget, "move", 120, 60, buttons=Qt.LeftButton)
+        _send_mouse(widget, "move", 160, 60, buttons=Qt.LeftButton)
+        assert releases == []  # no emissions during move
+
+        _send_mouse(widget, "release", 160, 60)
+        qtbot.wait(10)
+        assert len(releases) == 1
