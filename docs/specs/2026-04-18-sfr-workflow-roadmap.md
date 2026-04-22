@@ -3,7 +3,7 @@
 Tracker for the three-part delivery of SCS-style SFR functionality in LiSP.
 Each part gets its own brainstorming → spec → plan → implementation cycle.
 
-## Part 1 — Fade & Stop cue — **in progress**
+## Part 1 — Fade & Stop cue — **complete**
 
 Spec: [`2026-04-18-fade-and-stop-cue-design.md`](2026-04-18-fade-and-stop-cue-design.md)
 
@@ -13,12 +13,18 @@ Group targets fan out via the existing `GroupCue` cascade.
 
 - [x] Brainstorm design
 - [x] Write spec
-- [ ] Write implementation plan
-- [ ] Implement `StopCue` + `StopCueSettings`
-- [ ] Unit tests
-- [ ] E2E test via `test_harness`
-- [ ] QA review (`voltagent-qa-sec:qa-expert`)
-- [ ] Code review (`voltagent-qa-sec:code-reviewer`)
+- [x] Write implementation plan
+- [x] Implement `StopCue` + `StopCueSettings`
+- [x] Unit tests
+- [x] E2E test via `test_harness`
+- [x] QA review (`voltagent-qa-sec:qa-expert`)
+- [x] Code review (`voltagent-qa-sec:code-reviewer`)
+
+Delivered on branch `feat/stop-cue`. Coordinator module
+`lisp/plugins/action_cues/_fader_coordinator.py` landed as shared
+infrastructure for Part 2. Two `&`-escape fixes in `mainwindow.py`,
+`inspector/panel.py`, and `settings/pages.py` were centralised into
+`ui_utils.escape_mnemonic`.
 
 ## Part 2 — Fade & Resume cue — **in progress**
 

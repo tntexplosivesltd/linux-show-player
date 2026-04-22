@@ -64,7 +64,7 @@ from lisp.ui.settings.cue_settings import (
     cue_page_sort_key,
 )
 from lisp.ui.settings.pages import CuePageMixin
-from lisp.ui.ui_utils import translate
+from lisp.ui.ui_utils import escape_mnemonic, translate
 from lisp.ui.widgets.cue_color_palette import CueColorPalette
 
 
@@ -391,7 +391,10 @@ class InspectorPanel(QWidget):
             # enableCheck(True).
             widget.enableCheck(len(cues) > 1)
             self._tabs.addTab(
-                widget, translate("SettingsPageName", page_cls.Name)
+                widget,
+                escape_mnemonic(
+                    translate("SettingsPageName", page_cls.Name)
+                ),
             )
 
     def _clear_tabs(self) -> None:
