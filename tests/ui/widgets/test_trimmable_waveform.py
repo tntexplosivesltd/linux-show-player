@@ -92,3 +92,67 @@ class TestTrimmableWaveformWidgetDefaults:
         qtbot.wait(10)
 
         assert widget.stopTime() == 8_000
+
+
+class TestTrimmableWaveformWidgetSetters:
+    def test_set_start_clamps_to_valid_range(self, qtbot):
+        from lisp.ui.widgets.waveform import TrimmableWaveformWidget
+        waveform = _FakeWaveform(duration_ms=10_000)
+        widget = TrimmableWaveformWidget(waveform)
+        qtbot.addWidget(widget)
+
+        widget.setStartTime(-500)
+        assert widget.startTime() == 0
+
+        widget.setStartTime(20_000)
+        assert widget.startTime() == widget.stopTime() - 1
+
+    def test_set_stop_clamps_to_valid_range(self, qtbot):
+        from lisp.ui.widgets.waveform import TrimmableWaveformWidget
+        waveform = _FakeWaveform(duration_ms=10_000)
+        widget = TrimmableWaveformWidget(waveform)
+        qtbot.addWidget(widget)
+
+        widget.setStartTime(3_000)
+        widget.setStopTime(1_000)
+        assert widget.stopTime() == widget.startTime() + 1
+
+        widget.setStopTime(999_999)
+        assert widget.stopTime() == 10_000
+
+    def test_set_start_emits_signal(self, qtbot):
+        from lisp.ui.widgets.waveform import TrimmableWaveformWidget
+        waveform = _FakeWaveform(duration_ms=10_000)
+        widget = TrimmableWaveformWidget(waveform)
+        qtbot.addWidget(widget)
+
+        with qtbot.waitSignal(widget.startTimeChanged, timeout=100) as blocker:
+            widget.setStartTime(2_500)
+        assert blocker.args == [2_500]
+
+    def test_set_stop_emits_signal(self, qtbot):
+        from lisp.ui.widgets.waveform import TrimmableWaveformWidget
+        waveform = _FakeWaveform(duration_ms=10_000)
+        widget = TrimmableWaveformWidget(waveform)
+        qtbot.addWidget(widget)
+
+        with qtbot.waitSignal(widget.stopTimeChanged, timeout=100) as blocker:
+            widget.setStopTime(7_500)
+        assert blocker.args == [7_500]
+
+    def test_silent_setters_suppress_emission(self, qtbot):
+        from lisp.ui.widgets.waveform import TrimmableWaveformWidget
+        waveform = _FakeWaveform(duration_ms=10_000)
+        widget = TrimmableWaveformWidget(waveform)
+        qtbot.addWidget(widget)
+
+        emitted = []
+        widget.startTimeChanged.connect(lambda v: emitted.append(v))
+        widget.stopTimeChanged.connect(lambda v: emitted.append(v))
+
+        widget.setStartTime(1_000, silent=True)
+        widget.setStopTime(9_000, silent=True)
+
+        assert emitted == []
+        assert widget.startTime() == 1_000
+        assert widget.stopTime() == 9_000

@@ -291,3 +291,24 @@ class TrimmableWaveformWidget(WaveformWidget):
 
     def stopTime(self) -> int:
         return self._stop_ms
+
+    def setStartTime(self, ms: int, silent: bool = False) -> None:
+        upper = self._stop_ms - 1 if self._stop_ms > 0 else 0
+        ms = max(0, min(int(ms), upper))
+        if ms == self._start_ms:
+            return
+        self._start_ms = ms
+        if not silent:
+            self.startTimeChanged.emit(ms)
+        self.update()
+
+    def setStopTime(self, ms: int, silent: bool = False) -> None:
+        upper = self._waveform.duration
+        lower = self._start_ms + 1
+        ms = max(lower, min(int(ms), upper))
+        if ms == self._stop_ms:
+            return
+        self._stop_ms = ms
+        if not silent:
+            self.stopTimeChanged.emit(ms)
+        self.update()
