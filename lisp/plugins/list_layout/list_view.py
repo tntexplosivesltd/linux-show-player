@@ -386,7 +386,7 @@ class CueListView(QTreeWidget):
                     break
             self.insertTopLevelItem(pos, item)
 
-        self.__setupItemWidgets(item)
+        self.__setupItemWidgetsRecursive(item)
         self.__updateItemStyle(item)
 
     def __cueAdded(self, cue):
@@ -510,7 +510,7 @@ class CueListView(QTreeWidget):
                     break
             self.insertTopLevelItem(pos, item)
 
-        self.__setupItemWidgets(item)
+        self.__setupItemWidgetsRecursive(item)
 
     def __cueRemoved(self, cue):
         cue.property_changed.disconnect(self.__cuePropChanged)
@@ -556,6 +556,20 @@ class CueListView(QTreeWidget):
     def __setupItemWidgets(self, item):
         for i, column in enumerate(CueListView.COLUMNS):
             self.setItemWidget(item, i, column.widget(item))
+
+    def __setupItemWidgetsRecursive(self, item):
+        """Install column widgets for `item` and every descendant.
+
+        Qt's `setItemWidget` binding doesn't survive `takeTopLevelItem`
+        / `takeChild` — the viewport loses its cell-to-widget mapping
+        when items leave the tree. Re-installing widgets only on the
+        moved item would leave any tree children (e.g. a dragged
+        GroupCue's contents) with None for `itemWidget(child, col)`,
+        which crashes `__updateItemStyle` on the next selection change.
+        """
+        self.__setupItemWidgets(item)
+        for i in range(item.childCount()):
+            self.__setupItemWidgetsRecursive(item.child(i))
 
         self.updateGeometries()
 
