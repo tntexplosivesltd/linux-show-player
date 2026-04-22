@@ -131,6 +131,7 @@ class MediaCueSettings(SettingsPage):
 
     def loadSettings(self, settings):
         media = settings.get("media", {})
+        is_image = self._is_image_cue(media)
 
         if "loop" in media:
             self.spinLoop.setValue(media["loop"])
@@ -146,6 +147,22 @@ class MediaCueSettings(SettingsPage):
         if "stop_time" in media:
             stop_display = self._display_stop(media["stop_time"], duration)
             self.stopEdit.setTime(self._to_qtime(stop_display))
+
+        # Image cues: imagefreeze ignores seek positions, so start_time
+        # and stop_time are no-ops. Disable the fields so the UI stops
+        # offering knobs that don't turn anything.
+        self.startEdit.setEnabled(not is_image)
+        self.stopEdit.setEnabled(not is_image)
+
+    @staticmethod
+    def _is_image_cue(media_settings: dict) -> bool:
+        # GstMedia.__getstate__ flattens each element's state under a
+        # key named after the element class (typename(element)), so an
+        # ImageInput shows up as a top-level "ImageInput" key. Test
+        # callers may inject _element_classes directly.
+        if "ImageInput" in media_settings:
+            return True
+        return "ImageInput" in media_settings.get("_element_classes", [])
 
     @staticmethod
     def _display_stop(stored_ms: int, duration_ms: int) -> int:

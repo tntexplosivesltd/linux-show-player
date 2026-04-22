@@ -123,3 +123,53 @@ class TestStopTimeSentinelMapping:
         )
 
         assert page.stopEdit.time() == QTime.fromMSecsSinceStartOfDay(0)
+
+
+class TestImageCueHandling:
+    def test_image_cue_disables_trim_fields(self, qtbot):
+        page = MediaCueSettings()
+        qtbot.addWidget(page)
+        page.loadSettings(
+            {
+                "media": {
+                    "stop_time": 0,
+                    "duration": 5_000,
+                    "start_time": 0,
+                    "ImageInput": {},
+                }
+            }
+        )
+
+        assert not page.startEdit.isEnabled()
+        assert not page.stopEdit.isEnabled()
+
+    def test_image_cue_loop_field_stays_enabled(self, qtbot):
+        page = MediaCueSettings()
+        qtbot.addWidget(page)
+        page.loadSettings(
+            {
+                "media": {
+                    "stop_time": 0,
+                    "duration": 5_000,
+                    "ImageInput": {},
+                    "loop": 0,
+                }
+            }
+        )
+        assert page.spinLoop.isEnabled()
+
+    def test_audio_cue_fields_stay_enabled(self, qtbot):
+        page = MediaCueSettings()
+        qtbot.addWidget(page)
+        page.loadSettings(
+            {
+                "media": {
+                    "stop_time": 60_000,
+                    "duration": 180_000,
+                    "UriInput": {},
+                    "Volume": {},
+                }
+            }
+        )
+        assert page.startEdit.isEnabled()
+        assert page.stopEdit.isEnabled()
