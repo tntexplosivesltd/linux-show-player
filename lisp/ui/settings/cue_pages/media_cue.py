@@ -166,9 +166,19 @@ class MediaCueSettings(SettingsPage):
         if "start_time" in media:
             self.startEdit.setTime(self._to_qtime(media["start_time"]))
 
+        stop_display = duration
         if "stop_time" in media:
             stop_display = self._display_stop(media["stop_time"], duration)
             self.stopEdit.setTime(self._to_qtime(stop_display))
+
+        # Reactive bound logic only runs once a user edits a field; seed
+        # the bounds here so initial state already reflects start < stop.
+        start_ms = self._ms(self.startEdit.time())
+        if stop_display > 0:
+            self.stopEdit.setMinimumTime(self._to_qtime(start_ms + 1))
+            self.startEdit.setMaximumTime(
+                self._to_qtime(max(0, stop_display - 1))
+            )
 
         # Image cues: imagefreeze ignores seek positions, so start_time
         # and stop_time are no-ops. Disable the fields so the UI stops
@@ -186,9 +196,46 @@ class MediaCueSettings(SettingsPage):
         else:
             waveform = get_backend().media_waveform(cue.media)
             self._install_waveform(waveform, use_timeline=False)
+            # Seed new trimmer from the field values — the trimmer was
+            # just built with defaults (0, duration) and the field edits
+            # above fired into no handler (we connect them in install).
+            self.trimmer.setStartTime(start_ms, silent=True)
+            if stop_display > 0:
+                self.trimmer.setStopTime(stop_display, silent=True)
 
     def _teardown_trimmer(self):
+        # Stop the outgoing GStreamer decode pipeline and drop signal
+        # connections so a late failed/ready emission on an orphan
+        # waveform can't swap the current trimmer for a different cue.
+        if self._current_waveform is not None:
+            try:
+                self._current_waveform.failed.disconnect(
+                    self._on_waveform_failed
+                )
+            except Exception:
+                pass
+            try:
+                self._current_waveform.clear()
+            except Exception:
+                pass
+            self._current_waveform = None
+
         if self._waveformSlot is not None:
+            # Detach field handlers so a later edit on a torn-down page
+            # doesn't fire dead-reference propagation into setStopTime
+            # on a half-disposed widget.
+            try:
+                self.startEdit.timeChanged.disconnect(
+                    self._on_start_edit_changed
+                )
+            except TypeError:
+                pass
+            try:
+                self.stopEdit.timeChanged.disconnect(
+                    self._on_stop_edit_changed
+                )
+            except TypeError:
+                pass
             self.layout().removeWidget(self._waveformSlot)
             self._waveformSlot.deleteLater()
             self._waveformSlot = None

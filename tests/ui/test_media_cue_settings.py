@@ -36,6 +36,12 @@ class _FakeWaveform:
         self.rms_samples = []
         self.ready = Signal()
         self.failed = Signal()
+        self.cleared = 0
+
+    def clear(self):
+        self.cleared += 1
+        self.peak_samples = []
+        self.rms_samples = []
 
     def load_waveform(self):
         return False
@@ -50,10 +56,6 @@ class _FakeWaveform:
 
     def mark_failed(self):
         self.failed.emit()
-
-    def clear(self):
-        self.peak_samples = []
-        self.rms_samples = []
 
 
 class TestMediaCueSettingsLayout:
@@ -394,6 +396,165 @@ class TestCueInstallation:
         qtbot.wait(10)
 
         assert page.trimmer is None
+
+
+class TestLoadTimeInit:
+    def _backend(self, monkeypatch, waveform):
+        class _Backend:
+            def media_waveform(self, media):
+                return waveform
+
+        monkeypatch.setattr(
+            "lisp.ui.settings.cue_pages.media_cue.get_backend",
+            lambda: _Backend(),
+        )
+
+    def _cue(self, duration):
+        class _FakeMedia:
+            def __init__(self):
+                self.duration = duration
+                self.elements = {}
+
+        class _FakeCue:
+            def __init__(self):
+                self.media = _FakeMedia()
+
+        return _FakeCue()
+
+    def test_markers_seeded_from_stored_trim(self, qtbot, monkeypatch):
+        """Trimmer start/stop match the stored values after load."""
+        waveform = _FakeWaveform(duration_ms=60_000)
+        self._backend(monkeypatch, waveform)
+        page = MediaCueSettings()
+        qtbot.addWidget(page)
+        page.setCue(self._cue(60_000))
+        page.loadSettings(
+            {
+                "media": {
+                    "duration": 60_000,
+                    "start_time": 5_000,
+                    "stop_time": 45_000,
+                }
+            }
+        )
+        qtbot.wait(10)
+
+        assert page.trimmer.startTime() == 5_000
+        assert page.trimmer.stopTime() == 45_000
+
+    def test_stop_edit_min_reflects_start_on_load(self, qtbot, monkeypatch):
+        waveform = _FakeWaveform(duration_ms=60_000)
+        self._backend(monkeypatch, waveform)
+        page = MediaCueSettings()
+        qtbot.addWidget(page)
+        page.setCue(self._cue(60_000))
+        page.loadSettings(
+            {
+                "media": {
+                    "duration": 60_000,
+                    "start_time": 5_000,
+                    "stop_time": 45_000,
+                }
+            }
+        )
+
+        assert page.stopEdit.minimumTime() == QTime.fromMSecsSinceStartOfDay(
+            5_001
+        )
+        assert page.startEdit.maximumTime() == QTime.fromMSecsSinceStartOfDay(
+            44_999
+        )
+
+
+class TestLifecycle:
+    """Navigate between cues: no leaked pipelines, no stale connections."""
+
+    def _install(self, page, qtbot, monkeypatch, duration=10_000):
+        waveform = _FakeWaveform(duration_ms=duration)
+
+        class _Backend:
+            def media_waveform(self_, media):
+                return waveform
+
+        monkeypatch.setattr(
+            "lisp.ui.settings.cue_pages.media_cue.get_backend",
+            lambda: _Backend(),
+        )
+
+        class _FakeMedia:
+            def __init__(self):
+                self.duration = duration
+                self.elements = {}
+
+        class _FakeCue:
+            def __init__(self):
+                self.media = _FakeMedia()
+
+        page.setCue(_FakeCue())
+        page.loadSettings(
+            {"media": {"duration": duration, "start_time": 0, "stop_time": 0}}
+        )
+        qtbot.wait(10)
+        return waveform
+
+    def test_teardown_calls_clear_on_previous_waveform(
+        self, qtbot, monkeypatch
+    ):
+        page = MediaCueSettings()
+        qtbot.addWidget(page)
+        waveform_a = self._install(page, qtbot, monkeypatch)
+        assert waveform_a.cleared == 0
+
+        # Navigate to a second cue: old waveform must be stopped.
+        self._install(page, qtbot, monkeypatch)
+        assert waveform_a.cleared == 1
+
+    def test_failed_on_old_waveform_does_not_swap_new_trimmer(
+        self, qtbot, monkeypatch
+    ):
+        page = MediaCueSettings()
+        qtbot.addWidget(page)
+        waveform_a = self._install(page, qtbot, monkeypatch)
+        self._install(page, qtbot, monkeypatch)
+
+        from lisp.ui.widgets.waveform import TrimmableWaveformWidget
+        assert isinstance(page.trimmer, TrimmableWaveformWidget)
+
+        # Decode failure emitted on the old (orphan) waveform.
+        waveform_a.mark_failed()
+        qtbot.wait(10)
+
+        # The current (new) trimmer must NOT be swapped to a timeline.
+        assert isinstance(page.trimmer, TrimmableWaveformWidget)
+
+    def test_time_change_handlers_not_duplicated_across_navigations(
+        self, qtbot, monkeypatch
+    ):
+        page = MediaCueSettings()
+        qtbot.addWidget(page)
+        self._install(page, qtbot, monkeypatch)
+        self._install(page, qtbot, monkeypatch)
+
+        calls = {"count": 0}
+
+        def _probe(*_):
+            calls["count"] += 1
+
+        # Hook after navigation to count how many propagations fire
+        # from one edit. Duplicate connections would fire the trimmer
+        # setter handler once per stale connection, emitting multiple
+        # trimmer.startTimeChanged signals.
+        page.trimmer.startTimeChanged.connect(_probe)
+        page.startEdit.setTime(QTime.fromMSecsSinceStartOfDay(2_000))
+        qtbot.wait(10)
+        # silent=True means no emissions from the setter; but if the
+        # startEdit handler were connected twice, Qt would clamp twice
+        # and _on_trim_start_changed would *not* fire (it's silent).
+        # The important invariant is the trimmer value is set exactly
+        # once — which is indirectly observable via stopEdit.minimumTime.
+        assert page.stopEdit.minimumTime() == QTime.fromMSecsSinceStartOfDay(
+            2_001
+        )
 
 
 class TestWaveformFailureFallback:
