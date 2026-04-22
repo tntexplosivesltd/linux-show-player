@@ -237,12 +237,13 @@ class CueGeneralSettingsPage(CueSettingsPage):
 
         # Behaviour controls are compact (combos + spinboxes), identity
         # owns the description editor and gets the lion's share, and
-        # appearance stays modest. Col-0 stretch is 1 because nothing
-        # in it benefits from extra horizontal space — wider just means
-        # more whitespace inside the start/stop combos.
+        # appearance needs only enough for the 8-slot palette strip —
+        # extra width beyond that falls into the palette's trailing
+        # stretch as dead space. Col 1's larger share lets the
+        # description editor absorb the reclaimed room instead.
         grid.setColumnStretch(0, 1)
         grid.setColumnStretch(1, 4)
-        grid.setColumnStretch(2, 2)
+        grid.setColumnStretch(2, 1)
 
         self.retranslateUi()
 
