@@ -20,6 +20,7 @@ load_classes cue-registration loop.
 """
 
 import logging
+from threading import Thread
 
 from lisp.cues.cue import CueState
 from lisp.cues.media_cue import MediaCue
@@ -82,3 +83,62 @@ def build_affected_set(target):
     for child in target._resolve_children():
         leaves.extend(build_affected_set(child))
     return leaves
+
+
+class ParallelFadeRunner:
+    """Drive a set of Faders concurrently to a target value.
+
+    Each fader runs in its own daemon thread (Fader.fade is blocking).
+    `run_until_complete()` joins all threads and returns True if the run
+    completed, False if `abort()` was called. `abort()` calls `stop()`
+    on each fader and flips a flag the return value reads.
+    """
+
+    def __init__(self, faders, to_value, curve, duration_seconds):
+        self._faders = list(faders)
+        self._to_value = to_value
+        self._curve = curve
+        self._duration_seconds = duration_seconds
+        self._aborted = False
+        self._threads = []
+
+    def run_until_complete(self):
+        """Start faders in parallel, join them, return True if not aborted."""
+        for fader in self._faders:
+            try:
+                fader.prepare()
+            except Exception:
+                logger.exception(
+                    "ParallelFadeRunner: fader.prepare() raised; continuing"
+                )
+
+        for fader in self._faders:
+            t = Thread(
+                target=self._run_single,
+                args=(fader,),
+                daemon=True,
+            )
+            t.start()
+            self._threads.append(t)
+
+        for t in self._threads:
+            t.join()
+
+        return not self._aborted
+
+    def abort(self):
+        """Cooperatively cancel the in-flight fades."""
+        self._aborted = True
+        for fader in self._faders:
+            try:
+                fader.stop()
+            except Exception:
+                logger.exception(
+                    "ParallelFadeRunner: fader.stop() raised during abort"
+                )
+
+    def _run_single(self, fader):
+        try:
+            fader.fade(self._duration_seconds, self._to_value, self._curve)
+        except Exception:
+            logger.exception("ParallelFadeRunner: fader.fade() raised")

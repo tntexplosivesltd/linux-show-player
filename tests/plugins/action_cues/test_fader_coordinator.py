@@ -135,3 +135,120 @@ class TestCollectLiveFaders:
             [cue], states=CueState.Pause | CueState.IsRunning
         )
         assert faders == [volume_fader]
+
+
+class TestParallelFadeRunner:
+    def _make_blocking_fader(self, block_event):
+        """Returns a fader whose fade() blocks until block_event is set."""
+        fader = MagicMock()
+
+        def fake_fade(seconds, to_value, curve):
+            block_event.wait(timeout=5.0)
+            return not fader.stop.called
+
+        fader.fade.side_effect = fake_fade
+        return fader
+
+    def test_runner_calls_prepare_on_each_fader(self):
+        from lisp.core.fade_functions import FadeOutType
+        from lisp.plugins.action_cues._fader_coordinator import (
+            ParallelFadeRunner,
+        )
+        f1 = MagicMock()
+        f2 = MagicMock()
+        runner = ParallelFadeRunner(
+            [f1, f2], to_value=0.0, curve=FadeOutType.Linear,
+            duration_seconds=0.01,
+        )
+        assert runner.run_until_complete() is True
+        f1.prepare.assert_called_once()
+        f2.prepare.assert_called_once()
+
+    def test_runner_fades_all_in_parallel_to_target(self):
+        from lisp.core.fade_functions import FadeOutType
+        from lisp.plugins.action_cues._fader_coordinator import (
+            ParallelFadeRunner,
+        )
+        f1 = MagicMock()
+        f2 = MagicMock()
+        runner = ParallelFadeRunner(
+            [f1, f2], to_value=0.0, curve=FadeOutType.Linear,
+            duration_seconds=0.01,
+        )
+        runner.run_until_complete()
+
+        f1.fade.assert_called_once_with(0.01, 0.0, FadeOutType.Linear)
+        f2.fade.assert_called_once_with(0.01, 0.0, FadeOutType.Linear)
+
+    def test_runner_returns_true_on_clean_completion(self):
+        from lisp.core.fade_functions import FadeOutType
+        from lisp.plugins.action_cues._fader_coordinator import (
+            ParallelFadeRunner,
+        )
+        f = MagicMock()
+        runner = ParallelFadeRunner(
+            [f], to_value=0.0, curve=FadeOutType.Linear,
+            duration_seconds=0.01,
+        )
+        assert runner.run_until_complete() is True
+
+    def test_runner_abort_calls_stop_and_returns_false(self):
+        import threading
+        from lisp.core.fade_functions import FadeOutType
+        from lisp.plugins.action_cues._fader_coordinator import (
+            ParallelFadeRunner,
+        )
+
+        block = threading.Event()
+        f1 = self._make_blocking_fader(block)
+        f2 = self._make_blocking_fader(block)
+
+        runner = ParallelFadeRunner(
+            [f1, f2], to_value=0.0, curve=FadeOutType.Linear,
+            duration_seconds=1.0,
+        )
+
+        result = {}
+
+        def run():
+            result["ret"] = runner.run_until_complete()
+
+        t = threading.Thread(target=run)
+        t.start()
+        # Let the fades get underway
+        threading.Event().wait(0.05)
+
+        runner.abort()
+        block.set()  # unblock the fake fades so they can return
+        t.join(timeout=2.0)
+
+        assert result["ret"] is False
+        f1.stop.assert_called_once()
+        f2.stop.assert_called_once()
+
+    def test_runner_with_empty_faders_is_no_op(self):
+        from lisp.core.fade_functions import FadeOutType
+        from lisp.plugins.action_cues._fader_coordinator import (
+            ParallelFadeRunner,
+        )
+        runner = ParallelFadeRunner(
+            [], to_value=0.0, curve=FadeOutType.Linear,
+            duration_seconds=1.0,
+        )
+        assert runner.run_until_complete() is True
+
+    def test_fader_exception_does_not_deadlock_runner(self):
+        from lisp.core.fade_functions import FadeOutType
+        from lisp.plugins.action_cues._fader_coordinator import (
+            ParallelFadeRunner,
+        )
+        bad = MagicMock()
+        bad.fade.side_effect = RuntimeError("boom")
+        good = MagicMock()
+        runner = ParallelFadeRunner(
+            [bad, good], to_value=0.0, curve=FadeOutType.Linear,
+            duration_seconds=0.01,
+        )
+        # Should complete (not hang) even though one fader raised
+        assert runner.run_until_complete() is True
+        good.fade.assert_called_once()
