@@ -256,3 +256,29 @@ class WaveformSlider(DynamicFontSizeMixin, WaveformWidget):
             painter.drawText(rect, Qt.AlignCenter, text)
 
             painter.end()
+
+
+class TrimmableWaveformWidget(WaveformWidget):
+    """Waveform with draggable start/stop trim markers.
+
+    Overlays two full-height vertical lines on top of the inherited
+    peak/RMS paint. Emits per-frame signals during drag and a single
+    ``trimReleased`` on mouse-up, so the inspector page can debounce
+    its own commit logic.
+    """
+
+    startTimeChanged = pyqtSignal(int)
+    stopTimeChanged = pyqtSignal(int)
+    trimReleased = pyqtSignal()
+
+    def __init__(self, waveform: Waveform, **kwargs):
+        super().__init__(waveform, **kwargs)
+        self._start_ms = 0
+        self._stop_ms = self._waveform.duration
+        self._active_marker = None
+
+    def startTime(self) -> int:
+        return self._start_ms
+
+    def stopTime(self) -> int:
+        return self._stop_ms
