@@ -23,3 +23,6 @@ eggs/
 
 # Git worktrees
 .worktrees/
+
+plans/
+.superpowers/
