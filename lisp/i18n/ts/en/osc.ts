@@ -4,7 +4,7 @@
   <context>
     <name>Cue Name</name>
     <message>
-      <location filename="../../../plugins/osc/osc_cue.py" line="175" />
+      <location filename="../../../plugins/osc/osc_cue.py" line="176" />
       <source>OSC Settings</source>
       <translation type="unfinished" />
     </message>
@@ -28,57 +28,57 @@
   <context>
     <name>OscCue</name>
     <message>
-      <location filename="../../../plugins/osc/osc_cue.py" line="247" />
+      <location filename="../../../plugins/osc/osc_cue.py" line="249" />
       <source>OSC Message</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/osc/osc_cue.py" line="248" />
+      <location filename="../../../plugins/osc/osc_cue.py" line="250" />
       <source>Add</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/osc/osc_cue.py" line="249" />
+      <location filename="../../../plugins/osc/osc_cue.py" line="251" />
       <source>Remove</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/osc/osc_cue.py" line="250" />
+      <location filename="../../../plugins/osc/osc_cue.py" line="252" />
       <source>OSC Path:</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/osc/osc_cue.py" line="252" />
+      <location filename="../../../plugins/osc/osc_cue.py" line="254" />
       <source>/path/to/something</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/osc/osc_cue.py" line="197" />
+      <location filename="../../../plugins/osc/osc_cue.py" line="199" />
       <source>Fade</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/osc/osc_cue.py" line="255" />
+      <location filename="../../../plugins/osc/osc_cue.py" line="257" />
       <source>Time (sec)</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/osc/osc_cue.py" line="256" />
+      <location filename="../../../plugins/osc/osc_cue.py" line="258" />
       <source>Curve</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/osc/osc_cue.py" line="194" />
+      <location filename="../../../plugins/osc/osc_cue.py" line="196" />
       <source>Type</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/osc/osc_cue.py" line="195" />
+      <location filename="../../../plugins/osc/osc_cue.py" line="197" />
       <source>Value</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/osc/osc_cue.py" line="196" />
+      <location filename="../../../plugins/osc/osc_cue.py" line="198" />
       <source>FadeTo</source>
       <translation type="unfinished" />
     </message>
@@ -86,7 +86,7 @@
   <context>
     <name>OscCueError</name>
     <message>
-      <location filename="../../../plugins/osc/osc_cue.py" line="115" />
+      <location filename="../../../plugins/osc/osc_cue.py" line="116" />
       <source>Cannot send OSC message, see error for details</source>
       <translation type="unfinished" />
     </message>
@@ -94,7 +94,7 @@
   <context>
     <name>OscServerDebug</name>
     <message>
-      <location filename="../../../plugins/osc/osc_server.py" line="140" />
+      <location filename="../../../plugins/osc/osc_server.py" line="141" />
       <source>Message from {}:{} -&gt; path: "{}" args: {}</source>
       <translation type="unfinished" />
     </message>
@@ -110,7 +110,7 @@
   <context>
     <name>OscServerInfo</name>
     <message>
-      <location filename="../../../plugins/osc/osc_server.py" line="129" />
+      <location filename="../../../plugins/osc/osc_server.py" line="130" />
       <source>OSC server stopped</source>
       <translation type="unfinished" />
     </message>

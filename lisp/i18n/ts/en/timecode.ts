@@ -9,7 +9,7 @@
       <translation>Timecode</translation>
     </message>
     <message>
-      <location filename="../../../plugins/timecode/settings.py" line="114" />
+      <location filename="../../../plugins/timecode/settings.py" line="115" />
       <source>Timecode Settings</source>
       <translation>Timecode Settings</translation>
     </message>
@@ -33,32 +33,32 @@
   <context>
     <name>TimecodeSettings</name>
     <message>
-      <location filename="../../../plugins/timecode/settings.py" line="81" />
+      <location filename="../../../plugins/timecode/settings.py" line="82" />
       <source>Replace HOURS by a static track number</source>
       <translation>Replace HOURS by a static track number</translation>
     </message>
     <message>
-      <location filename="../../../plugins/timecode/settings.py" line="86" />
+      <location filename="../../../plugins/timecode/settings.py" line="87" />
       <source>Enable Timecode</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/timecode/settings.py" line="88" />
+      <location filename="../../../plugins/timecode/settings.py" line="89" />
       <source>Track number</source>
       <translation>Track number</translation>
     </message>
     <message>
-      <location filename="../../../plugins/timecode/settings.py" line="145" />
+      <location filename="../../../plugins/timecode/settings.py" line="146" />
       <source>Timecode Settings</source>
       <translation>Timecode Settings</translation>
     </message>
     <message>
-      <location filename="../../../plugins/timecode/settings.py" line="148" />
+      <location filename="../../../plugins/timecode/settings.py" line="149" />
       <source>Timecode Format:</source>
       <translation>Timecode Format:</translation>
     </message>
     <message>
-      <location filename="../../../plugins/timecode/settings.py" line="151" />
+      <location filename="../../../plugins/timecode/settings.py" line="152" />
       <source>Timecode Protocol:</source>
       <translation type="unfinished" />
     </message>

@@ -55,32 +55,32 @@
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/controller/protocols/midi.py" line="162" />
+      <location filename="../../../plugins/controller/protocols/midi.py" line="165" />
       <source>Listening MIDI messages ...</source>
       <translation>Listening MIDI messages ...</translation>
     </message>
     <message>
-      <location filename="../../../plugins/controller/protocols/midi.py" line="246" />
+      <location filename="../../../plugins/controller/protocols/midi.py" line="249" />
       <source>Type</source>
       <translation>Type</translation>
     </message>
     <message>
-      <location filename="../../../plugins/controller/protocols/midi.py" line="247" />
+      <location filename="../../../plugins/controller/protocols/midi.py" line="250" />
       <source>Data 1</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/controller/protocols/midi.py" line="248" />
+      <location filename="../../../plugins/controller/protocols/midi.py" line="251" />
       <source>Data 2</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/controller/protocols/midi.py" line="249" />
+      <location filename="../../../plugins/controller/protocols/midi.py" line="252" />
       <source>Data 3</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/controller/protocols/midi.py" line="250" />
+      <location filename="../../../plugins/controller/protocols/midi.py" line="253" />
       <source>Action</source>
       <translation>Action</translation>
     </message>
@@ -88,7 +88,7 @@
   <context>
     <name>ControllerMidiSettingsWarning</name>
     <message>
-      <location filename="../../../plugins/controller/protocols/midi.py" line="147" />
+      <location filename="../../../plugins/controller/protocols/midi.py" line="150" />
       <source>Error while importing configuration entry, skipped.</source>
       <translation type="unfinished" />
     </message>
@@ -136,27 +136,27 @@
       <translation>Capture</translation>
     </message>
     <message>
-      <location filename="../../../plugins/controller/protocols/osc.py" line="340" />
+      <location filename="../../../plugins/controller/protocols/osc.py" line="343" />
       <source>Waiting for messages:</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/controller/protocols/osc.py" line="445" />
+      <location filename="../../../plugins/controller/protocols/osc.py" line="448" />
       <source>Path</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/controller/protocols/osc.py" line="446" />
+      <location filename="../../../plugins/controller/protocols/osc.py" line="449" />
       <source>Types</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/controller/protocols/osc.py" line="447" />
+      <location filename="../../../plugins/controller/protocols/osc.py" line="450" />
       <source>Arguments</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/controller/protocols/osc.py" line="448" />
+      <location filename="../../../plugins/controller/protocols/osc.py" line="451" />
       <source>Action</source>
       <translation>Action</translation>
     </message>
@@ -164,18 +164,18 @@
   <context>
     <name>ControllerOscSettingsWarning</name>
     <message>
-      <location filename="../../../plugins/controller/protocols/osc.py" line="359" />
+      <location filename="../../../plugins/controller/protocols/osc.py" line="362" />
       <source>Warning</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/controller/protocols/osc.py" line="360" />
+      <location filename="../../../plugins/controller/protocols/osc.py" line="363" />
       <source>Osc path seems invalid,
 do not forget to edit the path later.</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/controller/protocols/osc.py" line="317" />
+      <location filename="../../../plugins/controller/protocols/osc.py" line="320" />
       <source>Error while importing configuration entry, skipped.</source>
       <translation type="unfinished" />
     </message>
@@ -183,12 +183,12 @@ do not forget to edit the path later.</source>
   <context>
     <name>ControllerSettings</name>
     <message>
-      <location filename="../../../plugins/controller/protocols/keyboard.py" line="79" />
+      <location filename="../../../plugins/controller/protocols/midi.py" line="122" />
       <source>Add</source>
       <translation>Add</translation>
     </message>
     <message>
-      <location filename="../../../plugins/controller/protocols/keyboard.py" line="80" />
+      <location filename="../../../plugins/controller/protocols/midi.py" line="123" />
       <source>Remove</source>
       <translation>Remove</translation>
     </message>
@@ -290,7 +290,7 @@ do not forget to edit the path later.</source>
       <translation>Cue Control</translation>
     </message>
     <message>
-      <location filename="../../../plugins/controller/controller_settings.py" line="41" />
+      <location filename="../../../plugins/controller/controller_settings.py" line="42" />
       <source>Layout Controls</source>
       <translation type="unfinished" />
     </message>
@@ -300,14 +300,14 @@ do not forget to edit the path later.</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/controller/protocols/midi.py" line="64" />
-      <source>MIDI Controls</source>
-      <translation>MIDI Controls</translation>
-    </message>
-    <message>
       <location filename="../../../plugins/controller/protocols/keyboard.py" line="44" />
       <source>Keyboard Shortcuts</source>
       <translation>Keyboard Shortcuts</translation>
+    </message>
+    <message>
+      <location filename="../../../plugins/controller/protocols/midi.py" line="64" />
+      <source>MIDI Controls</source>
+      <translation>MIDI Controls</translation>
     </message>
   </context>
 </TS>
