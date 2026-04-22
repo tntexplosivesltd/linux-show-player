@@ -101,3 +101,17 @@ class StopCue(Cue):
             self._runner = None
 
         self._ended()
+
+    def __stop__(self, fade=False):
+        """Cancel the in-flight fade, if any.
+
+        Does NOT re-start the target — "I changed my mind about fading"
+        means "cancel the fade," not "put the audio back". The target
+        stays wherever the partial fade left it.
+        """
+        runner = self._runner
+        if runner is not None:
+            runner.abort()
+        return True
+
+    __interrupt__ = __stop__

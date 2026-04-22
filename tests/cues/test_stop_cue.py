@@ -217,3 +217,29 @@ class TestFadeThenAction:
         cue.__start__()
 
         target.execute.assert_not_called()
+
+
+class TestAbort:
+    def test_stop_aborts_runner_when_present(self, mock_app):
+        cue = StopCue(app=mock_app)
+        cue._runner = MagicMock()
+
+        result = cue.__stop__()
+
+        cue._runner.abort.assert_called_once()
+        assert result is True
+
+    def test_interrupt_aborts_runner_when_present(self, mock_app):
+        cue = StopCue(app=mock_app)
+        runner = MagicMock()
+        cue._runner = runner
+
+        cue.__interrupt__()
+
+        runner.abort.assert_called_once()
+
+    def test_stop_without_runner_is_safe(self, mock_app):
+        """No in-flight fade: __stop__ must not crash."""
+        cue = StopCue(app=mock_app)
+        assert cue._runner is None
+        assert cue.__stop__() is True  # no exception raised

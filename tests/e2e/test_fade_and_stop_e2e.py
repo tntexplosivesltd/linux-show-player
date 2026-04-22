@@ -6,8 +6,7 @@ Covers:
     2. Fade then pause on a single MediaCue target.
     3. Fade then stop on a parallel GroupCue (cascade works).
     4. Non-media target (no fader) still receives the action after 0ms.
-
-(Mid-fade abort scenario lands with Task 6.)
+    5. Abort mid-fade via Stop on the StopCue itself (target stays running).
 
 Run:
     poetry run python tests/e2e/test_fade_and_stop_e2e.py
@@ -15,6 +14,7 @@ Run:
 
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from tests.e2e.helpers import (  # noqa: E402
@@ -105,6 +105,28 @@ def test_3_group_fan_out(t, ids):
     t.check("child B stopped", ev_b is not None)
 
 
+def test_5_abort_midfade(t, ids):
+    """Stopping the StopCue mid-fade leaves target running."""
+    print("\n=== Test 5: Abort mid-fade ===")
+    stop_all()
+
+    target = ids["tone_A"]
+    sfr = _add_stop_cue(target, action="Stop", duration_ms=3000)
+
+    call("cue.execute", {"id": target, "action": "Start"})
+    assert wait_state(target, "Running")
+
+    call("cue.execute", {"id": sfr, "action": "Start"})
+    time.sleep(0.3)  # let the fade begin
+    call("cue.execute", {"id": sfr, "action": "Stop"})
+    time.sleep(0.2)
+
+    t.check(
+        "target still Running after SFR abort",
+        cue_state(target) == "Running",
+    )
+
+
 def test_4_non_media_target_graceful(t, ids):
     """StopCue on a target without faders still dispatches the action."""
     print("\n=== Test 4: Non-media target ===")
@@ -131,6 +153,7 @@ def run_tests(t):
     test_2_fade_then_pause(t, ids)
     test_3_group_fan_out(t, ids)
     test_4_non_media_target_graceful(t, ids)
+    test_5_abort_midfade(t, ids)
 
 
 if __name__ == "__main__":
