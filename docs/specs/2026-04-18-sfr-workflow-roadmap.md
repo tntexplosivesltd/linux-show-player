@@ -26,7 +26,7 @@ infrastructure for Part 2. Two `&`-escape fixes in `mainwindow.py`,
 `inspector/panel.py`, and `settings/pages.py` were centralised into
 `ui_utils.escape_mnemonic`.
 
-## Part 2 — Fade & Resume cue — **in progress**
+## Part 2 — Fade & Resume cue — **complete**
 
 Spec: [`2026-04-21-fade-and-resume-cue-design.md`](2026-04-21-fade-and-resume-cue-design.md)
 
@@ -48,21 +48,25 @@ Resolved brainstorming questions:
   resume").
 - Separate `ResumeCue` class (not a mode flag on `StopCue`).
 
-Implementation note: Part 2 introduces `_fader_coordinator.py` as shared
-infrastructure. The Part 1 plan gets retrofitted to use it from the first
-commit (Part 1 is specced but not yet implemented).
+Implementation note: `_fader_coordinator.py` landed with Part 1 rather
+than being introduced here, so Part 2 built directly on it — no
+retrofit needed.
 
 Checklist:
 
 - [x] Brainstorm
 - [x] Spec
-- [ ] Retrofit Part 1 plan to use `_fader_coordinator`
-- [ ] Write Part 2 implementation plan
-- [ ] Implement `_fader_coordinator` + `ResumeCue` + `ResumeCueSettings`
-- [ ] Unit tests (coordinator + ResumeCue + updated StopCue tests)
-- [ ] E2E test — full intermission workflow (Stop then Resume)
-- [ ] QA review (`voltagent-qa-sec:qa-expert`)
-- [ ] Code review (`voltagent-qa-sec:code-reviewer`)
+- [x] Retrofit Part 1 plan to use `_fader_coordinator` (landed with Part 1)
+- [x] Write Part 2 implementation plan
+- [x] Implement `ResumeCue` + `ResumeCueSettings`
+- [x] Unit tests (ResumeCue + mixed-state group + session round-trip)
+- [x] E2E test — full intermission workflow (Stop then Resume)
+- [x] QA review (`voltagent-qa-sec:qa-expert`)
+- [x] Code review (`voltagent-qa-sec:code-reviewer`)
+
+Delivered on branch `feat/resume-cue`. Also landed a Part 1 symmetry
+fix: `StopCueSettings` now also excludes `ResumeCue` instances from
+its target picker.
 
 ## Part 3 — Hibernating state & active-cues panel filtering — **not started**
 

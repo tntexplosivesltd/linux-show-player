@@ -66,6 +66,51 @@ class StopCue(Cue):
         # on completion/abort. Used by __stop__ to cancel the fade.
         self._runner = None
 
+        # Tracks what the auto-rename handler last wrote to `name`.
+        # If `self.name` still matches this value, auto-management is
+        # still "on" and a target/action change re-derives. If it
+        # diverges (user typed a custom label, or a session load set a
+        # non-auto name), we leave it alone.
+        self._last_auto_name = self.name
+        self.property_changed.connect(self._on_property_changed)
+
+    def _on_property_changed(self, _cue, name, _value):
+        if name not in ("target_id", "action"):
+            return
+        if self.name != self._last_auto_name:
+            # User (or a prior session load) has customised the name —
+            # don't overwrite it.
+            return
+        new_name = self._derive_name()
+        self.name = new_name
+        self._last_auto_name = new_name
+
+    def _derive_name(self):
+        """Return a descriptive name based on current target + action.
+
+        Falls back to the class's default translated Name when no
+        target is resolvable (unset, deleted, or pointing at a
+        non-existent cue) — the generic label beats a nonsense
+        "Fade and Stop ''".
+        """
+        target = self.app.cue_model.get(self.target_id)
+        if target is None:
+            return translate("CueName", self.Name)
+        action = CueAction(self.action)
+        verb = translate("CueAction", action.name)
+        return f"Fade and {verb} '{target.name}'"
+
+    def update_properties(self, properties):
+        super().update_properties(properties)
+        # Post-load reseed: if the loaded name matches what we'd
+        # auto-derive now (i.e. the saved name was auto), treat
+        # it as still auto-managed so future target/action edits
+        # re-derive. If not, the user customised it — leave
+        # `_last_auto_name` stale so the handler won't touch the
+        # loaded name.
+        if self.name == self._derive_name():
+            self._last_auto_name = self.name
+
     def __start__(self, fade=False):
         target = self.app.cue_model.get(self.target_id)
         if target is None:
@@ -155,13 +200,17 @@ class StopCueSettings(SettingsPage):
         self.layout().setSpacing(6)
 
         self.cue_id = ""
-        # Exclude StopCues from the target picker — a StopCue targeting
-        # itself (or another StopCue) has no useful semantics: StopCue
-        # isn't a MediaCue, so no faders would be collected, and the
-        # cascade would just re-dispatch the action onto a non-playing
-        # target.
+        # Exclude StopCues and ResumeCues from the target picker —
+        # targeting another SFR-cue has no useful semantics: they aren't
+        # MediaCues, no faders would be collected, and the instant path
+        # would just re-fire the configured action on a non-playing
+        # target. Symmetric with ResumeCueSettings' exclusion.
+        from lisp.plugins.action_cues.resume_cue import ResumeCue
         all_cues = Application().cue_model.filter(Cue)
-        targets = [c for c in all_cues if not isinstance(c, StopCue)]
+        targets = [
+            c for c in all_cues
+            if not isinstance(c, (StopCue, ResumeCue))
+        ]
         self.cueDialog = CueSelectDialog(cues=targets, parent=self)
 
         # Combined Target + Action group: cue picker on the left, action

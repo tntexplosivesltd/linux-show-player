@@ -41,7 +41,7 @@ target's descendants.
 | Action | Fixed `Resume` | Only one verb makes sense — "fade" is encoded by `duration > 0`. |
 | Target-state policy | Paused → happy path; Running → fade-up fallback; Stopped/Error → `_error()`; Pre/PostWait → fade-up fallback | Useful graceful behaviour when the operator hits Fade & Resume on a cue that's not perfectly in the expected state. |
 | Pre-Resume zero step | Zero `live_volume`/`live_alpha` before dispatching Resume (Paused path, only when fading) | Guarantees no pop regardless of how the target was paused — makes Fade & Resume self-contained, not dependent on a prior Fade & Stop having left faders at 0. |
-| Zero-when-no-fade | Skip the zero step when `duration == 0` | Otherwise we'd zero faders and never fade back up → silent cue. |
+| Snap-when-no-fade | `duration == 0` → set faders to `1.0` synchronously before dispatching Resume | Fade & Resume owns the end-state regardless of duration. Simply skipping the zero step fails the intermission workflow: a prior Fade & Stop leaves faders at 0, so Resume with no fade would play inaudibly. Snap-to-full mirrors the duration>0 rule (own the target value) minus the curve. |
 | Code organisation | Extract `_fader_coordinator.py` helper module; both StopCue and ResumeCue build on it | Removes provably-shared logic (affected-set flattening, fader collection, parallel-fader runner with abort). Avoids inheritance (semantics of stop vs resume diverge enough that a base class would obscure more than it shares). |
 | Part 1 plan timing | **B-now** — update the Part 1 plan in-place to use the helper from the first commit | Part 1 is specced but not implemented; retrofitting the plan avoids a throwaway intermediate implementation. |
 | Display name | "Fade & Resume" | Symmetric with "Fade & Stop". Internal class `ResumeCue`. |
@@ -93,7 +93,7 @@ class ResumeCue(Cue):
 
     target_id = Property()
     fade_type = Property(default=FadeInType.Linear.name)
-    icon = Property("action-resume")  # fallback to a stock icon if missing
+    icon = Property("action-play")  # Resume is "play from paused"
 
     CueActions = (
         CueAction.Default,
@@ -122,16 +122,22 @@ fixed to `Resume`.
 3. `will_fade = self.duration > 0 and faders`.
 4. If `will_fade`: for each fader, set its live property to `0.0` immediately
    (synchronous — use the fader's target's property setter, not a fade).
-5. `target.execute(CueAction.Resume)`. For a GroupCue target this cascades
+5. Else if faders (and `duration == 0`): for each fader, snap its live
+   property to `1.0` synchronously. This overrides whatever the prior
+   Fade & Stop left behind — without it, an intermission-style
+   `Fade & Stop (duration=N)` → `Fade & Resume (duration=0)` sequence
+   would resume inaudibly because levels are still at 0.
+6. `target.execute(CueAction.Resume)`. For a GroupCue target this cascades
    via the base-class `resume()` → `start()` → `GroupCue.__start__` chain,
    which already detects paused children and dispatches Resume to each
    (both parallel and playlist modes).
-6. If `will_fade`: build `ParallelFadeRunner(faders, to_value=1.0,
+7. If `will_fade`: build `ParallelFadeRunner(faders, to_value=1.0,
    curve=FadeInType[self.fade_type], duration_seconds=self.duration/1000)`,
    store on `self._runner`, and (via an `@async_function` coordinator) call
    `run_until_complete()`. On completion or abort, clear `self._runner` and
    call `self._ended()`. Return `True` (async execution).
-7. If not `will_fade`: return `False` (instant execution).
+8. Else: return `False` (instant execution — either no faders to
+   manage, or the snap-to-full already happened in step 5).
 
 #### `_running_fallback(target)`
 
@@ -174,9 +180,14 @@ target back where it was". Same semantics as Part 1.
 - **Target in Pre/PostWait:** treated as Running → fade-up fallback, no
   Resume dispatched.
 - **Target in Error state:** neither Pause nor IsRunning → `_error()`.
-- **`duration == 0` on Paused target:** skip the zero step entirely,
-  dispatch Resume, no fade. (If we zeroed without fading back, the cue
-  would resume silent.)
+- **`duration == 0` on Paused target with faders:** snap faders to
+  `1.0` synchronously, then dispatch Resume. ResumeCue owns the
+  end-state regardless of duration: "resume at full, now" rather than
+  "resume at whatever levels happen to be there." The intermission
+  workflow (`Fade & Stop` fades levels to 0; `Fade & Resume` brings
+  them back) would otherwise resume silent if `Fade & Resume` had
+  `duration == 0` — an unusable combination. Without faders (non-Media
+  target), just dispatch Resume.
 
 ### Part 1 refactor
 

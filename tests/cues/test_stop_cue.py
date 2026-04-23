@@ -78,6 +78,124 @@ class TestTargetResolution:
         assert error_fired == [True]
 
 
+class TestAutoName:
+    """The cue's `name` auto-updates when target_id or action changes
+    so the user sees meaningful labels in the cue list without having
+    to manually edit the name per-cue."""
+
+    def _setup_target(self, mock_app, name="Sound1"):
+        target = MagicMock()
+        target.name = name
+        mock_app.cue_model.get = lambda cid: (
+            target if cid == "t1" else None
+        )
+        return target
+
+    def test_default_name_before_target_set(self, mock_app):
+        """No target → untouched default translation of the class Name."""
+        cue = StopCue(app=mock_app)
+        assert cue.name == "Fade & Stop"
+
+    def test_name_updates_when_target_set(self, mock_app):
+        self._setup_target(mock_app, "Sound1")
+        cue = StopCue(app=mock_app)
+        cue.target_id = "t1"
+        assert cue.name == "Fade and Stop 'Sound1'"
+
+    def test_name_updates_when_action_changed(self, mock_app):
+        self._setup_target(mock_app, "Sound1")
+        cue = StopCue(app=mock_app)
+        cue.target_id = "t1"
+
+        cue.action = CueAction.Pause.value
+        assert cue.name == "Fade and Pause 'Sound1'"
+
+        cue.action = CueAction.Interrupt.value
+        assert cue.name == "Fade and Interrupt 'Sound1'"
+
+    def test_name_reverts_when_target_cleared(self, mock_app):
+        self._setup_target(mock_app, "Sound1")
+        cue = StopCue(app=mock_app)
+        cue.target_id = "t1"
+        assert cue.name.startswith("Fade and Stop")
+
+        cue.target_id = ""
+        assert cue.name == "Fade & Stop"
+
+    def test_name_reverts_when_target_missing(self, mock_app):
+        """cue_model.get returns None for an unknown target → fallback."""
+        mock_app.cue_model.get = lambda _cid: None
+        cue = StopCue(app=mock_app)
+        cue.target_id = "does-not-exist"
+        assert cue.name == "Fade & Stop"
+
+    def test_setting_name_directly_does_not_recurse(self, mock_app):
+        """The auto-rename handler must not trigger on its own name
+        write — otherwise property_changed → handler → set name →
+        property_changed → ... blows the stack."""
+        self._setup_target(mock_app, "Sound1")
+        cue = StopCue(app=mock_app)
+        cue.target_id = "t1"
+        # If recursion happened, this would hit the recursion limit.
+        cue.name = "manual override"
+        assert cue.name == "manual override"
+
+    def test_custom_name_preserved_after_action_change(self, mock_app):
+        """Once the user customises the name, further target/action
+        changes must not overwrite it."""
+        self._setup_target(mock_app, "Sound1")
+        cue = StopCue(app=mock_app)
+        cue.target_id = "t1"
+        cue.name = "My Custom Label"
+
+        cue.action = CueAction.Pause.value
+
+        assert cue.name == "My Custom Label"
+
+    def test_custom_name_survives_session_round_trip(self, mock_app):
+        """A saved cue with a user-customised name must reload with
+        that name intact — `update_properties` sets target_id and
+        action, which would otherwise overwrite the loaded name via
+        the auto-derive handler."""
+        self._setup_target(mock_app, "Sound1")
+
+        saved = {
+            "name": "My Custom Label",
+            "target_id": "t1",
+            "action": CueAction.Pause.value,
+            "duration": 2500,
+            "fade_type": "Linear",
+        }
+
+        restored = StopCue(app=mock_app)
+        restored.update_properties(saved)
+
+        assert restored.name == "My Custom Label"
+
+    def test_auto_name_survives_session_round_trip(self, mock_app):
+        """A saved cue whose name IS the auto-derived value must
+        reload with auto-management still active — further action
+        changes after load should continue to re-derive."""
+        self._setup_target(mock_app, "Sound1")
+
+        saved = {
+            "name": "Fade and Stop 'Sound1'",
+            "target_id": "t1",
+            "action": CueAction.Stop.value,
+            "duration": 1000,
+            "fade_type": "Linear",
+        }
+
+        restored = StopCue(app=mock_app)
+        restored.update_properties(saved)
+
+        assert restored.name == "Fade and Stop 'Sound1'"
+
+        # Changing action after load should re-derive (auto still on).
+        restored.action = CueAction.Pause.value
+        assert restored.name == "Fade and Pause 'Sound1'"
+
+
 class TestFadeThenAction:
     def _setup(self, mock_app, target_id="t1"):
         from lisp.cues.cue import CueState
@@ -406,16 +524,18 @@ class TestStopCueSettings:
         assert settings["duration"] == 2500
         assert settings["fade_type"] == "Linear"
 
-    def test_target_picker_excludes_stop_cues(self, qapp, monkeypatch):
-        """The target picker must not list StopCue instances — a StopCue
-        targeting itself (or any StopCue) has no meaningful semantics:
-        StopCues aren't MediaCues, so the fader set is empty; targeting
-        itself would also recursively trigger the action on itself."""
+    def test_target_picker_excludes_sfr_cues(self, qapp, monkeypatch):
+        """The target picker must not list StopCue or ResumeCue instances
+        — targeting another SFR-cue has no useful semantics: they aren't
+        MediaCues, so the fader set would be empty, and the instant path
+        would just re-fire the action on a non-playing target."""
         from lisp.plugins.action_cues.stop_cue import StopCue, StopCueSettings
+        from lisp.plugins.action_cues.resume_cue import ResumeCue
 
-        # Mix of StopCue + non-StopCue in the model
+        # Mix of StopCue + ResumeCue + non-SFR in the model
         other_stop = MagicMock(spec=StopCue)
-        non_stop = MagicMock()
+        other_resume = MagicMock(spec=ResumeCue)
+        non_sfr = MagicMock()
 
         captured = {}
 
@@ -430,7 +550,7 @@ class TestStopCueSettings:
         monkeypatch.setattr(
             "lisp.plugins.action_cues.stop_cue.Application",
             lambda: MagicMock(cue_model=MagicMock(
-                filter=lambda _cls: [other_stop, non_stop],
+                filter=lambda _cls: [other_stop, other_resume, non_sfr],
                 get=lambda _id: None,
             )),
         )
@@ -438,7 +558,8 @@ class TestStopCueSettings:
         StopCueSettings()
 
         assert other_stop not in captured["cues"]
-        assert non_stop in captured["cues"]
+        assert other_resume not in captured["cues"]
+        assert non_sfr in captured["cues"]
 
     def test_registry_association(self):
         from lisp.ui.settings.cue_settings import CueSettingsRegistry
