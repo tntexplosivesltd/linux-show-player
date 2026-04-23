@@ -20,10 +20,18 @@ from PyQt5.QtCore import (
     Qt,
     QDataStream,
     QIODevice,
+    QRect,
     QT_TRANSLATE_NOOP,
     QTimer,
 )
-from PyQt5.QtGui import QKeyEvent, QContextMenuEvent, QBrush, QColor
+from PyQt5.QtGui import (
+    QBrush,
+    QColor,
+    QContextMenuEvent,
+    QKeyEvent,
+    QPainter,
+    QPen,
+)
 from PyQt5.QtWidgets import QTreeWidget, QHeaderView, QTreeWidgetItem
 
 from lisp.application import Application
@@ -95,6 +103,15 @@ class CueListView(QTreeWidget):
 
     ITEM_DEFAULT_BG = QBrush(Qt.transparent)
     ITEM_CURRENT_BG = QBrush(QColor(250, 220, 0, 100))
+
+    GROUP_OUTLINE_WIDTH = 2
+    GROUP_OUTLINE_RADIUS = 4
+    GROUP_OUTLINE_PARALLEL = QColor(76, 175, 80, 200)
+    GROUP_OUTLINE_PLAYLIST = QColor(255, 152, 0, 200)
+    GROUP_OUTLINE_COLORS = {
+        "parallel": GROUP_OUTLINE_PARALLEL,
+        "playlist": GROUP_OUTLINE_PLAYLIST,
+    }
 
     def __init__(self, listModel, parent=None):
         """
