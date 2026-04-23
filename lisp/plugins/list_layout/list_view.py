@@ -290,6 +290,29 @@ class CueListView(QTreeWidget):
             return -1
         return item.cue.index
 
+    def _groupOutlineRect(self, group_item):
+        """Paint rect for a group's outline, or None if off-screen.
+
+        When expanded, spans the group header and the last visible
+        child. When collapsed (or childless), spans just the header.
+        The rect is inset so the stroke sits fully inside the cell
+        edges rather than straddling them.
+        """
+        header = self.visualItemRect(group_item)
+        if header.isEmpty():
+            return None
+
+        rect = QRect(header)
+        if group_item.isExpanded() and group_item.childCount() > 0:
+            last_child = group_item.child(group_item.childCount() - 1)
+            child_rect = self.visualItemRect(last_child)
+            if not child_rect.isEmpty():
+                rect = rect.united(child_rect)
+
+        inset = self.GROUP_OUTLINE_WIDTH // 2 + 1
+        rect.adjust(inset, inset, -inset, -inset)
+        return rect
+
     def iterAllItems(self):
         """Yield all items in visual order (groups then children
         interleaved)."""
