@@ -155,13 +155,17 @@ class StopCueSettings(SettingsPage):
         self.layout().setSpacing(6)
 
         self.cue_id = ""
-        # Exclude StopCues from the target picker — a StopCue targeting
-        # itself (or another StopCue) has no useful semantics: StopCue
-        # isn't a MediaCue, so no faders would be collected, and the
-        # cascade would just re-dispatch the action onto a non-playing
-        # target.
+        # Exclude StopCues and ResumeCues from the target picker —
+        # targeting another SFR-cue has no useful semantics: they aren't
+        # MediaCues, no faders would be collected, and the instant path
+        # would just re-fire the configured action on a non-playing
+        # target. Symmetric with ResumeCueSettings' exclusion.
+        from lisp.plugins.action_cues.resume_cue import ResumeCue
         all_cues = Application().cue_model.filter(Cue)
-        targets = [c for c in all_cues if not isinstance(c, StopCue)]
+        targets = [
+            c for c in all_cues
+            if not isinstance(c, (StopCue, ResumeCue))
+        ]
         self.cueDialog = CueSelectDialog(cues=targets, parent=self)
 
         # Combined Target + Action group: cue picker on the left, action

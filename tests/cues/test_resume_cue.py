@@ -519,6 +519,107 @@ class TestAbort:
         assert cue.__stop__() is True
 
 
+class TestCurrentTime:
+    def test_no_runner_returns_zero(self, mock_app):
+        cue = ResumeCue(app=mock_app)
+        assert cue._runner is None
+        assert cue.current_time() == 0
+
+    def test_delegates_to_runner(self, mock_app):
+        cue = ResumeCue(app=mock_app)
+        cue._runner = MagicMock()
+        cue._runner.current_time.return_value = 1250
+
+        assert cue.current_time() == 1250
+
+
+class TestSessionRoundTrip:
+    """All configured properties must survive a session save/load cycle —
+    symmetric with Part 1's StopCue coverage."""
+
+    def test_round_trip_preserves_all_configured_properties(self, mock_app):
+        cue = ResumeCue(app=mock_app)
+        cue.target_id = "abc-123"
+        cue.duration = 2500
+        cue.fade_type = "Quadratic"
+
+        dumped = cue.properties()
+
+        assert dumped["target_id"] == "abc-123"
+        assert dumped["duration"] == 2500
+        assert dumped["fade_type"] == "Quadratic"
+
+        restored = ResumeCue(app=mock_app)
+        restored.update_properties(dumped)
+
+        assert restored.target_id == "abc-123"
+        assert restored.duration == 2500
+        assert restored.fade_type == "Quadratic"
+
+
+class TestMixedStateGroup:
+    """Spec-stated expectation: paused children fade cleanly, stopped
+    children are not zeroed. Regression test to prevent a silent
+    change in `collect_live_faders` defaults from breaking it."""
+
+    def test_stopped_child_is_not_zeroed(self, mock_app, monkeypatch):
+        from lisp.plugins.action_cues.group_cue import GroupCue
+
+        def _make_child(cid, state):
+            vol_fader = MagicMock()
+            vol_fader.target = MagicMock()
+            vol_fader.attribute = "live_volume"
+            vol_el = MagicMock()
+            vol_el.get_fader.return_value = vol_fader
+            child = MagicMock(spec=MediaCue)
+            child.id = cid
+            child.state = state
+            child.media = MagicMock()
+            child.media.element = lambda n: vol_el if n == "Volume" else None
+            return child, vol_fader
+
+        paused_a, paused_a_fader = _make_child("a", CueState.Pause)
+        paused_b, paused_b_fader = _make_child("b", CueState.Pause)
+        stopped, stopped_fader = _make_child("c", CueState.Stop)
+
+        group = MagicMock(spec=GroupCue)
+        group.id = "g"
+        group.state = CueState.Pause
+        group._resolve_children.return_value = [paused_a, paused_b, stopped]
+        mock_app.cue_model.get.return_value = group
+
+        fake_runner = MagicMock()
+        fake_runner.run_until_complete.return_value = True
+        monkeypatch.setattr(
+            "lisp.plugins.action_cues.resume_cue.ParallelFadeRunner",
+            MagicMock(return_value=fake_runner),
+        )
+        _patch_async_function_synchronous(monkeypatch)
+
+        zero_targets = []
+
+        def record_zero(obj, attr, val):
+            zero_targets.append(obj)
+        monkeypatch.setattr(
+            "lisp.plugins.action_cues.resume_cue.rsetattr", record_zero,
+        )
+
+        cue = ResumeCue(app=mock_app)
+        cue.target_id = group.id
+        cue.duration = 500
+
+        cue.__start__()
+
+        # The two paused children get zeroed, the stopped one does not.
+        assert len(zero_targets) == 2, (
+            f"expected 2 zero calls (paused children only), "
+            f"got {len(zero_targets)}"
+        )
+        assert paused_a_fader.target in zero_targets
+        assert paused_b_fader.target in zero_targets
+        assert stopped_fader.target not in zero_targets
+
+
 import pytest
 
 

@@ -406,16 +406,18 @@ class TestStopCueSettings:
         assert settings["duration"] == 2500
         assert settings["fade_type"] == "Linear"
 
-    def test_target_picker_excludes_stop_cues(self, qapp, monkeypatch):
-        """The target picker must not list StopCue instances — a StopCue
-        targeting itself (or any StopCue) has no meaningful semantics:
-        StopCues aren't MediaCues, so the fader set is empty; targeting
-        itself would also recursively trigger the action on itself."""
+    def test_target_picker_excludes_sfr_cues(self, qapp, monkeypatch):
+        """The target picker must not list StopCue or ResumeCue instances
+        — targeting another SFR-cue has no useful semantics: they aren't
+        MediaCues, so the fader set would be empty, and the instant path
+        would just re-fire the action on a non-playing target."""
         from lisp.plugins.action_cues.stop_cue import StopCue, StopCueSettings
+        from lisp.plugins.action_cues.resume_cue import ResumeCue
 
-        # Mix of StopCue + non-StopCue in the model
+        # Mix of StopCue + ResumeCue + non-SFR in the model
         other_stop = MagicMock(spec=StopCue)
-        non_stop = MagicMock()
+        other_resume = MagicMock(spec=ResumeCue)
+        non_sfr = MagicMock()
 
         captured = {}
 
@@ -430,7 +432,7 @@ class TestStopCueSettings:
         monkeypatch.setattr(
             "lisp.plugins.action_cues.stop_cue.Application",
             lambda: MagicMock(cue_model=MagicMock(
-                filter=lambda _cls: [other_stop, non_stop],
+                filter=lambda _cls: [other_stop, other_resume, non_sfr],
                 get=lambda _id: None,
             )),
         )
@@ -438,7 +440,8 @@ class TestStopCueSettings:
         StopCueSettings()
 
         assert other_stop not in captured["cues"]
-        assert non_stop in captured["cues"]
+        assert other_resume not in captured["cues"]
+        assert non_sfr in captured["cues"]
 
     def test_registry_association(self):
         from lisp.ui.settings.cue_settings import CueSettingsRegistry
