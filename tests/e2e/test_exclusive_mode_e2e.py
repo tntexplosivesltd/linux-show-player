@@ -170,6 +170,54 @@ def test_3_exclusive_flag_toggled_off(t):
     stop_all()
 
 
+def test_5_non_media_cue_not_blocked_by_exclusive(t):
+    """Non-media cue (StopAll) can start while exclusive media cue runs.
+
+    Observable difference from the old behavior: before this change,
+    StopAll would have been blocked and the running exclusive cue
+    would have kept running. Now StopAll fires and stops it.
+    """
+    print(
+        "\n=== Test 5: Non-media cue not blocked by exclusive ===",
+    )
+    stop_all()
+
+    ids = setup_with_tones()
+    A = ids["tone_A"]
+
+    call("cue.set_property", {
+        "id": A, "property": "exclusive", "value": True,
+    })
+    call("cue.execute", {"id": A, "action": "Start"})
+    t.check(
+        "5a: Exclusive A running",
+        wait_state(A, "Running", timeout=5),
+    )
+
+    # Add a non-media StopAll cue and execute it while A is running
+    result = call("cue.add", {
+        "type": "StopAll",
+        "properties": {"name": "StopAll"},
+    })
+    sa_id = result["id"]
+    time.sleep(0.2)
+
+    call("cue.execute", {"id": sa_id, "action": "Start"})
+
+    # If the non-media cue was blocked, A would keep running.
+    # With the new gate, StopAll fires and stops A.
+    t.check(
+        "5b: StopAll was not blocked — exclusive A stopped",
+        wait_state(A, "Stop", timeout=5),
+    )
+
+    # Teardown
+    stop_all()
+    call("cue.set_property", {
+        "id": A, "property": "exclusive", "value": False,
+    })
+
+
 def test_4_non_exclusive_stopped_by_exclusive(t):
     """Non-exclusive cue running; starting exclusive cue stops it first."""
     print(
@@ -249,6 +297,11 @@ def run_tests(t):
         test_4_non_exclusive_stopped_by_exclusive(t)
     except Exception as exc:
         t.check(f"Test 4 error: {exc}", False)
+
+    try:
+        test_5_non_media_cue_not_blocked_by_exclusive(t)
+    except Exception as exc:
+        t.check(f"Test 5 error: {exc}", False)
 
     stop_all()
 
