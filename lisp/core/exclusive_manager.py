@@ -19,6 +19,7 @@ import logging
 import threading
 
 from lisp.cues.cue import CueState
+from lisp.cues.media_cue import MediaCue
 from lisp.ui.widgets.notification import NotificationLevel
 
 logger = logging.getLogger(__name__)
@@ -27,8 +28,10 @@ logger = logging.getLogger(__name__)
 class ExclusiveManager:
     """Enforces exclusive cue playback.
 
-    When a cue with exclusive=True is running, all other cues are
-    blocked from starting until the exclusive cue stops.
+    When a cue with exclusive=True is running, other media cues are
+    blocked from starting until the exclusive cue stops. Non-media
+    cues (command cues, stop-all, MIDI/OSC, etc.) are exempt — the
+    exclusive flag is about audio/video resource contention.
     """
 
     def __init__(self, app):
@@ -39,8 +42,11 @@ class ExclusiveManager:
     def is_start_blocked(self, cue):
         """Return True if the cue should be blocked from starting.
 
-        A cue is blocked if any exclusive cue is currently running.
+        Only media cues participate in exclusive blocking.
         """
+        if not isinstance(cue, MediaCue):
+            return False
+
         with self._lock:
             cues = list(self._cue_model)
 

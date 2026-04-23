@@ -496,7 +496,11 @@ def test_8_exclusive(ids, group_id):
         "value": False,
     })
 
-    # 8b: Exclusive cue blocks group
+    # 8b: Exclusive media cue does NOT block a group start
+    # (groups are non-media; exclusive only blocks other media cues).
+    # Children of the group still get blocked individually because
+    # they are media cues.
+    A, B, C = ids["tone_A"], ids["tone_B"], ids["tone_C"]
     call("cue.set_property", {
         "id": D, "property": "exclusive", "value": True,
     })
@@ -504,9 +508,15 @@ def test_8_exclusive(ids, group_id):
     time.sleep(0.3)
     call("cue.execute", {"id": group_id, "action": "Start"})
     time.sleep(0.3)
-    check("8b: Group blocked by exclusive D",
-          cue_state(group_id) == "Stop")
+    check("8b: Group not blocked by exclusive media D",
+          cue_state(group_id) == "Running")
     check("8b: D still running", cue_state(D) == "Running")
+    check("8b: Child A still blocked by exclusive D",
+          cue_state(A) == "Stop")
+    check("8b: Child B still blocked by exclusive D",
+          cue_state(B) == "Stop")
+    check("8b: Child C still blocked by exclusive D",
+          cue_state(C) == "Stop")
 
     stop_all()
     call("cue.set_property", {
