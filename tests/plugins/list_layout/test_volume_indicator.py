@@ -95,3 +95,106 @@ class TestVolumeIndicatorLabel:
         qtbot.addWidget(label)
 
         assert not label.isVisible()
+
+
+from unittest.mock import MagicMock  # noqa: E402
+
+from lisp.plugins.list_layout.playing_widgets import (  # noqa: E402
+    RunningMediaCueWidget,
+)
+
+
+class _FakeMedia:
+    """Bare media stub that supports ``element(name)`` lookup."""
+
+    def __init__(self, volume_element=None):
+        self._elements = {"Volume": volume_element}
+
+    def element(self, name):
+        return self._elements.get(name)
+
+
+class _FakeMediaCue:
+    def __init__(self, volume_element=None):
+        self.media = _FakeMedia(volume_element=volume_element)
+
+
+def _bare_volume_widget(cue):
+    """Bypass the real ``__init__`` (needs GStreamer) and wire only
+    the attributes the methods under test touch. Mirrors the
+    ``_bare_media_widget`` helper in ``test_playing_widgets.py``.
+    """
+    widget = RunningMediaCueWidget.__new__(RunningMediaCueWidget)
+    widget.cue = cue
+    widget.volumeIndicator = VolumeIndicatorLabel()
+    widget._volume_indicator_requested = False
+    return widget
+
+
+class TestSetVolumeIndicatorVisible:
+    def test_enable_with_volume_element_reveals_label(self, qtbot):
+        fake_vol = MagicMock()
+        fake_vol.live_volume = 1.0
+        cue = _FakeMediaCue(volume_element=fake_vol)
+        widget = _bare_volume_widget(cue)
+        qtbot.addWidget(widget.volumeIndicator)
+
+        widget.set_volume_indicator_visible(True)
+
+        assert widget.volumeIndicator.isVisible()
+        assert widget.volumeIndicator.text() == "+0.0 dB"
+
+    def test_disable_hides_label(self, qtbot):
+        fake_vol = MagicMock()
+        fake_vol.live_volume = 1.0
+        cue = _FakeMediaCue(volume_element=fake_vol)
+        widget = _bare_volume_widget(cue)
+        qtbot.addWidget(widget.volumeIndicator)
+
+        widget.set_volume_indicator_visible(True)
+        widget.set_volume_indicator_visible(False)
+
+        assert not widget.volumeIndicator.isVisible()
+
+    def test_missing_volume_element_keeps_label_hidden(self, qtbot):
+        """User disabled the Volume element in media settings —
+        label hides silently rather than crashing."""
+        cue = _FakeMediaCue(volume_element=None)
+        widget = _bare_volume_widget(cue)
+        qtbot.addWidget(widget.volumeIndicator)
+
+        widget.set_volume_indicator_visible(True)
+
+        assert not widget.volumeIndicator.isVisible()
+
+
+class TestUpdateVolumeLabel:
+    def test_update_reads_live_volume_and_formats(self, qtbot):
+        fake_vol = MagicMock()
+        fake_vol.live_volume = 0.5  # -6.0 dB
+        cue = _FakeMediaCue(volume_element=fake_vol)
+        widget = _bare_volume_widget(cue)
+        qtbot.addWidget(widget.volumeIndicator)
+        widget._volume_indicator_requested = True
+
+        widget._update_volume_label(0)
+
+        assert widget.volumeIndicator.isVisible()
+        assert widget.volumeIndicator.text() == "-6.0 dB"
+
+    def test_update_hides_label_when_element_disappears(self, qtbot):
+        """Element goes from present to None between ticks (e.g.
+        media settings change): label hides, no exception."""
+        fake_vol = MagicMock()
+        fake_vol.live_volume = 1.0
+        cue = _FakeMediaCue(volume_element=fake_vol)
+        widget = _bare_volume_widget(cue)
+        qtbot.addWidget(widget.volumeIndicator)
+
+        widget.set_volume_indicator_visible(True)
+        assert widget.volumeIndicator.isVisible()
+
+        cue.media._elements["Volume"] = None
+        widget._update_volume_label(0)
+
+        assert not widget.volumeIndicator.isVisible()

@@ -363,6 +363,18 @@ class RunningMediaCueWidget(RunningCueWidget):
         vbox.addWidget(self.timeDisplay)
         self.gridLayout.addWidget(self._timeVolumeCell, 1, 1)
 
+        # Track the layout-level visibility request separately from
+        # Qt's isVisible() so cues with no Volume element stay hidden
+        # without losing the operator's enabled state between ticks.
+        self._volume_indicator_requested = False
+
+        # Piggy-back on CueTime's 30 Hz Clock_33 — active only while
+        # the cue is playing, auto-stops on pause/stop/end/error.
+        # Matches the existing connection type for _time_updated.
+        self.cue_time.notify.connect(
+            self._update_volume_label, Connection.QtQueued
+        )
+
     def updateSize(self, width):
         self.resize(width, int(width / 2.75))
 
@@ -395,6 +407,41 @@ class RunningMediaCueWidget(RunningCueWidget):
             self.gridLayout.setColumnStretch(2, 0)
 
         self.dbmeter.setVisible(visible)
+
+    def _update_volume_label(self, _time_ms):
+        """Pull current Volume.live_volume and refresh the label.
+
+        Connected to CueTime.notify; the time argument is unused.
+        The Volume element is looked up fresh on every call rather
+        than cached — if the user toggles the element off in media
+        settings (or media is reloaded), the lookup returns None
+        and we silently hide the label. Re-enabling flips it back
+        on at the next tick.
+        """
+        element = self.cue.media.element("Volume")
+        if element is None:
+            self.volumeIndicator.setVisible(False)
+            return
+
+        if self._volume_indicator_requested:
+            self.volumeIndicator.setVisible(True)
+        self.volumeIndicator.setVolumeLinear(element.live_volume)
+
+    def set_volume_indicator_visible(self, visible):
+        """Apply the layout-level toggle to this widget.
+
+        When enabled, the label starts rendering on the next
+        CueTime.notify tick. We also paint once synchronously so a
+        freshly-revealed label does not flash empty before the first
+        tick (and so paused/not-yet-started cues still show their
+        configured volume).
+        """
+        self._volume_indicator_requested = visible
+        if not visible:
+            self.volumeIndicator.setVisible(False)
+            return
+
+        self._update_volume_label(0)
 
     def _seek(self, position):
         self.cue.media.seek(position)
