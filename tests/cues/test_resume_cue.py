@@ -452,3 +452,42 @@ class TestPausedHappyPath:
 
         target.execute.assert_called_once_with(CueAction.Resume)
         assert result is False  # no async work scheduled
+
+
+class TestPausedDurationZero:
+    def test_paused_duration_zero_skips_zero_step(self, mock_app, monkeypatch):
+        """duration=0 on a paused target: no zero step (otherwise silent cue)."""
+        volume_fader = MagicMock()
+        volume_fader.target = MagicMock()
+        volume_fader.attribute = "live_volume"
+
+        volume_el = MagicMock()
+        volume_el.get_fader.return_value = volume_fader
+
+        target = MagicMock(spec=MediaCue)
+        target.id = "t1"
+        target.state = CueState.Pause
+        target.media = MagicMock()
+        target.media.element = lambda n: volume_el if n == "Volume" else None
+        mock_app.cue_model.get.return_value = target
+
+        zero_calls = []
+
+        def record_zero(obj, attr, val):
+            zero_calls.append((obj, attr, val))
+        monkeypatch.setattr(
+            "lisp.plugins.action_cues.resume_cue.rsetattr", record_zero,
+        )
+
+        cue = ResumeCue(app=mock_app)
+        cue.target_id = target.id
+        cue.duration = 0
+
+        result = cue.__start__()
+
+        # Zero step skipped — target resumes at its existing live_volume.
+        assert zero_calls == []
+        # Resume still dispatched.
+        target.execute.assert_called_once_with(CueAction.Resume)
+        # No async work.
+        assert result is False
