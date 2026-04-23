@@ -105,6 +105,40 @@ class _ColorStripe(QWidget):
             self.setVisible(False)
 
 
+class VolumeIndicatorLabel(QLabel):
+    """Compact read-only dB readout for a running MediaCue.
+
+    Displays the cue's current ``Volume.live_volume`` as a signed
+    dB value (e.g. ``-12.3 dB``). Right-aligned monospace text so
+    digits do not jitter horizontally as the value changes — the
+    sign prefix in :func:`_format_db_text` keeps the width stable
+    across zero-crossings.
+
+    Updates are not self-driven — the parent widget calls
+    :meth:`setVolumeLinear` on each tick of ``CueTime.notify``.
+    This keeps the class oblivious to GStreamer and to the pull-
+    vs-push question: it just displays whatever it is told to.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        # Monospace font so digit position does not shift as values
+        # change width on e.g. "+9.9" -> "+10.0".
+        font = self.font()
+        font.setStyleHint(font.Monospace)
+        font.setFamily("monospace")
+        self.setFont(font)
+        self.setVisible(False)
+        # Initial text so layout size hints are stable before the
+        # first real value arrives.
+        self.setText("+0.0 dB")
+
+    def setVolumeLinear(self, linear_volume: float) -> None:
+        self.setText(_format_db_text(linear_volume))
+
+
 def get_running_widget(cue, config, **kwargs):
     if isinstance(cue, MediaCue):
         return RunningMediaCueWidget(cue, config, **kwargs)
@@ -314,6 +348,20 @@ class RunningMediaCueWidget(RunningCueWidget):
         cue.changed("duration").connect(
             self._update_duration, Connection.QtQueued
         )
+
+        # Volume indicator: stacked above timeDisplay in cell (1, 1).
+        # The time LCD has ample vertical headroom, so we reclaim a
+        # single-line strip at the top of its cell for a compact dB
+        # readout. Name row and seek-slider row are untouched.
+        self.volumeIndicator = VolumeIndicatorLabel(self.gridLayoutWidget)
+        self.gridLayout.removeWidget(self.timeDisplay)
+        self._timeVolumeCell = QWidget(self.gridLayoutWidget)
+        vbox = QVBoxLayout(self._timeVolumeCell)
+        vbox.setContentsMargins(0, 0, 0, 0)
+        vbox.setSpacing(0)
+        vbox.addWidget(self.volumeIndicator)
+        vbox.addWidget(self.timeDisplay)
+        self.gridLayout.addWidget(self._timeVolumeCell, 1, 1)
 
     def updateSize(self, width):
         self.resize(width, int(width / 2.75))

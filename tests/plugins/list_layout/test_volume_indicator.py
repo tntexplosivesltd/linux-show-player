@@ -19,7 +19,10 @@
 
 import pytest
 
-from lisp.plugins.list_layout.playing_widgets import _format_db_text
+from lisp.plugins.list_layout.playing_widgets import (
+    _format_db_text,
+    VolumeIndicatorLabel,
+)
 
 
 class TestFormatDbText:
@@ -57,3 +60,38 @@ class TestFormatDbText:
         horizontally by one character as volume crosses 0 dB.
         """
         assert len(_format_db_text(1.0)) == len(_format_db_text(0.999))
+
+
+class TestVolumeIndicatorLabel:
+    """The label is a dumb display — it takes a linear volume and
+    renders the formatted string. No cue plumbing, no GStreamer."""
+
+    def test_set_volume_linear_formats_unity(self, qtbot):
+        label = VolumeIndicatorLabel()
+        qtbot.addWidget(label)
+
+        label.setVolumeLinear(1.0)
+
+        assert label.text() == "+0.0 dB"
+
+    def test_set_volume_linear_formats_attenuation(self, qtbot):
+        label = VolumeIndicatorLabel()
+        qtbot.addWidget(label)
+
+        label.setVolumeLinear(0.5)
+
+        assert label.text() == "-6.0 dB"
+
+    def test_set_volume_linear_formats_silence(self, qtbot):
+        label = VolumeIndicatorLabel()
+        qtbot.addWidget(label)
+
+        label.setVolumeLinear(0.0)
+
+        assert label.text() == "-∞ dB"
+
+    def test_starts_hidden(self, qtbot):
+        label = VolumeIndicatorLabel()
+        qtbot.addWidget(label)
+
+        assert not label.isVisible()
