@@ -335,6 +335,24 @@ Appended to `manual_group_tests.md`:
 - Multiple StopCues targeting the same cue behave idempotently.
 - Cart layout renders the hibernating icon variant.
 
+## Delivery workflow
+
+- Implementation happens in a **git worktree** off master, per the
+  `superpowers:using-git-worktrees` pattern — keeps the main working
+  tree available while this branch is in flight and avoids polluting
+  it with in-progress state.
+- Branch layout follows the two-stage plan from the icon section:
+  Stage 1 (icon recolour refactor) lands on master first via its own
+  branch and PR; Stage 2 (this spec) branches from the post-merge
+  master.
+- After implementation and passing tests, the branch is reviewed by
+  the `voltagent-qa-sec:qa-expert` subagent (test coverage, edge
+  cases, E2E completeness) and the `voltagent-qa-sec:code-reviewer`
+  subagent (code quality, conventions, bugs) — same review gating
+  used for Parts 1 and 2 (see the roadmap's Part 2 checklist).
+- Findings from either review are addressed on the same branch
+  before merging back to master.
+
 ## Out of scope / future work
 
 - Persisting hibernation (and target pause state) across session
