@@ -70,13 +70,21 @@ class ResumeCue(Cue):
         # on completion/abort. Used by __stop__ to cancel the fade.
         self._runner = None
 
-        # Re-derive `name` when target changes so the cue reads as e.g.
-        # "Fade and Resume 'Sound3'" in the cue list.
+        # Tracks what the auto-rename handler last wrote. If `self.name`
+        # diverges from this, the user has customised it and further
+        # target changes won't overwrite. See StopCue for the symmetric
+        # logic and rationale.
+        self._last_auto_name = self.name
         self.property_changed.connect(self._on_property_changed)
 
     def _on_property_changed(self, _cue, name, _value):
-        if name == "target_id":
-            self.name = self._derive_name()
+        if name != "target_id":
+            return
+        if self.name != self._last_auto_name:
+            return  # user-customised — leave alone
+        new_name = self._derive_name()
+        self.name = new_name
+        self._last_auto_name = new_name
 
     def _derive_name(self):
         """Return a descriptive name based on current target.
@@ -89,6 +97,14 @@ class ResumeCue(Cue):
             return translate("CueName", self.Name)
         verb = translate("CueAction", CueAction.Resume.name)
         return f"Fade and {verb} '{target.name}'"
+
+    def update_properties(self, properties):
+        super().update_properties(properties)
+        # If the loaded name matches what we'd auto-derive now, the
+        # saved name was auto; keep auto-management active. Otherwise
+        # the user customised it — don't touch.
+        if self.name == self._derive_name():
+            self._last_auto_name = self.name
 
     def __start__(self, fade=False):
         target = self.app.cue_model.get(self.target_id)

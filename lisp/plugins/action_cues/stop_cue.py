@@ -66,13 +66,24 @@ class StopCue(Cue):
         # on completion/abort. Used by __stop__ to cancel the fade.
         self._runner = None
 
-        # Re-derive `name` when target or action changes so the cue
-        # reads as e.g. "Fade and Pause 'Sound1'" in the cue list.
+        # Tracks what the auto-rename handler last wrote to `name`.
+        # If `self.name` still matches this value, auto-management is
+        # still "on" and a target/action change re-derives. If it
+        # diverges (user typed a custom label, or a session load set a
+        # non-auto name), we leave it alone.
+        self._last_auto_name = self.name
         self.property_changed.connect(self._on_property_changed)
 
     def _on_property_changed(self, _cue, name, _value):
-        if name in ("target_id", "action"):
-            self.name = self._derive_name()
+        if name not in ("target_id", "action"):
+            return
+        if self.name != self._last_auto_name:
+            # User (or a prior session load) has customised the name —
+            # don't overwrite it.
+            return
+        new_name = self._derive_name()
+        self.name = new_name
+        self._last_auto_name = new_name
 
     def _derive_name(self):
         """Return a descriptive name based on current target + action.
@@ -88,6 +99,17 @@ class StopCue(Cue):
         action = CueAction(self.action)
         verb = translate("CueAction", action.name)
         return f"Fade and {verb} '{target.name}'"
+
+    def update_properties(self, properties):
+        super().update_properties(properties)
+        # Post-load reseed: if the loaded name matches what we'd
+        # auto-derive now (i.e. the saved name was auto), treat
+        # it as still auto-managed so future target/action edits
+        # re-derive. If not, the user customised it — leave
+        # `_last_auto_name` stale so the handler won't touch the
+        # loaded name.
+        if self.name == self._derive_name():
+            self._last_auto_name = self.name
 
     def __start__(self, fade=False):
         target = self.app.cue_model.get(self.target_id)

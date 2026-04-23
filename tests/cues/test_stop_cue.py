@@ -140,6 +140,61 @@ class TestAutoName:
         cue.name = "manual override"
         assert cue.name == "manual override"
 
+    def test_custom_name_preserved_after_action_change(self, mock_app):
+        """Once the user customises the name, further target/action
+        changes must not overwrite it."""
+        self._setup_target(mock_app, "Sound1")
+        cue = StopCue(app=mock_app)
+        cue.target_id = "t1"
+        cue.name = "My Custom Label"
+
+        cue.action = CueAction.Pause.value
+
+        assert cue.name == "My Custom Label"
+
+    def test_custom_name_survives_session_round_trip(self, mock_app):
+        """A saved cue with a user-customised name must reload with
+        that name intact — `update_properties` sets target_id and
+        action, which would otherwise overwrite the loaded name via
+        the auto-derive handler."""
+        self._setup_target(mock_app, "Sound1")
+
+        saved = {
+            "name": "My Custom Label",
+            "target_id": "t1",
+            "action": CueAction.Pause.value,
+            "duration": 2500,
+            "fade_type": "Linear",
+        }
+
+        restored = StopCue(app=mock_app)
+        restored.update_properties(saved)
+
+        assert restored.name == "My Custom Label"
+
+    def test_auto_name_survives_session_round_trip(self, mock_app):
+        """A saved cue whose name IS the auto-derived value must
+        reload with auto-management still active — further action
+        changes after load should continue to re-derive."""
+        self._setup_target(mock_app, "Sound1")
+
+        saved = {
+            "name": "Fade and Stop 'Sound1'",
+            "target_id": "t1",
+            "action": CueAction.Stop.value,
+            "duration": 1000,
+            "fade_type": "Linear",
+        }
+
+        restored = StopCue(app=mock_app)
+        restored.update_properties(saved)
+
+        assert restored.name == "Fade and Stop 'Sound1'"
+
+        # Changing action after load should re-derive (auto still on).
+        restored.action = CueAction.Pause.value
+        assert restored.name == "Fade and Pause 'Sound1'"
+
 
 class TestFadeThenAction:
     def _setup(self, mock_app, target_id="t1"):

@@ -89,6 +89,65 @@ class TestAutoName:
         cue.name = "manual override"
         assert cue.name == "manual override"
 
+    def test_custom_name_preserved_after_target_change(self, mock_app):
+        """Once the user customises the name, a later target change
+        must not overwrite it."""
+        target_a = MagicMock()
+        target_a.name = "Sound3"
+        target_b = MagicMock()
+        target_b.name = "Sound4"
+        targets = {"t1": target_a, "t2": target_b}
+        mock_app.cue_model.get = lambda cid: targets.get(cid)
+
+        cue = ResumeCue(app=mock_app)
+        cue.target_id = "t1"
+        cue.name = "My Custom Label"
+
+        cue.target_id = "t2"
+
+        assert cue.name == "My Custom Label"
+
+    def test_custom_name_survives_session_round_trip(self, mock_app):
+        """Saved cue with a user-customised name reloads intact."""
+        self._setup_target(mock_app, "Sound3")
+
+        saved = {
+            "name": "My Custom Label",
+            "target_id": "t1",
+            "duration": 500,
+            "fade_type": "Linear",
+        }
+
+        restored = ResumeCue(app=mock_app)
+        restored.update_properties(saved)
+
+        assert restored.name == "My Custom Label"
+
+    def test_auto_name_survives_session_round_trip(self, mock_app):
+        """Saved auto-name reloads + auto-management stays active."""
+        target_a = MagicMock()
+        target_a.name = "Sound3"
+        target_b = MagicMock()
+        target_b.name = "Sound4"
+        targets = {"t1": target_a, "t2": target_b}
+        mock_app.cue_model.get = lambda cid: targets.get(cid)
+
+        saved = {
+            "name": "Fade and Resume 'Sound3'",
+            "target_id": "t1",
+            "duration": 500,
+            "fade_type": "Linear",
+        }
+
+        restored = ResumeCue(app=mock_app)
+        restored.update_properties(saved)
+
+        assert restored.name == "Fade and Resume 'Sound3'"
+
+        # Target change after load should re-derive.
+        restored.target_id = "t2"
+        assert restored.name == "Fade and Resume 'Sound4'"
+
 
 class TestTargetResolution:
     def test_missing_target_logs_and_errors(self, mock_app, caplog):
