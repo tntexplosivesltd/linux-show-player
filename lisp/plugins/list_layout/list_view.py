@@ -239,6 +239,38 @@ class CueListView(QTreeWidget):
         super().resizeEvent(event)
         self.updateHeadersSizes()
 
+    def paintEvent(self, event):
+        super().paintEvent(event)
+
+        if not self._group_items:
+            return
+
+        painter = QPainter(self.viewport())
+        painter.setRenderHint(QPainter.Antialiasing)
+        pen = QPen()
+        pen.setWidth(self.GROUP_OUTLINE_WIDTH)
+
+        viewport_rect = self.viewport().rect()
+        for group_item in self._group_items.values():
+            color = self.GROUP_OUTLINE_COLORS.get(
+                group_item.cue.group_mode
+            )
+            if color is None:
+                continue
+
+            rect = self._groupOutlineRect(group_item)
+            if rect is None or not rect.intersects(viewport_rect):
+                continue
+
+            pen.setColor(color)
+            painter.setPen(pen)
+            painter.setBrush(Qt.NoBrush)
+            painter.drawRoundedRect(
+                rect,
+                self.GROUP_OUTLINE_RADIUS,
+                self.GROUP_OUTLINE_RADIUS,
+            )
+
     def standbyIndex(self):
         return self.cueIndexOf(self.currentItem())
 

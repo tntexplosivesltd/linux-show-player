@@ -148,3 +148,47 @@ class TestGroupOutlineRect:
 
         assert rect is not None
         assert abs(rect.height() - header_rect.height()) <= 5
+
+
+class TestGroupOutlinePaint:
+    """paintEvent must not raise when a group is visible."""
+
+    def test_paint_with_parallel_group_does_not_crash(
+        self, qapp, qtbot, mock_app,
+    ):
+        view, group_item = _build_view_with_group(
+            mock_app, child_count=2, group_mode="parallel",
+        )
+        group_item.setExpanded(True)
+        view.resize(600, 400)
+        qtbot.addWidget(view)
+        view.show()
+        qtbot.waitExposed(view)
+
+        # Force a repaint. If paintEvent raises, this crashes the test.
+        view.viewport().repaint()
+
+    def test_paint_with_unknown_mode_does_not_crash(
+        self, qapp, qtbot, mock_app,
+    ):
+        """Groups with modes outside the colour map must not break paint."""
+        view, group_item = _build_view_with_group(mock_app, child_count=1)
+        group_item.cue.group_mode = "future_mode_xyz"
+        view.resize(600, 400)
+        qtbot.addWidget(view)
+        view.show()
+        qtbot.waitExposed(view)
+
+        view.viewport().repaint()
+
+    def test_paint_with_collapsed_group_does_not_crash(
+        self, qapp, qtbot, mock_app,
+    ):
+        view, group_item = _build_view_with_group(mock_app, child_count=3)
+        group_item.setExpanded(False)
+        view.resize(600, 400)
+        qtbot.addWidget(view)
+        view.show()
+        qtbot.waitExposed(view)
+
+        view.viewport().repaint()
