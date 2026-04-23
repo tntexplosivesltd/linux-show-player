@@ -295,9 +295,12 @@ class CueGeneralSettingsPage(CueSettingsPage):
         self.fadeOutGroup.setTitle(translate("FadeSettings", "Fade Out"))
         self.exclusiveGroup.setTitle(translate("CueSettings", "Exclusive"))
         self.exclusiveCheckBox.setText(
+            translate("CueSettings", "Cue is exclusive")
+        )
+        self.exclusiveCheckBox.setToolTip(
             translate(
                 "CueSettings",
-                "While playing, prevent other cues from starting",
+                "While playing, prevent other media cues from starting",
             )
         )
 
