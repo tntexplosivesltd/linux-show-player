@@ -233,3 +233,222 @@ class TestRunningFallback:
         cue.__start__()
 
         target.execute.assert_not_called()
+
+
+class TestPausedHappyPath:
+    def _build_paused_media(self, mock_app, with_alpha=False):
+        """Mock a paused MediaCue with volume (and optionally alpha) faders."""
+        volume_fader = MagicMock(name="volume_fader")
+        volume_fader.target = MagicMock()
+        volume_fader.attribute = "live_volume"
+
+        volume_el = MagicMock(name="volume_el")
+        volume_el.get_fader.return_value = volume_fader
+
+        alpha_fader = None
+        alpha_el = None
+        if with_alpha:
+            alpha_fader = MagicMock(name="alpha_fader")
+            alpha_fader.target = MagicMock()
+            alpha_fader.attribute = "live_alpha"
+
+            alpha_el = MagicMock(name="alpha_el")
+            alpha_el.get_fader.return_value = alpha_fader
+
+        target = MagicMock(spec=MediaCue)
+        target.id = "t1"
+        target.state = CueState.Pause
+        target.media = MagicMock()
+        target.media.element = lambda n: {
+            "Volume": volume_el, "VideoAlpha": alpha_el,
+        }.get(n)
+        mock_app.cue_model.get.return_value = target
+
+        return target, volume_fader, alpha_fader
+
+    def test_paused_zero_then_resume_then_fade(self, mock_app, monkeypatch):
+        """Happy path: zero live_volume, dispatch Resume, start runner."""
+        target, vol_fader, _ = self._build_paused_media(mock_app)
+
+        fake_runner = MagicMock()
+        fake_runner.run_until_complete.return_value = True
+        runner_cls = MagicMock()
+
+        call_order = []
+
+        def fake_rsetattr(obj, attr, value):
+            call_order.append(("zero", obj, attr, value))
+        monkeypatch.setattr(
+            "lisp.plugins.action_cues.resume_cue.rsetattr", fake_rsetattr,
+        )
+
+        def fake_execute(action):
+            call_order.append(("resume", action))
+        target.execute.side_effect = fake_execute
+
+        def fake_runner_init(*args, **kwargs):
+            call_order.append(("runner_built",))
+            return fake_runner
+        runner_cls.side_effect = fake_runner_init
+        monkeypatch.setattr(
+            "lisp.plugins.action_cues.resume_cue.ParallelFadeRunner",
+            runner_cls,
+        )
+        _patch_async_function_synchronous(monkeypatch)
+
+        cue = ResumeCue(app=mock_app)
+        cue.target_id = target.id
+        cue.duration = 500
+
+        result = cue.__start__()
+
+        assert result is True
+        # Zero was called before resume, resume before runner construction.
+        kinds = [c[0] for c in call_order]
+        assert kinds == ["zero", "resume", "runner_built"], kinds
+        zero_call = call_order[0]
+        assert zero_call[1] is vol_fader.target
+        assert zero_call[2] == "live_volume"
+        assert zero_call[3] == 0.0
+        assert call_order[1] == ("resume", CueAction.Resume)
+        fake_runner.run_until_complete.assert_called_once()
+
+    def test_paused_zeros_both_volume_and_alpha(self, mock_app, monkeypatch):
+        """VideoAlpha and Volume both zeroed when present."""
+        target, vol_fader, alpha_fader = self._build_paused_media(
+            mock_app, with_alpha=True,
+        )
+
+        fake_runner = MagicMock()
+        fake_runner.run_until_complete.return_value = True
+        monkeypatch.setattr(
+            "lisp.plugins.action_cues.resume_cue.ParallelFadeRunner",
+            MagicMock(return_value=fake_runner),
+        )
+        _patch_async_function_synchronous(monkeypatch)
+
+        zero_calls = []
+
+        def record_zero(obj, attr, val):
+            zero_calls.append((obj, attr, val))
+        monkeypatch.setattr(
+            "lisp.plugins.action_cues.resume_cue.rsetattr", record_zero,
+        )
+
+        cue = ResumeCue(app=mock_app)
+        cue.target_id = target.id
+        cue.duration = 500
+
+        cue.__start__()
+
+        assert len(zero_calls) == 2
+        targets = [c[0] for c in zero_calls]
+        attrs = [c[1] for c in zero_calls]
+        vals = [c[2] for c in zero_calls]
+        assert vol_fader.target in targets
+        assert alpha_fader.target in targets
+        assert set(attrs) == {"live_volume", "live_alpha"}
+        assert vals == [0.0, 0.0]
+
+    def test_paused_runner_targets_1_0_with_fade_in_curve(self, mock_app,
+                                                         monkeypatch):
+        """Runner is built with to_value=1.0 and FadeInType from property."""
+        target, _, _ = self._build_paused_media(mock_app)
+
+        runner_cls = MagicMock()
+        fake_runner = MagicMock()
+        fake_runner.run_until_complete.return_value = True
+        runner_cls.return_value = fake_runner
+        monkeypatch.setattr(
+            "lisp.plugins.action_cues.resume_cue.ParallelFadeRunner",
+            runner_cls,
+        )
+        _patch_async_function_synchronous(monkeypatch)
+
+        def noop_rsetattr(*a, **kw):
+            pass
+        monkeypatch.setattr(
+            "lisp.plugins.action_cues.resume_cue.rsetattr", noop_rsetattr,
+        )
+
+        cue = ResumeCue(app=mock_app)
+        cue.target_id = target.id
+        cue.duration = 1500
+        cue.fade_type = "Quadratic"
+
+        cue.__start__()
+
+        runner_cls.assert_called_once()
+        kwargs = runner_cls.call_args.kwargs
+        assert kwargs["to_value"] == 1.0
+        assert kwargs["curve"] == FadeInType.Quadratic
+        assert kwargs["duration_seconds"] == 1.5
+
+    def test_paused_group_cascade_single_resume_dispatch(self, mock_app,
+                                                        monkeypatch):
+        """GroupCue target: Resume dispatched once on the group, not per child."""
+        from lisp.plugins.action_cues.group_cue import GroupCue
+
+        def _make_child(cid):
+            vol_fader = MagicMock()
+            vol_fader.target = MagicMock()
+            vol_fader.attribute = "live_volume"
+            vol_el = MagicMock()
+            vol_el.get_fader.return_value = vol_fader
+            child = MagicMock(spec=MediaCue)
+            child.id = cid
+            child.state = CueState.Pause
+            child.media = MagicMock()
+            child.media.element = lambda n: vol_el if n == "Volume" else None
+            return child, vol_fader
+
+        child_a, _ = _make_child("a")
+        child_b, _ = _make_child("b")
+
+        group = MagicMock(spec=GroupCue)
+        group.id = "g"
+        group.state = CueState.Pause
+        group._resolve_children.return_value = [child_a, child_b]
+        mock_app.cue_model.get.return_value = group
+
+        fake_runner = MagicMock()
+        fake_runner.run_until_complete.return_value = True
+        monkeypatch.setattr(
+            "lisp.plugins.action_cues.resume_cue.ParallelFadeRunner",
+            MagicMock(return_value=fake_runner),
+        )
+        _patch_async_function_synchronous(monkeypatch)
+
+        def noop_rsetattr(*a, **kw):
+            pass
+        monkeypatch.setattr(
+            "lisp.plugins.action_cues.resume_cue.rsetattr", noop_rsetattr,
+        )
+
+        cue = ResumeCue(app=mock_app)
+        cue.target_id = group.id
+        cue.duration = 500
+
+        cue.__start__()
+
+        group.execute.assert_called_once_with(CueAction.Resume)
+        child_a.execute.assert_not_called()
+        child_b.execute.assert_not_called()
+
+    def test_paused_no_faders_dispatches_resume_without_fade(self, mock_app):
+        """Non-media or no-volume paused target: Resume dispatched, no fade."""
+        target = MagicMock(spec=MediaCue)
+        target.id = "t1"
+        target.state = CueState.Pause
+        target.media = MagicMock()
+        target.media.element.return_value = None
+        mock_app.cue_model.get.return_value = target
+
+        cue = ResumeCue(app=mock_app)
+        cue.target_id = target.id
+        cue.duration = 500
+
+        result = cue.__start__()
+
+        target.execute.assert_called_once_with(CueAction.Resume)
+        assert result is False  # no async work scheduled

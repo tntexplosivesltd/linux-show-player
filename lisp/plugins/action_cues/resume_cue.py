@@ -81,8 +81,36 @@ class ResumeCue(Cue):
         return False
 
     def _paused_path(self, target):
-        # Implemented in Task 5.
-        return False
+        """Target is Paused — zero faders, Resume, fade back up to 1.0."""
+        affected = build_affected_set(target)
+        faders = collect_live_faders(
+            affected, states=CueState.Pause | CueState.IsRunning,
+        )
+
+        will_fade = self.duration > 0 and faders
+
+        if will_fade:
+            # Zero each fader's live property synchronously BEFORE dispatching
+            # Resume, so the GStreamer pipeline reads gain=0 for the first
+            # samples post-Resume. Prevents pops regardless of how the
+            # target was paused (e.g. a plain Pause rather than a prior
+            # Fade & Stop).
+            for fader in faders:
+                rsetattr(fader.target, fader.attribute, 0.0)
+
+        target.execute(CueAction.Resume)
+
+        if not will_fade:
+            return False
+
+        self._runner = ParallelFadeRunner(
+            faders=faders,
+            to_value=1.0,
+            curve=FadeInType[self.fade_type],
+            duration_seconds=self.duration / 1000,
+        )
+        self._run_fade(target=target)
+        return True
 
     def _running_fallback(self, target):
         """Target is already running — fade faders up to 1.0, no Resume."""
