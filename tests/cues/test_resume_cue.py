@@ -491,3 +491,29 @@ class TestPausedDurationZero:
         target.execute.assert_called_once_with(CueAction.Resume)
         # No async work.
         assert result is False
+
+
+class TestAbort:
+    def test_stop_aborts_runner_when_present(self, mock_app):
+        cue = ResumeCue(app=mock_app)
+        cue._runner = MagicMock()
+
+        result = cue.__stop__()
+
+        cue._runner.abort.assert_called_once()
+        assert result is True
+
+    def test_interrupt_aborts_runner_when_present(self, mock_app):
+        cue = ResumeCue(app=mock_app)
+        runner = MagicMock()
+        cue._runner = runner
+
+        cue.__interrupt__()
+
+        runner.abort.assert_called_once()
+
+    def test_stop_without_runner_is_safe(self, mock_app):
+        """No in-flight fade: __stop__ must not crash."""
+        cue = ResumeCue(app=mock_app)
+        assert cue._runner is None
+        assert cue.__stop__() is True
