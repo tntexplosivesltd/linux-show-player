@@ -20,13 +20,16 @@ from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QWidget,
     QGridLayout,
+    QLabel,
     QSizePolicy,
     QLCDNumber,
     QHBoxLayout,
+    QVBoxLayout,
 )
 from qdigitalmeter import QDigitalMeter
 
 from lisp.backend import get_backend
+from lisp.backend.audio_utils import MIN_VOLUME_DB, linear_to_db
 from lisp.core.signal import Connection
 from lisp.core.util import strtime
 from lisp.cues.cue import CueAction
@@ -37,6 +40,21 @@ from lisp.ui.ui_utils import css_to_dict
 from lisp.ui.widgets import QClickSlider
 from lisp.ui.widgets.elidedlabel import ElidedLabel
 from lisp.ui.widgets.waveform import WaveformSlider
+
+
+def _format_db_text(linear_volume: float) -> str:
+    """Format a linear volume value (0.0-10.0) as a dB-string.
+
+    Silence (linear <= MIN_VOLUME) renders as "-∞ dB" rather than the
+    raw -144 sentinel — matches audio-software convention and avoids
+    a visually noisy magic number on a fully faded cue. The sign
+    prefix is always explicit (+/-) so the label's text width is
+    stable as the value crosses 0 dB.
+    """
+    db = linear_to_db(linear_volume)
+    if db <= MIN_VOLUME_DB:
+        return "-∞ dB"
+    return f"{db:+.1f} dB"
 
 
 class _ColorStripe(QWidget):
