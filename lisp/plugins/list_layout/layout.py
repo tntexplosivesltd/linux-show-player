@@ -56,6 +56,7 @@ class ListLayout(CueLayout):
 
     auto_continue = ProxyProperty()
     dbmeters_visible = ProxyProperty()
+    volume_indicators_visible = ProxyProperty()
     seek_sliders_visible = ProxyProperty()
     index_column_visible = ProxyProperty()
     accurate_time = ProxyProperty()
@@ -110,6 +111,13 @@ class ListLayout(CueLayout):
         self.show_dbmeter_action.setCheckable(True)
         self.show_dbmeter_action.triggered.connect(self._set_dbmeters_visible)
         layout_menu.addAction(self.show_dbmeter_action)
+
+        self.show_volume_indicator_action = QAction(layout_menu)
+        self.show_volume_indicator_action.setCheckable(True)
+        self.show_volume_indicator_action.triggered.connect(
+            self._set_volume_indicators_visible
+        )
+        layout_menu.addAction(self.show_volume_indicator_action)
 
         self.show_seek_action = QAction(layout_menu)
         self.show_seek_action.setCheckable(True)
@@ -179,6 +187,9 @@ class ListLayout(CueLayout):
         self._set_seeksliders_visible(ListLayout.Config["show.seekSliders"])
         self._set_accurate_time(ListLayout.Config["show.accurateTime"])
         self._set_dbmeters_visible(ListLayout.Config["show.dBMeters"])
+        self._set_volume_indicators_visible(
+            ListLayout.Config["show.volumeIndicators"]
+        )
         self._set_index_visible(ListLayout.Config["show.indexColumn"])
         self._set_selection_mode(ListLayout.Config["selectionMode"])
         self._set_auto_continue(ListLayout.Config["autoContinue"])
@@ -234,6 +245,9 @@ class ListLayout(CueLayout):
     def retranslate(self):
         self.show_dbmeter_action.setText(
             translate("ListLayout", "Show dB-meters")
+        )
+        self.show_volume_indicator_action.setText(
+            translate("ListLayout", "Show volume indicators")
         )
         self.show_seek_action.setText(translate("ListLayout", "Show seek-bars"))
         self.show_accurate_action.setText(
@@ -415,6 +429,15 @@ class ListLayout(CueLayout):
     @dbmeters_visible.get
     def _get_dbmeters_visible(self):
         return self.show_dbmeter_action.isChecked()
+
+    @volume_indicators_visible.set
+    def _set_volume_indicators_visible(self, visible):
+        self.show_volume_indicator_action.setChecked(visible)
+        self._view.runView.volume_indicator_visible = visible
+
+    @volume_indicators_visible.get
+    def _get_volume_indicators_visible(self):
+        return self.show_volume_indicator_action.isChecked()
 
     @index_column_visible.get
     def _get_index_column_visible(self):

@@ -6,7 +6,8 @@
         "seekSliders": true,
         "waveformSlider": true,
         "accurateTime": false,
-        "indexColumn": true
+        "indexColumn": true,
+        "volumeIndicators": false
     },
     "selectionMode": false,
     "autoContinue": true,
