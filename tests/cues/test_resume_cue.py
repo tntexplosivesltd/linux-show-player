@@ -36,3 +36,42 @@ class TestResumeCueDefaults:
         cue = ResumeCue(app=mock_app)
         assert not hasattr(type(cue), "action") or \
             "action" not in type(cue).__dict__
+
+
+class TestTargetResolution:
+    def test_missing_target_logs_and_errors(self, mock_app, caplog):
+        mock_app.cue_model.get.return_value = None
+        cue = ResumeCue(app=mock_app)
+        cue.target_id = "does-not-exist"
+
+        error_fired = []
+
+        # Named def so the test frame holds a strong reference — LiSP's
+        # Signal.connect stores a weakref, which would GC an inline lambda.
+        def on_error(*_):
+            error_fired.append(True)
+
+        cue.error.connect(on_error)
+
+        result = cue.__start__()
+
+        assert result is False
+        assert error_fired == [True]
+        assert any("target" in r.message.lower() for r in caplog.records)
+
+    def test_empty_target_id_logs_and_errors(self, mock_app):
+        mock_app.cue_model.get.return_value = None
+        cue = ResumeCue(app=mock_app)
+        cue.target_id = ""
+
+        error_fired = []
+
+        def on_error(*_):
+            error_fired.append(True)
+
+        cue.error.connect(on_error)
+
+        result = cue.__start__()
+
+        assert result is False
+        assert error_fired == [True]

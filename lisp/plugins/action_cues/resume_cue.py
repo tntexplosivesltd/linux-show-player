@@ -51,3 +51,15 @@ class ResumeCue(Cue):
         # In-flight ParallelFadeRunner, if any. Set by __start__, cleared
         # on completion/abort. Used by __stop__ to cancel the fade.
         self._runner = None
+
+    def __start__(self, fade=False):
+        target = self.app.cue_model.get(self.target_id)
+        if target is None:
+            logger.warning(
+                "ResumeCue: target cue %r not found", self.target_id
+            )
+            self._error()
+            return False
+
+        # State branching + fade orchestration land in subsequent tasks.
+        return False
