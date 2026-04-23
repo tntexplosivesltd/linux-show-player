@@ -45,6 +45,51 @@ class TestResumeCueDefaults:
         assert cue.icon == "action-play"
 
 
+class TestAutoName:
+    """The cue's `name` auto-updates when target_id changes — the
+    verb is fixed at Resume so only the target matters."""
+
+    def _setup_target(self, mock_app, name="Sound3"):
+        target = MagicMock()
+        target.name = name
+        mock_app.cue_model.get = lambda cid: (
+            target if cid == "t1" else None
+        )
+        return target
+
+    def test_default_name_before_target_set(self, mock_app):
+        cue = ResumeCue(app=mock_app)
+        assert cue.name == "Fade & Resume"
+
+    def test_name_updates_when_target_set(self, mock_app):
+        self._setup_target(mock_app, "Sound3")
+        cue = ResumeCue(app=mock_app)
+        cue.target_id = "t1"
+        assert cue.name == "Fade and Resume 'Sound3'"
+
+    def test_name_reverts_when_target_cleared(self, mock_app):
+        self._setup_target(mock_app, "Sound3")
+        cue = ResumeCue(app=mock_app)
+        cue.target_id = "t1"
+        assert cue.name.startswith("Fade and Resume")
+
+        cue.target_id = ""
+        assert cue.name == "Fade & Resume"
+
+    def test_name_reverts_when_target_missing(self, mock_app):
+        mock_app.cue_model.get = lambda _cid: None
+        cue = ResumeCue(app=mock_app)
+        cue.target_id = "does-not-exist"
+        assert cue.name == "Fade & Resume"
+
+    def test_setting_name_directly_does_not_recurse(self, mock_app):
+        self._setup_target(mock_app, "Sound3")
+        cue = ResumeCue(app=mock_app)
+        cue.target_id = "t1"
+        cue.name = "manual override"
+        assert cue.name == "manual override"
+
+
 class TestTargetResolution:
     def test_missing_target_logs_and_errors(self, mock_app, caplog):
         mock_app.cue_model.get.return_value = None

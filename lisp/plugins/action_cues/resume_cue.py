@@ -70,6 +70,26 @@ class ResumeCue(Cue):
         # on completion/abort. Used by __stop__ to cancel the fade.
         self._runner = None
 
+        # Re-derive `name` when target changes so the cue reads as e.g.
+        # "Fade and Resume 'Sound3'" in the cue list.
+        self.property_changed.connect(self._on_property_changed)
+
+    def _on_property_changed(self, _cue, name, _value):
+        if name == "target_id":
+            self.name = self._derive_name()
+
+    def _derive_name(self):
+        """Return a descriptive name based on current target.
+
+        Falls back to the class's default translated Name when the
+        target is unset or points at a non-existent cue.
+        """
+        target = self.app.cue_model.get(self.target_id)
+        if target is None:
+            return translate("CueName", self.Name)
+        verb = translate("CueAction", CueAction.Resume.name)
+        return f"Fade and {verb} '{target.name}'"
+
     def __start__(self, fade=False):
         target = self.app.cue_model.get(self.target_id)
         if target is None:

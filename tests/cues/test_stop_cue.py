@@ -78,6 +78,69 @@ class TestTargetResolution:
         assert error_fired == [True]
 
 
+class TestAutoName:
+    """The cue's `name` auto-updates when target_id or action changes
+    so the user sees meaningful labels in the cue list without having
+    to manually edit the name per-cue."""
+
+    def _setup_target(self, mock_app, name="Sound1"):
+        target = MagicMock()
+        target.name = name
+        mock_app.cue_model.get = lambda cid: (
+            target if cid == "t1" else None
+        )
+        return target
+
+    def test_default_name_before_target_set(self, mock_app):
+        """No target → untouched default translation of the class Name."""
+        cue = StopCue(app=mock_app)
+        assert cue.name == "Fade & Stop"
+
+    def test_name_updates_when_target_set(self, mock_app):
+        self._setup_target(mock_app, "Sound1")
+        cue = StopCue(app=mock_app)
+        cue.target_id = "t1"
+        assert cue.name == "Fade and Stop 'Sound1'"
+
+    def test_name_updates_when_action_changed(self, mock_app):
+        self._setup_target(mock_app, "Sound1")
+        cue = StopCue(app=mock_app)
+        cue.target_id = "t1"
+
+        cue.action = CueAction.Pause.value
+        assert cue.name == "Fade and Pause 'Sound1'"
+
+        cue.action = CueAction.Interrupt.value
+        assert cue.name == "Fade and Interrupt 'Sound1'"
+
+    def test_name_reverts_when_target_cleared(self, mock_app):
+        self._setup_target(mock_app, "Sound1")
+        cue = StopCue(app=mock_app)
+        cue.target_id = "t1"
+        assert cue.name.startswith("Fade and Stop")
+
+        cue.target_id = ""
+        assert cue.name == "Fade & Stop"
+
+    def test_name_reverts_when_target_missing(self, mock_app):
+        """cue_model.get returns None for an unknown target → fallback."""
+        mock_app.cue_model.get = lambda _cid: None
+        cue = StopCue(app=mock_app)
+        cue.target_id = "does-not-exist"
+        assert cue.name == "Fade & Stop"
+
+    def test_setting_name_directly_does_not_recurse(self, mock_app):
+        """The auto-rename handler must not trigger on its own name
+        write — otherwise property_changed → handler → set name →
+        property_changed → ... blows the stack."""
+        self._setup_target(mock_app, "Sound1")
+        cue = StopCue(app=mock_app)
+        cue.target_id = "t1"
+        # If recursion happened, this would hit the recursion limit.
+        cue.name = "manual override"
+        assert cue.name == "manual override"
+
+
 class TestFadeThenAction:
     def _setup(self, mock_app, target_id="t1"):
         from lisp.cues.cue import CueState
