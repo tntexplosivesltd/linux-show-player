@@ -130,3 +130,106 @@ class TestStoppedOrErrorTarget:
         assert result is False
         assert error_fired == [True]
         target.execute.assert_not_called()
+
+
+def _patch_async_function_synchronous(monkeypatch):
+    """Make @async_function run its wrapped target synchronously.
+
+    `async_function` wraps a call in `Thread(target=..., daemon=True).start()`.
+    Substituting Thread with a class that calls the target immediately on
+    `start()` makes assertions deterministic.
+    """
+    class _SyncThread:
+        def __init__(self, target=None, args=(), kwargs=None, daemon=False,
+                     name=None):
+            self._target = target
+            self._args = args
+            self._kwargs = kwargs or {}
+
+        def start(self):
+            self._target(*self._args, **self._kwargs)
+    monkeypatch.setattr("lisp.core.decorators.Thread", _SyncThread)
+
+
+class TestRunningFallback:
+    def test_running_no_resume_dispatched(self, mock_app, monkeypatch):
+        """Running target: Resume is NOT dispatched (already running)."""
+        target = _make_media_target(CueState.Running, mock_app)
+
+        # Substitute a fake runner so we don't actually run threads.
+        fake_runner = MagicMock()
+        fake_runner.run_until_complete.return_value = True
+        monkeypatch.setattr(
+            "lisp.plugins.action_cues.resume_cue.ParallelFadeRunner",
+            MagicMock(return_value=fake_runner),
+        )
+        _patch_async_function_synchronous(monkeypatch)
+
+        # Give the target a volume fader so `will_fade` is True.
+        volume_fader = MagicMock()
+        volume_el = MagicMock()
+        volume_el.get_fader.return_value = volume_fader
+        target.media.element = lambda n: volume_el if n == "Volume" else None
+
+        cue = ResumeCue(app=mock_app)
+        cue.target_id = target.id
+        cue.duration = 500
+
+        result = cue.__start__()
+
+        assert result is True
+        target.execute.assert_not_called()  # no Resume dispatched
+        fake_runner.run_until_complete.assert_called_once()
+
+    def test_running_no_faders_is_noop(self, mock_app):
+        """Running target with no faders: no-op, returns False."""
+        target = _make_media_target(CueState.Running, mock_app)
+
+        cue = ResumeCue(app=mock_app)
+        cue.target_id = target.id
+        cue.duration = 500
+
+        result = cue.__start__()
+
+        assert result is False
+        target.execute.assert_not_called()
+
+    def test_running_duration_zero_is_noop(self, mock_app):
+        """Running target with duration=0: no-op (no fade needed)."""
+        target = _make_media_target(CueState.Running, mock_app)
+        volume_el = MagicMock()
+        volume_el.get_fader.return_value = MagicMock()
+        target.media.element = lambda n: volume_el if n == "Volume" else None
+
+        cue = ResumeCue(app=mock_app)
+        cue.target_id = target.id
+        cue.duration = 0
+
+        result = cue.__start__()
+
+        assert result is False
+        target.execute.assert_not_called()
+
+    def test_prewait_treated_as_running(self, mock_app, monkeypatch):
+        """PreWait/PostWait map to the Running fallback."""
+        target = _make_media_target(CueState.PreWait, mock_app)
+
+        fake_runner = MagicMock()
+        fake_runner.run_until_complete.return_value = True
+        monkeypatch.setattr(
+            "lisp.plugins.action_cues.resume_cue.ParallelFadeRunner",
+            MagicMock(return_value=fake_runner),
+        )
+        _patch_async_function_synchronous(monkeypatch)
+
+        volume_el = MagicMock()
+        volume_el.get_fader.return_value = MagicMock()
+        target.media.element = lambda n: volume_el if n == "Volume" else None
+
+        cue = ResumeCue(app=mock_app)
+        cue.target_id = target.id
+        cue.duration = 500
+
+        cue.__start__()
+
+        target.execute.assert_not_called()

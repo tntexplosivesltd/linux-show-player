@@ -24,6 +24,11 @@ from lisp.core.fade_functions import FadeInType
 from lisp.core.properties import Property
 from lisp.core.util import rsetattr
 from lisp.cues.cue import Cue, CueAction, CueState
+from lisp.plugins.action_cues._fader_coordinator import (
+    build_affected_set,
+    collect_live_faders,
+    ParallelFadeRunner,
+)
 from lisp.ui.ui_utils import translate
 
 logger = logging.getLogger(__name__)
@@ -80,5 +85,39 @@ class ResumeCue(Cue):
         return False
 
     def _running_fallback(self, target):
-        # Implemented in Task 4.
-        return False
+        """Target is already running — fade faders up to 1.0, no Resume."""
+        affected = build_affected_set(target)
+        faders = collect_live_faders(affected, states=CueState.IsRunning)
+
+        if self.duration <= 0 or not faders:
+            return False  # nothing to do
+
+        self._runner = ParallelFadeRunner(
+            faders,
+            to_value=1.0,
+            curve=FadeInType[self.fade_type],
+            duration_seconds=self.duration / 1000,
+        )
+        self._run_fade(target=target)
+        return True
+
+    @async_function
+    def _run_fade(self, target):
+        """Drive the runner to completion in a daemon thread.
+
+        Shared by `_paused_path` (post-Resume fade-up) and
+        `_running_fallback` (fade-up only). On completion or abort,
+        clear `_runner` and call `_ended()`. Exceptions reach `_error()`.
+        """
+        try:
+            completed = self._runner.run_until_complete()
+            if not completed:
+                return  # aborted — __stop__ handled state
+        except Exception:
+            logger.exception("ResumeCue: error during fade-up")
+            self._error()
+            return
+        finally:
+            self._runner = None
+
+        self._ended()
