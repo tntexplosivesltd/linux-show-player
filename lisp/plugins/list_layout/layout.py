@@ -187,8 +187,12 @@ class ListLayout(CueLayout):
         self._set_seeksliders_visible(ListLayout.Config["show.seekSliders"])
         self._set_accurate_time(ListLayout.Config["show.accurateTime"])
         self._set_dbmeters_visible(ListLayout.Config["show.dBMeters"])
+        # .get() with default: users whose saved list_layout.json
+        # predates this feature have a "show" block without the new
+        # key, and path-style Config[...] lookup does not layer over
+        # plugin defaults for nested keys.
         self._set_volume_indicators_visible(
-            ListLayout.Config["show.volumeIndicators"]
+            ListLayout.Config.get("show.volumeIndicators", False)
         )
         self._set_index_visible(ListLayout.Config["show.indexColumn"])
         self._set_selection_mode(ListLayout.Config["selectionMode"])
