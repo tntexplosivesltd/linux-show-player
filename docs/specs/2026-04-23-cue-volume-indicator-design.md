@@ -23,7 +23,7 @@ gap for "what gain is this cue currently at?".
   `RunningCueWidget`.
 - **Opt-in via layout menu**. Default off. Visibility toggles through
   a new `Show volume indicators` menu action mirroring the existing
-  `Show dB-meters` pattern. Persisted under `show.volumeIndicator`.
+  `Show dB-meters` pattern. Persisted under `show.volumeIndicators`.
 - **Numeric dB label only**. Format `{db:+.1f} dB` (e.g. `+0.0 dB`,
   `-12.3 dB`). No bar, no fader handle — keeps the footprint
   minimal.
@@ -144,13 +144,13 @@ File: `lisp/plugins/list_layout/settings.py`.
   `defaultBehaviorsGroup`, ordered next to `self.showDbMeters`.
 - `retranslateUi`: `translate("ListLayout", "Show volume indicators")`.
 - `loadSettings` / `getSettings` read/write
-  `settings["show"]["volumeIndicator"]`.
+  `settings["show"]["volumeIndicators"]`.
 
 ### Default config — modified
 
 File: `lisp/plugins/list_layout/default.json`.
 
-- Add `"volumeIndicator": false` to the `"show"` object.
+- Add `"volumeIndicators": false` to the `"show"` object.
 
 ## Data Flow
 
@@ -209,7 +209,7 @@ Table-driven test of the dB-formatting logic (pure function, no Qt):
 New files under `tests/e2e/`:
 
 - `test_volume_indicator_toggle.py` — start LiSP, add a media cue,
-  flip `show.volumeIndicator`, verify the running widget exposes the
+  flip `show.volumeIndicators`, verify the running widget exposes the
   indicator's visibility via a new `layout.running_widget_info`
   harness method (a small additive extension to the existing
   `test_harness` plugin).
