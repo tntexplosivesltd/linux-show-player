@@ -517,3 +517,94 @@ class TestAbort:
         cue = ResumeCue(app=mock_app)
         assert cue._runner is None
         assert cue.__stop__() is True
+
+
+import pytest
+
+
+class TestResumeCueSettings:
+    """Settings-page round-trip. Requires QApplication via qapp fixture."""
+
+    @pytest.fixture(autouse=True)
+    def _icon_theme(self):
+        """FadeEdit → FadeComboBox looks up icons via IconTheme.get; init a
+        theme so _GlobalTheme isn't None when the settings page is built."""
+        from lisp.ui.icons import IconTheme
+        if IconTheme._GlobalTheme is None:
+            IconTheme.set_theme_name("lisp")
+        yield
+
+    def test_get_settings_empty_when_checkable_and_unchecked(
+        self, qapp, monkeypatch,
+    ):
+        """enableCheck(True) makes groups checkable and leaves them
+        unchecked; getSettings should skip every group in that state.
+
+        Monkeypatching Application is critical: the real singleton
+        registers base General/Timing pages in CueSettingsRegistry as
+        a side-effect of construction, polluting other tests (bit me
+        in Part 1)."""
+        from lisp.plugins.action_cues.resume_cue import ResumeCueSettings
+
+        monkeypatch.setattr(
+            "lisp.plugins.action_cues.resume_cue.Application",
+            lambda: MagicMock(cue_model=MagicMock(
+                get=lambda _id: None, filter=lambda *_: [],
+            )),
+        )
+
+        page = ResumeCueSettings()
+        page.enableCheck(True)
+        assert page.getSettings() == {}
+
+    def test_load_then_get_round_trip(self, qapp, monkeypatch):
+        from lisp.plugins.action_cues.resume_cue import ResumeCueSettings
+
+        fake_target = MagicMock()
+        fake_target.name = "Target Cue"
+        monkeypatch.setattr(
+            "lisp.plugins.action_cues.resume_cue.Application",
+            lambda: MagicMock(cue_model=MagicMock(
+                get=lambda _id: fake_target, filter=lambda *_: [],
+            )),
+        )
+
+        page = ResumeCueSettings()
+        # Default state: groups NOT checkable → isGroupEnabled returns True,
+        # so getSettings reads every group. Single-cue dialog flow.
+        page.loadSettings({
+            "target_id": "abc",
+            "duration": 2500,
+            "fade_type": "Linear",
+        })
+
+        settings = page.getSettings()
+        assert settings["target_id"] == "abc"
+        assert settings["duration"] == 2500
+        assert settings["fade_type"] == "Linear"
+
+    def test_no_action_key_in_settings(self, qapp, monkeypatch):
+        """ResumeCueSettings never stores an `action` key — verb is fixed."""
+        from lisp.plugins.action_cues.resume_cue import ResumeCueSettings
+
+        monkeypatch.setattr(
+            "lisp.plugins.action_cues.resume_cue.Application",
+            lambda: MagicMock(cue_model=MagicMock(
+                get=lambda _id: None, filter=lambda *_: [],
+            )),
+        )
+
+        page = ResumeCueSettings()
+        settings = page.getSettings()
+        assert "action" not in settings
+
+    def test_registry_association(self):
+        from lisp.ui.settings.cue_settings import CueSettingsRegistry
+        from lisp.plugins.action_cues.resume_cue import (
+            ResumeCue, ResumeCueSettings,
+        )
+
+        pages = list(CueSettingsRegistry().filter(ResumeCue))
+        assert ResumeCueSettings in pages, (
+            "ResumeCueSettings not registered for ResumeCue"
+        )

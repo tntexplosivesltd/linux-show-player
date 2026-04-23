@@ -17,8 +17,12 @@
 
 import logging
 
-from PyQt5.QtCore import QT_TRANSLATE_NOOP
+from PyQt5.QtCore import QT_TRANSLATE_NOOP, Qt
+from PyQt5.QtWidgets import (
+    QGroupBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
+)
 
+from lisp.application import Application
 from lisp.core.decorators import async_function
 from lisp.core.fade_functions import FadeInType
 from lisp.core.properties import Property
@@ -29,7 +33,12 @@ from lisp.plugins.action_cues._fader_coordinator import (
     collect_live_faders,
     ParallelFadeRunner,
 )
+from lisp.ui.cuelistdialog import CueSelectDialog
+from lisp.ui.settings.cue_settings import CueSettingsRegistry
+from lisp.ui.settings.pages import SettingsPage
 from lisp.ui.ui_utils import translate
+from lisp.ui.widgets import FadeEdit
+from lisp.ui.widgets.fades import FadeComboBox
 
 logger = logging.getLogger(__name__)
 
@@ -163,3 +172,104 @@ class ResumeCue(Cue):
         return True
 
     __interrupt__ = __stop__
+
+
+class ResumeCueSettings(SettingsPage):
+    Name = QT_TRANSLATE_NOOP("SettingsPageName", "Fade & Resume Settings")
+    SortOrder = 30  # Matches StopCueSettings so both sort together.
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.setLayout(QVBoxLayout())
+        self.layout().setAlignment(Qt.AlignTop)
+        self.layout().setContentsMargins(6, 6, 6, 6)
+        self.layout().setSpacing(6)
+
+        self.cue_id = ""
+        # Exclude ResumeCue (and StopCue, by symmetry) from the target
+        # picker — a ResumeCue targeting another SFR-cue has no useful
+        # semantics, same as Part 1's self-filter for StopCue.
+        from lisp.plugins.action_cues.stop_cue import StopCue
+        all_cues = Application().cue_model.filter(Cue)
+        targets = [
+            c for c in all_cues
+            if not isinstance(c, (ResumeCue, StopCue))
+        ]
+        self.cueDialog = CueSelectDialog(cues=targets, parent=self)
+
+        # Target group: cue picker only (no action combo — verb is fixed).
+        self.targetGroup = QGroupBox(self)
+        targetLayout = QHBoxLayout(self.targetGroup)
+        targetLayout.setContentsMargins(8, 6, 8, 6)
+        targetLayout.setSpacing(12)
+
+        cueColumn = QVBoxLayout()
+        cueColumn.setContentsMargins(0, 0, 0, 0)
+        cueColumn.setSpacing(4)
+        self.cueLabel = QLabel(self.targetGroup)
+        self.cueLabel.setAlignment(Qt.AlignCenter)
+        self.cueLabel.setStyleSheet("font-weight: bold;")
+        self.cueButton = QPushButton(self.targetGroup)
+        self.cueButton.clicked.connect(self.select_cue)
+        cueColumn.addWidget(self.cueLabel)
+        cueColumn.addWidget(self.cueButton)
+
+        cueColumnWidget = QWidget(self.targetGroup)
+        cueColumnWidget.setLayout(cueColumn)
+        targetLayout.addWidget(cueColumnWidget)
+
+        self.layout().addWidget(self.targetGroup)
+
+        # Fade settings — FadeIn mode so the combo icons match the verb.
+        self.fadeGroup = QGroupBox(self)
+        fadeLayout = QVBoxLayout(self.fadeGroup)
+        fadeLayout.setContentsMargins(8, 6, 8, 6)
+        self.fadeEdit = FadeEdit(
+            self.fadeGroup, mode=FadeComboBox.Mode.FadeIn,
+        )
+        fadeLayout.addWidget(self.fadeEdit)
+        self.layout().addWidget(self.fadeGroup)
+
+        self.retranslateUi()
+
+    def retranslateUi(self):
+        self.targetGroup.setTitle(translate("ResumeCue", "Target"))
+        self.cueButton.setText(translate("ResumeCue", "Click to select"))
+        self.cueLabel.setText(translate("ResumeCue", "Not selected"))
+        self.fadeGroup.setTitle(translate("ResumeCue", "Fade"))
+
+    def select_cue(self):
+        dlg = self.cueDialog
+        opened = dlg.exec()
+        if opened == dlg.Accepted:
+            selected = dlg.selected_cue()
+            if selected is not None:
+                self.cue_id = selected.id
+                self.cueLabel.setText(selected.name)
+
+    def enableCheck(self, enabled):
+        self.setGroupEnabled(self.targetGroup, enabled)
+        self.setGroupEnabled(self.fadeGroup, enabled)
+
+    def getSettings(self):
+        settings = {}
+        if self.isGroupEnabled(self.targetGroup):
+            settings["target_id"] = self.cue_id
+        if self.isGroupEnabled(self.fadeGroup):
+            settings["duration"] = int(self.fadeEdit.duration() * 1000)
+            settings["fade_type"] = self.fadeEdit.fadeType()
+        return settings
+
+    def loadSettings(self, settings):
+        target = Application().cue_model.get(settings.get("target_id", ""))
+        if target is not None:
+            self.cue_id = settings["target_id"]
+            self.cueLabel.setText(target.name)
+
+        self.fadeEdit.setDuration(settings.get("duration", 0) / 1000)
+        self.fadeEdit.setFadeType(
+            settings.get("fade_type", FadeInType.Linear.name)
+        )
+
+
+CueSettingsRegistry().add(ResumeCueSettings, ResumeCue)
