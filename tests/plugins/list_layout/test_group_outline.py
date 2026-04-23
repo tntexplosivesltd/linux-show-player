@@ -192,3 +192,73 @@ class TestGroupOutlinePaint:
         qtbot.waitExposed(view)
 
         view.viewport().repaint()
+
+
+class TestGroupOutlineRepaints:
+    """Changes that affect the outline must invalidate the viewport."""
+
+    def test_group_mode_change_triggers_repaint(
+        self, qapp, qtbot, mock_app, monkeypatch,
+    ):
+        view, group_item = _build_view_with_group(
+            mock_app, child_count=1, group_mode="parallel",
+        )
+        view.resize(600, 400)
+        qtbot.addWidget(view)
+        view.show()
+        qtbot.waitExposed(view)
+
+        calls = []
+        real_update = view.viewport().update
+        monkeypatch.setattr(
+            view.viewport(), "update",
+            lambda *a, **kw: (calls.append(1), real_update(*a, **kw))[1],
+        )
+
+        group_item.cue.group_mode = "playlist"
+
+        assert calls, (
+            "viewport().update() should be called on group_mode change"
+        )
+
+    def test_expand_triggers_repaint(
+        self, qapp, qtbot, mock_app, monkeypatch,
+    ):
+        view, group_item = _build_view_with_group(mock_app, child_count=2)
+        group_item.setExpanded(False)
+        view.resize(600, 400)
+        qtbot.addWidget(view)
+        view.show()
+        qtbot.waitExposed(view)
+
+        calls = []
+        real_update = view.viewport().update
+        monkeypatch.setattr(
+            view.viewport(), "update",
+            lambda *a, **kw: (calls.append(1), real_update(*a, **kw))[1],
+        )
+
+        group_item.setExpanded(True)
+
+        assert calls, "viewport().update() should be called on expand"
+
+    def test_collapse_triggers_repaint(
+        self, qapp, qtbot, mock_app, monkeypatch,
+    ):
+        view, group_item = _build_view_with_group(mock_app, child_count=2)
+        group_item.setExpanded(True)
+        view.resize(600, 400)
+        qtbot.addWidget(view)
+        view.show()
+        qtbot.waitExposed(view)
+
+        calls = []
+        real_update = view.viewport().update
+        monkeypatch.setattr(
+            view.viewport(), "update",
+            lambda *a, **kw: (calls.append(1), real_update(*a, **kw))[1],
+        )
+
+        group_item.setExpanded(False)
+
+        assert calls, "viewport().update() should be called on collapse"

@@ -377,10 +377,12 @@ class CueListView(QTreeWidget):
     def __itemCollapsed(self, item):
         if isinstance(item.cue, GroupCue):
             item.cue.collapsed = True
+        self.viewport().update()
 
     def __itemExpanded(self, item):
         if isinstance(item.cue, GroupCue):
             item.cue.collapsed = False
+        self.viewport().update()
 
     def __updateItemStyle(self, item):
         if item.treeWidget() is not None:
@@ -413,6 +415,8 @@ class CueListView(QTreeWidget):
             QTimer.singleShot(1, self.updateHeadersSizes)
         if property_name == "group_id":
             self.__cueGroupChanged(cue)
+        if property_name == "group_mode":
+            self.viewport().update()
 
     def __cueGroupChanged(self, cue):
         """Reparent item when its group_id changes."""
