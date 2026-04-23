@@ -20,10 +20,18 @@ from PyQt5.QtCore import (
     Qt,
     QDataStream,
     QIODevice,
+    QRect,
     QT_TRANSLATE_NOOP,
     QTimer,
 )
-from PyQt5.QtGui import QKeyEvent, QContextMenuEvent, QBrush, QColor
+from PyQt5.QtGui import (
+    QBrush,
+    QColor,
+    QContextMenuEvent,
+    QKeyEvent,
+    QPainter,
+    QPen,
+)
 from PyQt5.QtWidgets import QTreeWidget, QHeaderView, QTreeWidgetItem
 
 from lisp.application import Application
@@ -95,6 +103,15 @@ class CueListView(QTreeWidget):
 
     ITEM_DEFAULT_BG = QBrush(Qt.transparent)
     ITEM_CURRENT_BG = QBrush(QColor(250, 220, 0, 100))
+
+    GROUP_OUTLINE_WIDTH = 2
+    GROUP_OUTLINE_RADIUS = 4
+    GROUP_OUTLINE_PARALLEL = QColor(76, 175, 80, 200)
+    GROUP_OUTLINE_PLAYLIST = QColor(255, 152, 0, 200)
+    GROUP_OUTLINE_COLORS = {
+        "parallel": GROUP_OUTLINE_PARALLEL,
+        "playlist": GROUP_OUTLINE_PLAYLIST,
+    }
 
     def __init__(self, listModel, parent=None):
         """
@@ -222,6 +239,38 @@ class CueListView(QTreeWidget):
         super().resizeEvent(event)
         self.updateHeadersSizes()
 
+    def paintEvent(self, event):
+        super().paintEvent(event)
+
+        if not self._group_items:
+            return
+
+        painter = QPainter(self.viewport())
+        painter.setRenderHint(QPainter.Antialiasing)
+        pen = QPen()
+        pen.setWidth(self.GROUP_OUTLINE_WIDTH)
+
+        viewport_rect = self.viewport().rect()
+        for group_item in self._group_items.values():
+            color = self.GROUP_OUTLINE_COLORS.get(
+                group_item.cue.group_mode
+            )
+            if color is None:
+                continue
+
+            rect = self._groupOutlineRect(group_item)
+            if rect is None or not rect.intersects(viewport_rect):
+                continue
+
+            pen.setColor(color)
+            painter.setPen(pen)
+            painter.setBrush(Qt.NoBrush)
+            painter.drawRoundedRect(
+                rect,
+                self.GROUP_OUTLINE_RADIUS,
+                self.GROUP_OUTLINE_RADIUS,
+            )
+
     def standbyIndex(self):
         return self.cueIndexOf(self.currentItem())
 
@@ -273,6 +322,29 @@ class CueListView(QTreeWidget):
             return -1
         return item.cue.index
 
+    def _groupOutlineRect(self, group_item):
+        """Paint rect for a group's outline, or None if off-screen.
+
+        When expanded, spans the group header and the last visible
+        child. When collapsed (or childless), spans just the header.
+        The rect is inset so the stroke sits fully inside the cell
+        edges rather than straddling them.
+        """
+        header = self.visualItemRect(group_item)
+        if header.isEmpty():
+            return None
+
+        rect = QRect(header)
+        if group_item.isExpanded() and group_item.childCount() > 0:
+            last_child = group_item.child(group_item.childCount() - 1)
+            child_rect = self.visualItemRect(last_child)
+            if not child_rect.isEmpty():
+                rect = rect.united(child_rect)
+
+        inset = self.GROUP_OUTLINE_WIDTH // 2 + 1
+        rect.adjust(inset, inset, -inset, -inset)
+        return rect
+
     def iterAllItems(self):
         """Yield all items in visual order (groups then children
         interleaved)."""
@@ -305,10 +377,12 @@ class CueListView(QTreeWidget):
     def __itemCollapsed(self, item):
         if isinstance(item.cue, GroupCue):
             item.cue.collapsed = True
+        self.viewport().update()
 
     def __itemExpanded(self, item):
         if isinstance(item.cue, GroupCue):
             item.cue.collapsed = False
+        self.viewport().update()
 
     def __updateItemStyle(self, item):
         if item.treeWidget() is not None:
@@ -341,6 +415,8 @@ class CueListView(QTreeWidget):
             QTimer.singleShot(1, self.updateHeadersSizes)
         if property_name == "group_id":
             self.__cueGroupChanged(cue)
+        if property_name == "group_mode":
+            self.viewport().update()
 
     def __cueGroupChanged(self, cue):
         """Reparent item when its group_id changes."""
