@@ -140,11 +140,12 @@ the same `Cue._set_hibernated(True)` helper.
 
 ### Icon system — two-stage landing
 
-Stage 1 is a separate precursor branch merged to master before Part 3
-begins.
+Stage 1 is cherry-picked from upstream onto master before Part 3
+begins — no separate PR in this fork.
 
-**Stage 1 (precursor branch, mirrors upstream
-[PR #367](https://github.com/FrancescoCeruti/linux-show-player/pull/367)):**
+**Stage 1 (cherry-pick of upstream
+[PR #367](https://github.com/FrancescoCeruti/linux-show-player/pull/367)
+onto master):**
 
 - Vendor the recolour machinery into
   `lisp/ui/icons/__init__.py`: a `_CUE_TYPE_VARIATIONS` dict mapping
@@ -342,9 +343,11 @@ Appended to `manual_group_tests.md`:
   tree available while this branch is in flight and avoids polluting
   it with in-progress state.
 - Branch layout follows the two-stage plan from the icon section:
-  Stage 1 (icon recolour refactor) lands on master first via its own
-  branch and PR; Stage 2 (this spec) branches from the post-merge
-  master.
+  Stage 1 (icon recolour refactor) is cherry-picked from upstream
+  [PR #367](https://github.com/FrancescoCeruti/linux-show-player/pull/367)
+  directly onto master — no separate review PR needed since the code
+  is already upstream-reviewed. Stage 2 (this spec's work) branches
+  from the post-cherry-pick master inside the worktree.
 - After implementation and passing tests, the branch is reviewed by
   the `voltagent-qa-sec:qa-expert` subagent (test coverage, edge
   cases, E2E completeness) and the `voltagent-qa-sec:code-reviewer`
