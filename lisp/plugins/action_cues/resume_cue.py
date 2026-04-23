@@ -61,5 +61,24 @@ class ResumeCue(Cue):
             self._error()
             return False
 
-        # State branching + fade orchestration land in subsequent tasks.
+        state = target.state
+        if state & CueState.Pause:
+            return self._paused_path(target)
+        if state & CueState.IsRunning:
+            return self._running_fallback(target)
+
+        # Stopped or Error — nothing sensible to resume.
+        logger.warning(
+            "ResumeCue: target %r is in state %r; cannot resume",
+            self.target_id, state,
+        )
+        self._error()
+        return False
+
+    def _paused_path(self, target):
+        # Implemented in Task 5.
+        return False
+
+    def _running_fallback(self, target):
+        # Implemented in Task 4.
         return False

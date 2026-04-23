@@ -75,3 +75,58 @@ class TestTargetResolution:
 
         assert result is False
         assert error_fired == [True]
+
+
+from lisp.cues.cue import CueState
+from lisp.cues.media_cue import MediaCue
+
+
+def _make_media_target(state, mock_app, cue_id="t1"):
+    """Build a mock MediaCue target in the given state and wire into mock_app."""
+    target = MagicMock(spec=MediaCue)
+    target.id = cue_id
+    target.state = state
+    target.media = MagicMock()
+    target.media.element.return_value = None
+    mock_app.cue_model.get.return_value = target
+    return target
+
+
+class TestStoppedOrErrorTarget:
+    def test_stopped_target_errors(self, mock_app, caplog):
+        target = _make_media_target(CueState.Stop, mock_app)
+
+        cue = ResumeCue(app=mock_app)
+        cue.target_id = target.id
+
+        error_fired = []
+
+        def on_error(*_):
+            error_fired.append(True)
+
+        cue.error.connect(on_error)
+
+        result = cue.__start__()
+
+        assert result is False
+        assert error_fired == [True]
+        target.execute.assert_not_called()
+
+    def test_error_target_errors(self, mock_app):
+        target = _make_media_target(CueState.Error, mock_app)
+
+        cue = ResumeCue(app=mock_app)
+        cue.target_id = target.id
+
+        error_fired = []
+
+        def on_error(*_):
+            error_fired.append(True)
+
+        cue.error.connect(on_error)
+
+        result = cue.__start__()
+
+        assert result is False
+        assert error_fired == [True]
+        target.execute.assert_not_called()
