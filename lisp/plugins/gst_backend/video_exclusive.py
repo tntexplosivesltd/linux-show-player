@@ -38,8 +38,9 @@ class VideoExclusiveManager:
     def is_start_blocked(self, cue):
         """Return True if the cue should be blocked from starting.
 
-        A video/image cue is blocked if another video/image cue
-        is currently playing.
+        A video/image cue is blocked if another video/image cue is
+        currently playing or paused — except when the cue asking to
+        start is the same one that owns the stuck sink (self-resume).
         """
         if not self._is_video_cue(cue):
             return False
@@ -50,6 +51,14 @@ class VideoExclusiveManager:
 
         prev = VideoSink._previous_sink
         if prev is None:
+            return False
+
+        # Self-resume guard: if the cue owns the "stuck" sink, let it
+        # through. VideoSink.stop() clears _previous_sink; pause() does
+        # not, so a paused video's own sink sticks around and would
+        # otherwise block its own resume (e.g. via CueAction.Resume
+        # or a Fade & Resume cue following a Fade & Stop).
+        if cue.media.element("VideoSink") is prev:
             return False
 
         # Check the previous sink's pipeline state
