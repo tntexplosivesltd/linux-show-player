@@ -93,7 +93,7 @@ class ResumeCue(Cue):
 
     target_id = Property()
     fade_type = Property(default=FadeInType.Linear.name)
-    icon = Property("action-resume")  # fallback to a stock icon if missing
+    icon = Property("action-play")  # Resume is "play from paused"
 
     CueActions = (
         CueAction.Default,

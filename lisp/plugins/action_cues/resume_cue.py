@@ -49,7 +49,11 @@ class ResumeCue(Cue):
 
     target_id = Property()
     fade_type = Property(default=FadeInType.Linear.name)
-    icon = Property(default="action-resume")
+    # The icon theme doesn't ship a dedicated "action-resume" glyph —
+    # Resume is semantically "play from paused", so reuse the same
+    # "action-play" icon other play-family cues use. Falling back to
+    # a nonexistent name would render as a blank square.
+    icon = Property(default="action-play")
 
     CueActions = (
         CueAction.Default,

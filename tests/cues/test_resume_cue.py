@@ -37,6 +37,13 @@ class TestResumeCueDefaults:
         assert not hasattr(type(cue), "action") or \
             "action" not in type(cue).__dict__
 
+    def test_default_icon(self, mock_app):
+        """Icon theme ships no "action-resume" glyph; "action-play"
+        matches the semantic (resume = play from paused) and keeps the
+        cue recognisable in the list."""
+        cue = ResumeCue(app=mock_app)
+        assert cue.icon == "action-play"
+
 
 class TestTargetResolution:
     def test_missing_target_logs_and_errors(self, mock_app, caplog):
