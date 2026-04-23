@@ -73,6 +73,11 @@
   <context>
     <name>CueName</name>
     <message>
+      <location filename="../../../plugins/action_cues/resume_cue.py" line="47" />
+      <source>Fade &amp; Resume</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
       <location filename="../../../plugins/action_cues/index_action_cue.py" line="39" />
       <source>Index Action</source>
       <translation>Index Action</translation>
@@ -152,44 +157,6 @@
     </message>
   </context>
   <context>
-    <name>GroupCue</name>
-    <message>
-      <location filename="../../../plugins/action_cues/group_cue.py" line="503" />
-      <source>Parallel</source>
-      <translation type="unfinished" />
-    </message>
-    <message>
-      <location filename="../../../plugins/action_cues/group_cue.py" line="506" />
-      <source>Playlist</source>
-      <translation type="unfinished" />
-    </message>
-    <message>
-      <location filename="../../../plugins/action_cues/group_cue.py" line="509" />
-      <source>Mode</source>
-      <translation type="unfinished" />
-    </message>
-    <message>
-      <location filename="../../../plugins/action_cues/group_cue.py" line="518" />
-      <source>Crossfade</source>
-      <translation type="unfinished" />
-    </message>
-    <message>
-      <location filename="../../../plugins/action_cues/group_cue.py" line="523" />
-      <source>Loop</source>
-      <translation type="unfinished" />
-    </message>
-    <message>
-      <location filename="../../../plugins/action_cues/group_cue.py" line="528" />
-      <source>Shuffle</source>
-      <translation type="unfinished" />
-    </message>
-    <message>
-      <location filename="../../../plugins/action_cues/group_cue.py" line="539" />
-      <source>Group Settings</source>
-      <translation type="unfinished" />
-    </message>
-  </context>
-  <context>
     <name>IndexActionCue</name>
     <message>
       <location filename="../../../plugins/action_cues/index_action_cue.py" line="78" />
@@ -223,6 +190,29 @@
     </message>
   </context>
   <context>
+    <name>ResumeCue</name>
+    <message>
+      <location filename="../../../plugins/action_cues/resume_cue.py" line="236" />
+      <source>Target</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../plugins/action_cues/resume_cue.py" line="237" />
+      <source>Click to select</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../plugins/action_cues/resume_cue.py" line="238" />
+      <source>Not selected</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../plugins/action_cues/resume_cue.py" line="239" />
+      <source>Fade</source>
+      <translation type="unfinished" />
+    </message>
+  </context>
+  <context>
     <name>SeekCue</name>
     <message>
       <location filename="../../../plugins/action_cues/seek_cue.py" line="112" />
@@ -252,6 +242,11 @@
   </context>
   <context>
     <name>SettingsPageName</name>
+    <message>
+      <location filename="../../../plugins/action_cues/resume_cue.py" line="178" />
+      <source>Fade &amp; Resume Settings</source>
+      <translation type="unfinished" />
+    </message>
     <message>
       <location filename="../../../plugins/action_cues/index_action_cue.py" line="75" />
       <source>Action Settings</source>
