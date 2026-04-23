@@ -90,7 +90,20 @@ class ResumeCue(Cue):
         return False
 
     def _paused_path(self, target):
-        """Target is Paused — zero faders, Resume, fade back up to 1.0."""
+        """Target is Paused — own the end-state of live_volume/live_alpha,
+        dispatch Resume, and (if a fade was requested) fade up.
+
+        Three sub-cases:
+          - duration > 0 + faders : zero, Resume, fade up to 1.0.
+          - duration == 0 + faders: snap to 1.0, Resume. No fade.
+          - no faders              : Resume. (Non-media target.)
+
+        ResumeCue owns the end-state regardless of duration, so an
+        intermission workflow (Fade & Stop leaves levels at 0,
+        Fade & Resume brings them back) works even when Fade & Resume
+        itself has duration=0 — without the snap, the cue would
+        resume inaudibly.
+        """
         affected = build_affected_set(target)
         faders = collect_live_faders(
             affected, states=CueState.Pause | CueState.IsRunning,
@@ -99,13 +112,16 @@ class ResumeCue(Cue):
         will_fade = self.duration > 0 and faders
 
         if will_fade:
-            # Zero each fader's live property synchronously BEFORE dispatching
-            # Resume, so the GStreamer pipeline reads gain=0 for the first
-            # samples post-Resume. Prevents pops regardless of how the
-            # target was paused (e.g. a plain Pause rather than a prior
-            # Fade & Stop).
+            # Zero faders synchronously BEFORE Resume so the GStreamer
+            # pipeline reads gain=0 for the first samples post-Resume.
+            # Prevents pops regardless of how the target was paused.
             for fader in faders:
                 rsetattr(fader.target, fader.attribute, 0.0)
+        elif faders:
+            # duration == 0 with faders: snap to full synchronously.
+            # Overrides whatever Fade & Stop left behind.
+            for fader in faders:
+                rsetattr(fader.target, fader.attribute, 1.0)
 
         target.execute(CueAction.Resume)
 

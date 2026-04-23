@@ -455,8 +455,11 @@ class TestPausedHappyPath:
 
 
 class TestPausedDurationZero:
-    def test_paused_duration_zero_skips_zero_step(self, mock_app, monkeypatch):
-        """duration=0 on a paused target: no zero step (otherwise silent cue)."""
+    def test_paused_duration_zero_snaps_to_one(self, mock_app, monkeypatch):
+        """duration=0 on a paused target WITH faders: snap faders to 1.0
+        synchronously, then dispatch Resume. Without this, an
+        intermission workflow (Fade & Stop leaves levels at 0,
+        Fade & Resume with duration=0) would resume inaudibly."""
         volume_fader = MagicMock()
         volume_fader.target = MagicMock()
         volume_fader.attribute = "live_volume"
@@ -471,12 +474,12 @@ class TestPausedDurationZero:
         target.media.element = lambda n: volume_el if n == "Volume" else None
         mock_app.cue_model.get.return_value = target
 
-        zero_calls = []
+        snap_calls = []
 
-        def record_zero(obj, attr, val):
-            zero_calls.append((obj, attr, val))
+        def record(obj, attr, val):
+            snap_calls.append((obj, attr, val))
         monkeypatch.setattr(
-            "lisp.plugins.action_cues.resume_cue.rsetattr", record_zero,
+            "lisp.plugins.action_cues.resume_cue.rsetattr", record,
         )
 
         cue = ResumeCue(app=mock_app)
@@ -485,8 +488,9 @@ class TestPausedDurationZero:
 
         result = cue.__start__()
 
-        # Zero step skipped — target resumes at its existing live_volume.
-        assert zero_calls == []
+        # Snap to 1.0, not 0.0 (that would be the pre-fade zero step,
+        # which is skipped when duration=0).
+        assert snap_calls == [(volume_fader.target, "live_volume", 1.0)]
         # Resume still dispatched.
         target.execute.assert_called_once_with(CueAction.Resume)
         # No async work.
