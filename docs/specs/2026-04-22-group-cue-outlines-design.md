@@ -201,9 +201,9 @@ repaints does not crash:
 
 1. Add a parallel `GroupCue` with two child cues → assert tree state
    via `cue.list` / `session.info`.
-2. Update `group_mode` to `"playlist"` via `cue.update` → assert
-   property change lands and no exception is raised on the main
-   thread.
+2. Update `group_mode` to `"playlist"` via `cue.set_property` →
+   assert property change lands and no exception is raised on the
+   main thread.
 3. Collapse the group via property write → assert `collapsed == True`
    and no crash.
 4. Ungroup via `layout.context_action` → assert children reparent to
