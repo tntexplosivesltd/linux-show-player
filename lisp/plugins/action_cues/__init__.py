@@ -19,6 +19,7 @@ from os import path
 
 from lisp.core.loading import load_classes
 from lisp.core.plugin import Plugin
+from lisp.ui.ui_utils import translate
 
 
 class ActionCues(Plugin):
@@ -29,8 +30,22 @@ class ActionCues(Plugin):
     def __init__(self, app):
         super().__init__(app)
 
-        # Register all the cue in the plugin
-        for _, cue_class in load_classes(__package__, path.dirname(__file__)):
+        # Register all the cues in the plugin. `load_classes` iterates
+        # filesystem order (os.scandir), which is unstable across
+        # machines and gives an apparently-random menu. Sort by the
+        # translated user-facing Name so the Action cues submenu is
+        # alphabetical and keeps related cues adjacent (e.g.
+        # "Fade & Resume" next to "Fade & Stop").
+        cue_classes = [
+            cue_class
+            for _, cue_class in load_classes(
+                __package__, path.dirname(__file__)
+            )
+        ]
+        cue_classes.sort(
+            key=lambda cls: translate("CueName", cls.Name)
+        )
+        for cue_class in cue_classes:
             app.cue_factory.register_factory(cue_class.__name__, cue_class)
             app.window.registerSimpleCueMenu(cue_class, cue_class.Category)
 
