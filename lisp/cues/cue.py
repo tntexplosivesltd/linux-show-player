@@ -202,13 +202,22 @@ class Cue(HasProperties):
 
         # Block start/resume actions if an exclusive cue is running,
         # or if a video/image cue is already playing.
+        #
+        # Only run the block check when the action would actually
+        # transition the cue — otherwise "Resume All" on a session
+        # containing stopped video cues would emit spurious "blocked"
+        # notifications for every stopped cue, even though
+        # `Cue.resume()` is a no-op outside `IsPaused` and
+        # `Cue.start()` is a no-op inside `IsRunning`.
+        #
         # hasattr guards: self.app may be a mock/stub without these.
-        if action in (
-            CueAction.Start,
-            CueAction.FadeInStart,
-            CueAction.Resume,
-            CueAction.FadeInResume,
-        ):
+        would_transition = False
+        if action in (CueAction.Start, CueAction.FadeInStart):
+            would_transition = not (self._state & CueState.IsRunning)
+        elif action in (CueAction.Resume, CueAction.FadeInResume):
+            would_transition = bool(self._state & CueState.IsPaused)
+
+        if would_transition:
             if (
                 hasattr(self.app, "exclusive_manager")
                 and self.app.exclusive_manager.is_start_blocked(self)
