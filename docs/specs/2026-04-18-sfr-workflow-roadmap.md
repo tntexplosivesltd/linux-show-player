@@ -68,7 +68,7 @@ Delivered on branch `feat/resume-cue`. Also landed a Part 1 symmetry
 fix: `StopCueSettings` now also excludes `ResumeCue` instances from
 its target picker.
 
-## Part 3 — Hibernating state & active-cues panel filtering — **in progress**
+## Part 3 — Hibernating state & active-cues panel filtering — **complete**
 
 Spec: [`2026-04-23-hibernating-cue-state-design.md`](2026-04-23-hibernating-cue-state-design.md)
 
@@ -99,7 +99,13 @@ Checklist:
 - [x] Plan
 - [x] Implement
 - [x] Tests (unit + E2E — runtime-only, no session migration needed)
-- [ ] QA + code review
+- [x] QA + code review
+
+Delivered on branch `feat/hibernating-cues`. Landed with a cherry-pick of
+upstream PR #367 (icon recolour refactor) as a precursor commit on master.
+Post-review fixes: `_set_hibernated` guards against setting Hibernating on
+non-Paused cues; group cascade iterates a `list()` snapshot of `cue_model`
+to avoid concurrent-mutation races.
 
 ## Cross-cutting concerns
 
