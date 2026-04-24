@@ -40,6 +40,11 @@ class CueState:
     PreWait_Pause = 64
     PostWait_Pause = 128
 
+    # Composes with Pause. A cue paused by Fade & Stop with action
+    # "Hibernate" has state == Pause | Hibernating. Any pause-exit
+    # transition (start/resume/stop/interrupt/error) clears the bit.
+    Hibernating = 256
+
     IsRunning = Running | PreWait | PostWait
     IsPaused = Pause | PreWait_Pause | PostWait_Pause
     IsStopped = Error | Stop
@@ -177,6 +182,8 @@ class Cue(HasProperties):
         self.error = Signal()
         self.next = Signal()
         self.end = Signal()
+        self.hibernated = Signal()
+        self.awoken = Signal()
 
         self.changed("next_action").connect(self.__next_action_changed)
 
@@ -332,9 +339,18 @@ class Cue(HasProperties):
             if init_state & (
                 CueState.IsStopped | CueState.Pause | CueState.PreWait_Pause
             ):
+                # Capture the Hibernating bit so we can emit awoken
+                # after the state replacement below (which also
+                # clears the bit inherently).
+                was_hibernating = bool(
+                    self._state & CueState.Hibernating
+                )
                 running = self.__start__(fade)
                 self._state = CueState.Running
                 self.started.emit(self)
+
+                if was_hibernating:
+                    self.awoken.emit(self)
 
                 if not running:
                     self._ended()
@@ -425,12 +441,19 @@ class Cue(HasProperties):
                         # Stop operation interrupted
                         return
 
-                    # Remove Running or Pause state
+                    was_hibernating = bool(
+                        self._state & CueState.Hibernating
+                    )
+                    # Remove Running, Pause, and Hibernating.
                     self._state = (self._state ^ CueState.Running) & (
                         self._state ^ CueState.Pause
                     )
+                    self._state &= ~CueState.Hibernating
                     self._state |= CueState.Stop
                     self.stopped.emit(self)
+
+                    if was_hibernating:
+                        self.awoken.emit(self)
         finally:
             self._st_lock.release()
 
@@ -530,12 +553,19 @@ class Cue(HasProperties):
                 if self._state & (CueState.Running | CueState.Pause):
                     self.__interrupt__(fade)
 
-                    # Remove Running or Pause state
+                    was_hibernating = bool(
+                        self._state & CueState.Hibernating
+                    )
+                    # Remove Running, Pause, and Hibernating.
                     self._state = (self._state ^ CueState.Running) & (
                         self._state ^ CueState.Pause
                     )
+                    self._state &= ~CueState.Hibernating
                     self._state |= CueState.Stop
                     self.interrupted.emit(self)
+
+                    if was_hibernating:
+                        self.awoken.emit(self)
 
     def __interrupt__(self, fade=False):
         """Implement the cue `interrupt` behavior.
@@ -584,19 +614,70 @@ class Cue(HasProperties):
             self._st_lock.release()
 
     def _error(self):
-        """Remove Running/Pause/Stop state and add Error state."""
+        """Remove Running/Pause/Stop/Hibernating and add Error."""
         locked = self._st_lock.acquire(blocking=False)
 
+        was_hibernating = bool(self._state & CueState.Hibernating)
         self._state = (
             (self._state ^ CueState.Running)
             & (self._state ^ CueState.Pause)
             & (self._state ^ CueState.Stop)
         ) | CueState.Error
+        self._state &= ~CueState.Hibernating
 
         self.error.emit(self)
+        if was_hibernating:
+            self.awoken.emit(self)
 
         if locked:
             self._st_lock.release()
+
+    def _set_hibernated(self, value):
+        """Set or clear the Hibernating state bit (idempotent).
+
+        Owns emission of hibernated / awoken. Only toggles the bit
+        when the requested value differs from current — a redundant
+        call is a no-op that emits nothing.
+
+        Setting to True is guarded on the cue being in Pause: a
+        hibernated-but-not-paused composite has no auto-clear path
+        (the transition hooks in start/stop/interrupt/_error only
+        fire when leaving Pause), so setting the bit on a Stopped or
+        Running cue would leak it indefinitely. The StopCue listener
+        arms just after `pause()` completes, but the target may have
+        transitioned elsewhere in the async window between dispatch
+        and our listener firing.
+
+        Uses non-blocking acquire of `_st_lock` because the StopCue
+        listener fires from inside the target's own `paused` signal
+        emission — which runs synchronously under `_st_lock` already
+        held by `Cue.pause()`. A blocking acquire would deadlock on
+        this re-entry; `_st_lock` is a plain Lock, not an RLock.
+        Same-thread reentrancy is safe because the GIL serialises
+        the mutation with the caller's held-lock section.
+
+        Signals fire outside the (attempted) lock to prevent further
+        reentrancy if a handler touches cue state.
+        """
+        emit_signal = None
+        locked = self._st_lock.acquire(blocking=False)
+        try:
+            currently = bool(self._state & CueState.Hibernating)
+            if value and not currently:
+                # Guard: only set Hibernating on a Paused cue.
+                if not (self._state & CueState.Pause):
+                    return
+                self._state |= CueState.Hibernating
+                emit_signal = self.hibernated
+            elif not value and currently:
+                self._state &= ~CueState.Hibernating
+                emit_signal = self.awoken
+        finally:
+            if locked:
+                self._st_lock.release()
+
+        if emit_signal is not None:
+            emit_signal.emit(self)
 
     def current_time(self):
         """Return the current execution time if available, otherwise 0.

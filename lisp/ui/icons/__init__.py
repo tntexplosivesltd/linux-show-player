@@ -45,6 +45,9 @@ class IconTheme:
         "-running": {"stroke": "#0D0", "fill": "#0D0", "opacity": "1"},
         "-pause": {"stroke": "#F90", "fill": "#F90", "opacity": "1"},
         "-error": {"stroke": "#D11", "fill": "#D11", "opacity": "1"},
+        "-hibernating": {
+            "stroke": "#5AF", "fill": "#5AF", "opacity": "1",
+        },
     }
     _GlobalCache = {}
     _GlobalTheme = None

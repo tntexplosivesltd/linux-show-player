@@ -570,3 +570,324 @@ class TestStopCueSettings:
         pages = list(CueSettingsRegistry().filter(StopCue))
         assert StopCueSettings in pages, \
             "StopCueSettings not registered for StopCue"
+
+
+class TestHibernateAction:
+    """Hibernate as a third UI option alongside Stop and Pause."""
+
+    def test_hibernate_sentinel_exists_in_supported_actions(self):
+        from lisp.plugins.action_cues.stop_cue import (
+            HIBERNATE_ACTION, StopCueSettings,
+        )
+        assert HIBERNATE_ACTION in StopCueSettings.SupportedActions
+
+    def test_hibernate_sentinel_has_duck_typed_name_value(self):
+        from lisp.plugins.action_cues.stop_cue import HIBERNATE_ACTION
+        assert HIBERNATE_ACTION.name == "Hibernate"
+        assert HIBERNATE_ACTION.value == "Hibernate"
+
+    def test_action_property_accepts_hibernate_value(self, mock_app):
+        cue = StopCue(app=mock_app)
+        cue.action = "Hibernate"
+        assert cue.action == "Hibernate"
+
+    def _setup_target(self, mock_app, name="Sound1"):
+        target = MagicMock()
+        target.name = name
+        mock_app.cue_model.get = lambda cid: (
+            target if cid == "t1" else None
+        )
+        return target
+
+    def test_auto_name_uses_hibernate_verb(self, mock_app):
+        self._setup_target(mock_app, "Sound1")
+        cue = StopCue(app=mock_app)
+        cue.target_id = "t1"
+        cue.action = "Hibernate"
+        assert cue.name == "Fade and Hibernate 'Sound1'"
+
+    def test_auto_name_switches_between_actions(self, mock_app):
+        self._setup_target(mock_app, "Sound1")
+        cue = StopCue(app=mock_app)
+        cue.target_id = "t1"
+
+        cue.action = CueAction.Pause.value
+        assert cue.name == "Fade and Pause 'Sound1'"
+
+        cue.action = "Hibernate"
+        assert cue.name == "Fade and Hibernate 'Sound1'"
+
+        cue.action = CueAction.Stop.value
+        assert cue.name == "Fade and Stop 'Sound1'"
+
+    def test_hibernate_property_survives_round_trip(self, mock_app):
+        cue = StopCue(app=mock_app)
+        cue.target_id = "t1"
+        cue.action = "Hibernate"
+        props = cue.properties()
+        assert props["action"] == "Hibernate"
+
+
+class TestHibernateRuntimeDispatch:
+    """StopCue with action=Hibernate fades, then pauses target, then
+    flips the Hibernating bit via target._set_hibernated."""
+
+    def _make_target(self, mock_app, state=None):
+        from lisp.cues.cue import Cue, CueState
+        target = Cue(app=mock_app)
+        target.name = "Target"
+        target._state = (
+            state if state is not None else CueState.Running
+        )
+
+        def pause_emit():
+            target._state = CueState.Pause
+            target.paused.emit(target)
+
+        def routed_execute(action):
+            if action == CueAction.Pause:
+                pause_emit()
+        target.execute = routed_execute
+
+        mock_app.cue_model.get = lambda cid: (
+            target if cid == "t1" else None
+        )
+        # StopCue iterates the model for group children — single-target
+        # test: model has just the target itself.
+        mock_app.cue_model.__iter__ = lambda self=None: iter([target])
+        return target
+
+    def test_hibernate_duration_zero_flips_bit(self, mock_app):
+        from lisp.cues.cue import CueState
+        target = self._make_target(mock_app)
+
+        cue = StopCue(app=mock_app)
+        cue.target_id = "t1"
+        cue.action = "Hibernate"
+        cue.duration = 0
+
+        cue.__start__()
+
+        assert target._state & CueState.Pause
+        assert target._state & CueState.Hibernating
+
+    def test_hibernate_bit_not_set_if_target_already_paused(
+        self, mock_app,
+    ):
+        """Target already Pause → dispatched Pause is a no-op → paused
+        never fires → bit stays clear."""
+        from lisp.cues.cue import CueState
+        target = self._make_target(
+            mock_app, state=CueState.Pause,
+        )
+        target.execute = lambda action: None
+
+        cue = StopCue(app=mock_app)
+        cue.target_id = "t1"
+        cue.action = "Hibernate"
+        cue.duration = 0
+
+        cue.__start__()
+
+        assert not (target._state & CueState.Hibernating)
+
+    def test_hibernate_with_stop_action_does_not_flip_bit(
+        self, mock_app,
+    ):
+        from lisp.cues.cue import CueState
+        target = self._make_target(mock_app)
+
+        def stop_emit():
+            target._state = CueState.Stop
+            target.stopped.emit(target)
+
+        def routed(action):
+            if action == CueAction.Stop:
+                stop_emit()
+        target.execute = routed
+
+        cue = StopCue(app=mock_app)
+        cue.target_id = "t1"
+        cue.action = CueAction.Stop.value
+        cue.duration = 0
+
+        cue.__start__()
+
+        assert not (target._state & CueState.Hibernating)
+
+
+class TestHibernateGroupCascade:
+    """Hibernate on a GroupCue cascades the bit to each child that
+    transitions to Pause as part of the cascade."""
+
+    def _make_group_with_children(self, mock_app):
+        from lisp.cues.cue import Cue, CueState
+        from lisp.plugins.action_cues.group_cue import GroupCue
+
+        # Cue.id is WriteOnceProperty — must be passed to constructor.
+        child_a = Cue(app=mock_app, id="a")
+        child_a.group_id = "g"
+        child_a._state = CueState.Running
+
+        child_b = Cue(app=mock_app, id="b")
+        child_b.group_id = "g"
+        child_b._state = CueState.Running
+
+        def make_child_exec(cue):
+            def routed(action):
+                if action == CueAction.Pause:
+                    cue._state = CueState.Pause
+                    cue.paused.emit(cue)
+            return routed
+
+        child_a.execute = make_child_exec(child_a)
+        child_b.execute = make_child_exec(child_b)
+
+        group = GroupCue(app=mock_app, id="g")
+
+        def group_exec(action):
+            if action == CueAction.Pause:
+                for child in (child_a, child_b):
+                    child.execute(CueAction.Pause)
+                group._state = CueState.Pause
+                group.paused.emit(group)
+        group.execute = group_exec
+
+        by_id = {"g": group, "a": child_a, "b": child_b}
+        mock_app.cue_model.get = lambda cid: by_id.get(cid)
+        # StopCue iterates the model to find children via group_id.
+        mock_app.cue_model.__iter__ = lambda self=None: iter(
+            by_id.values()
+        )
+        return group, child_a, child_b
+
+    def test_hibernate_group_cascades_bit_to_children(self, mock_app):
+        from lisp.cues.cue import CueState
+        group, child_a, child_b = self._make_group_with_children(
+            mock_app,
+        )
+
+        cue = StopCue(app=mock_app)
+        cue.target_id = "g"
+        cue.action = "Hibernate"
+        cue.duration = 0
+
+        cue.__start__()
+
+        assert group._state & CueState.Hibernating
+        assert child_a._state & CueState.Hibernating
+        assert child_b._state & CueState.Hibernating
+
+    def test_resume_one_child_only_clears_its_own_bit(self, mock_app):
+        import threading
+        import time
+        from lisp.cues.cue import CueState
+        group, child_a, child_b = self._make_group_with_children(
+            mock_app,
+        )
+
+        cue = StopCue(app=mock_app)
+        cue.target_id = "g"
+        cue.action = "Hibernate"
+        cue.duration = 0
+        cue.__start__()
+
+        done = threading.Event()
+
+        def on_started(c):
+            done.set()
+        child_a.started.connect(on_started)
+
+        child_a.resume()
+        done.wait(timeout=2.0)
+        time.sleep(0.02)
+
+        assert not (child_a._state & CueState.Hibernating)
+        assert child_b._state & CueState.Hibernating
+
+
+class TestHibernateMidFadeAbort:
+    """Mid-fade abort with action=Hibernate: the paused-listener
+    must be disarmed so the bit is NOT set later, and the target
+    cue must be released cleanly from subsequent unrelated pauses."""
+
+    def test_abort_mid_fade_disarms_listener(self, mock_app):
+        """Set up a StopCue with action=Hibernate and a real runner;
+        abort before the runner completes; assert _hib_handlers is
+        cleared."""
+        from lisp.cues.cue import Cue, CueState
+        target = Cue(app=mock_app, id="t1")
+        target._state = CueState.Running
+        mock_app.cue_model.get = lambda cid: (
+            target if cid == "t1" else None
+        )
+        mock_app.cue_model.__iter__ = lambda self=None: iter([target])
+
+        cue = StopCue(app=mock_app)
+        cue.target_id = "t1"
+        cue.action = "Hibernate"
+        cue.duration = 500
+
+        # Monkey-patch the runner so _run_fade_then_action sees an
+        # aborted fade. This avoids spinning up a real thread.
+        class _StubRunner:
+            def run_until_complete(self_):
+                return False  # aborted
+
+            def abort(self_):
+                pass
+
+            def current_time(self_):
+                return 0
+
+        # Arm the listener the way __start__ would, then call the
+        # fade loop with a stub runner to simulate abort.
+        cue._arm_hibernate_listener(target)
+        assert cue._hib_handlers is not None
+
+        cue._runner = _StubRunner()
+        # _run_fade_then_action is @async_function; drive the body
+        # inline by calling the underlying function.
+        cue._run_fade_then_action.__wrapped__(cue, target)
+
+        assert cue._hib_handlers is None
+        # An unrelated subsequent pause on the target must NOT set
+        # the bit.
+        target._state = CueState.Pause
+        target.paused.emit(target)
+        assert not (target._state & CueState.Hibernating)
+
+    def test_rearm_rebuilds_handlers(self, mock_app):
+        """Re-arming (e.g. reusing the same StopCue for a second
+        hibernate) must disarm any stale handlers with fired=True
+        and rebuild from scratch."""
+        from lisp.cues.cue import Cue, CueState
+        target = Cue(app=mock_app, id="t1")
+        mock_app.cue_model.get = lambda cid: (
+            target if cid == "t1" else None
+        )
+        mock_app.cue_model.__iter__ = lambda self=None: iter([target])
+
+        cue = StopCue(app=mock_app)
+        cue.target_id = "t1"
+        cue.action = "Hibernate"
+
+        # First arm: capture the handler and fire it to set fired=True.
+        cue._arm_hibernate_listener(target)
+        _old_target, old_handler = cue._hib_handlers[0]
+        target._state = CueState.Pause
+        target.paused.emit(target)  # handler fires, flips bit
+        assert target._state & CueState.Hibernating
+
+        # Clear the bit (simulates the cue having been resumed).
+        target._state = CueState.Running
+
+        # Re-arm: must discard the stale handler and build a new one.
+        cue._arm_hibernate_listener(target)
+        _new_target, new_handler = cue._hib_handlers[0]
+        assert new_handler is not old_handler
+
+        # The new handler must fire fresh (fired=[False]).
+        target._state = CueState.Pause
+        target.paused.emit(target)
+        assert target._state & CueState.Hibernating

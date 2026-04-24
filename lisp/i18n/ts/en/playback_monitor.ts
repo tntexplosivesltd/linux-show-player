@@ -19,7 +19,7 @@
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/playback_monitor/monitor_window.py" line="294" />
+      <location filename="../../../plugins/playback_monitor/monitor_window.py" line="314" />
       <source>Always on Top</source>
       <translation type="unfinished" />
     </message>

@@ -68,39 +68,44 @@ Delivered on branch `feat/resume-cue`. Also landed a Part 1 symmetry
 fix: `StopCueSettings` now also excludes `ResumeCue` instances from
 its target picker.
 
-## Part 3 — Hibernating state & active-cues panel filtering — **not started**
+## Part 3 — Hibernating state & active-cues panel filtering — **complete**
+
+Spec: [`2026-04-23-hibernating-cue-state-design.md`](2026-04-23-hibernating-cue-state-design.md)
 
 Adds "hibernating" as a first-class concept: a cue that's been paused by a
-Fade & Stop with intent-to-resume is hidden from the active-cues panel until
-resumed, so the show operator's view stays focused on what's actually
-playing.
+Fade & Stop with action=Hibernate renders compact + dimmed in the Playing
+panel, so the show operator's view stays focused on what's actually playing.
 
-Open questions to brainstorm:
+Resolved brainstorming questions:
 
-- [ ] New `CueState.Hibernated`, or a boolean flag on top of `CueState.Pause`?
-      (Flag is less invasive; enum value is semantically cleaner.)
-- [ ] Which cue triggers hibernation — Fade & Stop with a checkbox? Only
-      playlist `GroupCue`s (matching SCS)? All pause-capable cues?
-- [ ] Exit transitions: only Fade & Resume de-hibernates? Or does any user
-      Start/Resume also clear the flag?
-- [ ] Active-cues panel filter: hide entirely, or dim/collapse?
-- [ ] Audit & update every consumer of `CueState`:
-  - [ ] `lisp/layout/list_layout` active-cues view
-  - [ ] `lisp/layout/cart_layout` state rendering
-  - [ ] MIDI/OSC status reporting plugins
-  - [ ] `test_harness` `cue.list` and signal subscriptions
-  - [ ] Serialization — does hibernation persist across session save/load?
-- [ ] Visual indicator on the hibernated cue in the main cue list (icon
-      overlay? muted colour?).
+- State representation: new `CueState.Hibernating = 256` composing with
+  `Pause` — idiomatic for the bitflag pattern. Every existing
+  `state & CueState.Pause` callsite keeps working unchanged.
+- Trigger: new `Hibernate` option in Fade & Stop's action combo (StopCue-
+  local sentinel — NOT a new `CueAction` enum value).
+- Clear: any pause-exit transition (start/resume/stop/interrupt/error)
+  in the base `Cue` class. One hook covers every resume path.
+- Playing panel: in-place dim + collapse (widget stays in the list, size
+  hint shrinks, dbmeter/seek/controls hidden, muted palette).
+- Main list indicator: `-hibernating` colour variation via the upstream
+  recolour dict (cool blue `#5AF`) — cherry-picked PR #367 as the
+  precursor. Cart layout uses a new `led-hibernating.svg`.
+- Persistence: runtime-only. Session saves unchanged.
 
-Checklist once brainstormed:
+Checklist:
 
-- [ ] Brainstorm
-- [ ] Spec (expect larger than Parts 1-2 due to `CueState` blast radius)
-- [ ] Plan
-- [ ] Implement
-- [ ] Tests (unit + E2E + migration test for existing sessions)
-- [ ] QA + code review
+- [x] Brainstorm
+- [x] Spec
+- [x] Plan
+- [x] Implement
+- [x] Tests (unit + E2E — runtime-only, no session migration needed)
+- [x] QA + code review
+
+Delivered on branch `feat/hibernating-cues`. Landed with a cherry-pick of
+upstream PR #367 (icon recolour refactor) as a precursor commit on master.
+Post-review fixes: `_set_hibernated` guards against setting Hibernating on
+non-Paused cues; group cascade iterates a `list()` snapshot of `cue_model`
+to avoid concurrent-mutation races.
 
 ## Cross-cutting concerns
 

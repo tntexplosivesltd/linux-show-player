@@ -269,6 +269,13 @@ class CueWidget(QWidget):
         self._cue.paused.connect(self._statusPaused, Connection.QtQueued)
         self._cue.error.connect(self._statusError, Connection.QtQueued)
         self._cue.end.connect(self._statusStopped, Connection.QtQueued)
+        # Hibernating is a dedicated status. awoken is intentionally
+        # NOT wired here — the subsequent started/stopped/interrupted
+        # signal updates the icon to the actual destination state
+        # (wiring awoken would race with _statusPlaying on resume).
+        self._cue.hibernated.connect(
+            self._statusHibernating, Connection.QtQueued
+        )
 
         # Media cues features dBMeter and seekSlider
         if isinstance(cue, MediaCue):
@@ -352,6 +359,12 @@ class CueWidget(QWidget):
     def _statusPaused(self):
         self.statusIcon.setPixmap(
             IconTheme.get("led-pause").pixmap(CueWidget.ICON_SIZE)
+        )
+        self.volumeSlider.setEnabled(False)
+
+    def _statusHibernating(self):
+        self.statusIcon.setPixmap(
+            IconTheme.get("led-hibernating").pixmap(CueWidget.ICON_SIZE)
         )
         self.volumeSlider.setEnabled(False)
 

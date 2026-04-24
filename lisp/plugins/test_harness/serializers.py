@@ -33,6 +33,7 @@ _STATE_NAMES = {
     CueState.PostWait: "PostWait",
     CueState.PreWait_Pause: "PreWait_Pause",
     CueState.PostWait_Pause: "PostWait_Pause",
+    CueState.Hibernating: "Hibernating",
 }
 
 

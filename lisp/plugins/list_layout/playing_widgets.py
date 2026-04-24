@@ -21,6 +21,7 @@ from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QWidget,
+    QGraphicsOpacityEffect,
     QGridLayout,
     QLabel,
     QSizePolicy,
@@ -166,6 +167,7 @@ class RunningCueWidget(QWidget):
 
         self._accurate_time = False
         self._config = config
+        self._hibernated = False
 
         self.cue = cue
         self.cue_time = CueTime(cue)
@@ -286,6 +288,116 @@ class RunningCueWidget(QWidget):
     def set_accurate_time(self, enable):
         self._accurate_time = enable
 
+    # --- Hibernation rendering -------------------------------------
+    # When a cue is hibernated, we keep the widget in the Playing
+    # panel but render it compact + dimmed. Controls, dbmeter and
+    # seek slider are hidden; a muted palette is applied via
+    # stylesheet. The operator's current dbmeter/seek visibility
+    # preferences are snapshotted so they can be restored on wake.
+
+    _HIBERNATED_OPACITY = 0.55
+
+    def set_hibernated(self, hibernated):
+        """Toggle the compact-dimmed rendering mode used for
+        hibernated cues. Idempotent. Preserves operator dbmeter/seek
+        visibility preferences for restoration on wake.
+
+        Visible when hibernated: the name label only. Controls,
+        timeDisplay, dbmeter, and seekSlider are hidden (a paused-
+        hidden cue has no meaningful playback metrics).
+
+        The grid's normal rowStretch gives row 1 (controls+time)
+        three-quarters of the height; we invert that while
+        hibernated so the name row (row 0) dominates the compact
+        strip.
+        """
+        if getattr(self, "_hibernated", False) == hibernated:
+            return
+
+        if hibernated:
+            # Snapshot current sub-widget visibilities (media cues).
+            db = getattr(self, "dbmeter", None)
+            seek = getattr(self, "seekSlider", None)
+            vol = getattr(self, "volumeIndicator", None)
+            self._dbmeter_requested = bool(db and db.isVisible())
+            self._seek_requested = bool(seek and seek.isVisible())
+            self._volume_indicator_requested_at_hibernate = bool(
+                vol and vol.isVisible()
+            )
+            if db is not None:
+                db.setVisible(False)
+            if seek is not None:
+                seek.setVisible(False)
+            if vol is not None:
+                vol.setVisible(False)
+            self.controlButtons.setVisible(False)
+            self.timeDisplay.setVisible(False)
+            # Give the name row all the space.
+            self.gridLayout.setRowStretch(0, 1)
+            self.gridLayout.setRowStretch(1, 0)
+            # Dim via graphics opacity effect rather than a palette
+            # colour override — stylesheet colour changes interact
+            # unpredictably with theme palettes and can render text
+            # invisible in some themes. Opacity is theme-agnostic.
+            self._apply_hibernated_opacity(True)
+            # Compact height: enough for the name label's natural
+            # line height + the grid's vertical margins (3px top,
+            # 3px bottom = 6px). Falls back to a sane floor if the
+            # font metrics are unavailable.
+            try:
+                line_h = self.nameLabel.fontMetrics().height()
+            except Exception:
+                line_h = 18
+            compact_h = max(28, line_h + 10)
+            self.resize(self.size().width(), compact_h)
+        else:
+            db = getattr(self, "dbmeter", None)
+            seek = getattr(self, "seekSlider", None)
+            vol = getattr(self, "volumeIndicator", None)
+            if db is not None:
+                db.setVisible(
+                    bool(getattr(self, "_dbmeter_requested", False))
+                )
+            if seek is not None:
+                seek.setVisible(
+                    bool(getattr(self, "_seek_requested", False))
+                )
+            if vol is not None:
+                vol.setVisible(bool(getattr(
+                    self,
+                    "_volume_indicator_requested_at_hibernate",
+                    False,
+                )))
+            self.controlButtons.setVisible(True)
+            self.timeDisplay.setVisible(True)
+            # Restore the normal row stretch.
+            self.gridLayout.setRowStretch(0, 1)
+            self.gridLayout.setRowStretch(1, 3)
+            self._apply_hibernated_opacity(False)
+            # Restore the normal size (width / subclass's ratio).
+            w = self.size().width()
+            self.resize(w, int(w / self._normal_size_ratio()))
+
+        self._hibernated = hibernated
+        self.updateGeometry()
+
+    def _normal_size_ratio(self):
+        """Width-to-height ratio for the normal (non-hibernated)
+        size. Overridden by RunningMediaCueWidget."""
+        return 3.75
+
+    def _apply_hibernated_opacity(self, dim):
+        """Apply/remove a QGraphicsOpacityEffect on the internal grid
+        widget (not the outer widget — the colorStripe should stay
+        at full saturation so the tint remains recognisable)."""
+        if dim:
+            effect = QGraphicsOpacityEffect(self.gridLayoutWidget)
+            effect.setOpacity(self._HIBERNATED_OPACITY)
+            self.gridLayoutWidget.setGraphicsEffect(effect)
+        else:
+            # Passing None clears any existing effect.
+            self.gridLayoutWidget.setGraphicsEffect(None)
+
     def _time_updated(self, time):
         if not self.visibleRegion().isEmpty():
             # If the given value is the duration or < 0 set the time to 0
@@ -387,6 +499,9 @@ class RunningMediaCueWidget(RunningCueWidget):
 
     def updateSize(self, width):
         self.resize(width, int(width / 2.75))
+
+    def _normal_size_ratio(self):
+        return 2.75
 
     def set_seek_visible(self, visible):
         if visible and not self.seekSlider.isVisible():

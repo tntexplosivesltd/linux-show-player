@@ -16,6 +16,7 @@
 # along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
 import logging
+from collections import namedtuple
 
 from PyQt5.QtCore import QT_TRANSLATE_NOOP, Qt
 from PyQt5.QtWidgets import (
@@ -41,6 +42,14 @@ from lisp.ui.widgets import FadeEdit
 
 logger = logging.getLogger(__name__)
 
+# Duck-typed CueAction-like for the StopCue-local "Hibernate"
+# option. Has .name and .value so the combo populator
+# (`for a in SupportedActions: addItem(translate(..., a.name),
+# a.value)`) handles it unchanged. Not a CueAction enum value —
+# hibernation is StopCue-originated; targets only ever see Pause.
+_ActionLike = namedtuple("_ActionLike", ["name", "value"])
+HIBERNATE_ACTION = _ActionLike(name="Hibernate", value="Hibernate")
+
 
 class StopCue(Cue):
     Name = QT_TRANSLATE_NOOP("CueName", "Fade & Stop")
@@ -65,6 +74,12 @@ class StopCue(Cue):
         # In-flight ParallelFadeRunner, if any. Set by __start__, cleared
         # on completion/abort. Used by __stop__ to cancel the fade.
         self._runner = None
+
+        # List of (cue, handler) pairs armed by _arm_hibernate_listener
+        # when action=Hibernate. For single-target cases this is one
+        # entry; GroupCue cascades add one per affected child (Task 6).
+        # None = not armed.
+        self._hib_handlers = None
 
         # Tracks what the auto-rename handler last wrote to `name`.
         # If `self.name` still matches this value, auto-management is
@@ -96,8 +111,13 @@ class StopCue(Cue):
         target = self.app.cue_model.get(self.target_id)
         if target is None:
             return translate("CueName", self.Name)
-        action = CueAction(self.action)
-        verb = translate("CueAction", action.name)
+        if self.action == HIBERNATE_ACTION.value:
+            # "Hibernate" is StopCue-local, not a CueAction enum —
+            # translate its label directly.
+            verb = translate("CueAction", "Hibernate")
+        else:
+            action = CueAction(self.action)
+            verb = translate("CueAction", action.name)
         return f"Fade and {verb} '{target.name}'"
 
     def update_properties(self, properties):
@@ -123,6 +143,11 @@ class StopCue(Cue):
         affected = build_affected_set(target)
         faders = collect_live_faders(affected)
 
+        # Arm the hibernate listener BEFORE any dispatch so the
+        # pause-to-hibernate hop is race-free.
+        if self.action == HIBERNATE_ACTION.value:
+            self._arm_hibernate_listener(target)
+
         if self.duration > 0 and faders:
             self._runner = ParallelFadeRunner(
                 faders,
@@ -133,8 +158,13 @@ class StopCue(Cue):
             self._run_fade_then_action(target)
             return True
 
-        # Instant path: no fade to run, dispatch action synchronously.
-        target.execute(CueAction(self.action))
+        # Instant path: no fade to run, dispatch action.
+        # NOTE: Cue.pause() is @async_function — returns before the
+        # target actually transitions and emits `paused`. We do NOT
+        # disarm here; the handler's `fired` flag makes it
+        # self-idempotent, and weak-ref cleanup disposes it when
+        # StopCue is GC'd.
+        self._dispatch_action(target)
         return False
 
     @async_function
@@ -145,16 +175,108 @@ class StopCue(Cue):
         try:
             completed = self._runner.run_until_complete()
             if not completed:
-                return  # aborted — caller's __stop__ handled state
-            target.execute(CueAction(self.action))
+                # Fade aborted — disarm the hibernate listener so the
+                # target isn't accidentally hibernated by a later
+                # unrelated pause.
+                self._disarm_hibernate_listener(target)
+                return  # caller's __stop__ handled state
+            # Dispatch Pause. Cue.pause() is @async_function — it
+            # returns before the target transitions. We do NOT disarm
+            # here (it would race with the pending paused emission).
+            # The handler's `fired` flag makes it idempotent; weak-
+            # ref cleanup disposes it when StopCue is GC'd.
+            self._dispatch_action(target)
         except Exception:
             logger.exception("StopCue: error during fade-and-action")
+            self._disarm_hibernate_listener(target)
             self._error()
             return
         finally:
             self._runner = None
 
         self._ended()
+
+    def _arm_hibernate_listener(self, target):
+        """Subscribe one-shot-style handlers to target.paused that flip
+        the Hibernating bit on the target.
+
+        Re-arming: always discards any previously-armed handlers
+        (typically left behind by the non-disarming success path —
+        the handler's `fired` flag is sticky across invocations, so
+        stale handlers would no-op and block re-hibernation on reuse).
+
+        Each handler uses a `fired` flag for idempotence; the actual
+        signal disconnect happens in _disarm_hibernate_listener after
+        emit returns — disconnecting from inside emit would mutate the
+        slot dict mid-iteration and raise RuntimeError.
+
+        Cascades listeners to GroupCue children by iterating a
+        snapshot of cue_model and matching children via the
+        `group_id` property.
+        """
+        # Discard any stale handlers from a previous invocation.
+        self._disarm_hibernate_listener(target)
+
+        self._hib_handlers = []
+
+        def make_handler(cue):
+            fired = [False]
+
+            def handler(_emitter):
+                if fired[0]:
+                    return
+                fired[0] = True
+                cue._set_hibernated(True)
+            return handler
+
+        def connect(cue):
+            h = make_handler(cue)
+            cue.paused.connect(h)
+            self._hib_handlers.append((cue, h))
+
+        connect(target)
+
+        # If target is a group (or any cue with children), arm each
+        # direct child. Iterate a *snapshot* of cue_model so a
+        # concurrent add/remove (via test harness, OSC, etc.) can't
+        # raise "dictionary changed size during iteration".
+        #
+        # Only direct children are cascaded — grandchildren (if a
+        # nested group is a child of this target) pick up their bit
+        # through their own `paused` emission when the parent group's
+        # cascade reaches them. If deeper nesting is ever added to
+        # GroupCue, this may need to recurse.
+        target_id = getattr(target, "id", None)
+        if target_id:
+            try:
+                children_snapshot = list(self.app.cue_model)
+            except TypeError:
+                children_snapshot = []
+            for child in children_snapshot:
+                if child is target:
+                    continue
+                if getattr(child, "group_id", "") == target_id:
+                    connect(child)
+
+    def _disarm_hibernate_listener(self, _target):
+        """Disconnect every armed hibernate listener (no-op if none)."""
+        if self._hib_handlers is None:
+            return
+        for cue, handler in self._hib_handlers:
+            try:
+                cue.paused.disconnect(handler)
+            except (TypeError, ValueError, RuntimeError):
+                pass
+        self._hib_handlers = None
+
+    def _dispatch_action(self, target):
+        """Dispatch the configured action. The Hibernate sentinel is
+        translated to CueAction.Pause; the listener armed by
+        _arm_hibernate_listener handles the bit flip."""
+        if self.action == HIBERNATE_ACTION.value:
+            target.execute(CueAction.Pause)
+        else:
+            target.execute(CueAction(self.action))
 
     def __stop__(self, fade=False):
         """Cancel the in-flight fade, if any.
@@ -189,6 +311,7 @@ class StopCueSettings(SettingsPage):
     SupportedActions = [
         CueAction.Stop,
         CueAction.Pause,
+        HIBERNATE_ACTION,
         CueAction.Interrupt,
     ]
 

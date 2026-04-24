@@ -399,31 +399,36 @@ This is likely because of corrupted data from a plugin. Try to revert recent cha
     </message>
     <message>
       <location filename="../../../ui/settings/cue_pages/cue_general.py" line="298" />
-      <source>While playing, prevent other cues from starting</source>
+      <source>Cue is exclusive</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="473" />
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="301" />
+      <source>While playing, prevent other media cues from starting</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="476" />
       <source>Pre wait</source>
       <translation>Pre wait</translation>
     </message>
     <message>
-      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="475" />
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="478" />
       <source>Wait before cue execution</source>
       <translation>Wait before cue execution</translation>
     </message>
     <message>
-      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="477" />
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="480" />
       <source>Post wait</source>
       <translation>Post wait</translation>
     </message>
     <message>
-      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="479" />
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="482" />
       <source>Wait after cue execution</source>
       <translation>Wait after cue execution</translation>
     </message>
     <message>
-      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="481" />
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="484" />
       <source>Next action</source>
       <translation>Next action</translation>
     </message>
@@ -446,6 +451,11 @@ This is likely because of corrupted data from a plugin. Try to revert recent cha
       <location filename="../../../ui/settings/app_pages/cue.py" line="75" />
       <source>Used for fade-in and fade-out actions, for cues where fade duration is set to 0.</source>
       <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="298" />
+      <source>While playing, prevent other cues from starting</source>
+      <translation type="obsolete" />
     </message>
     <message>
       <location filename="../../../ui/settings/cue_pages/cue_general.py" line="114" />
@@ -882,42 +892,42 @@ This is likely because of corrupted data from a plugin. Try to revert recent cha
   <context>
     <name>MediaCueSettings</name>
     <message>
-      <location filename="../../../ui/settings/cue_pages/media_cue.py" line="107" />
+      <location filename="../../../ui/settings/cue_pages/media_cue.py" line="115" />
       <source>Start time</source>
       <translation>Start time</translation>
     </message>
     <message>
-      <location filename="../../../ui/settings/cue_pages/media_cue.py" line="109" />
+      <location filename="../../../ui/settings/cue_pages/media_cue.py" line="117" />
       <source>Start position of the media</source>
       <translation>Start position of the media</translation>
     </message>
     <message>
-      <location filename="../../../ui/settings/cue_pages/media_cue.py" line="111" />
+      <location filename="../../../ui/settings/cue_pages/media_cue.py" line="119" />
       <source>Stop time</source>
       <translation>Stop time</translation>
     </message>
     <message>
-      <location filename="../../../ui/settings/cue_pages/media_cue.py" line="113" />
+      <location filename="../../../ui/settings/cue_pages/media_cue.py" line="121" />
       <source>Stop position of the media</source>
       <translation>Stop position of the media</translation>
     </message>
     <message>
-      <location filename="../../../ui/settings/cue_pages/media_cue.py" line="115" />
+      <location filename="../../../ui/settings/cue_pages/media_cue.py" line="123" />
       <source>Loop</source>
       <translation>Loop</translation>
     </message>
     <message>
-      <location filename="../../../ui/settings/cue_pages/media_cue.py" line="117" />
+      <location filename="../../../ui/settings/cue_pages/media_cue.py" line="125" />
       <source>Repetition after first play (-1 = infinite)</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../ui/settings/cue_pages/media_cue.py" line="201" />
+      <location filename="../../../ui/settings/cue_pages/media_cue.py" line="286" />
       <source>Trimming does not apply to image cues.</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../ui/settings/cue_pages/media_cue.py" line="144" />
+      <location filename="../../../ui/settings/cue_pages/media_cue.py" line="166" />
       <source>Select a single cue</source>
       <translation type="unfinished" />
     </message>
@@ -1028,7 +1038,7 @@ This is likely because of corrupted data from a plugin. Try to revert recent cha
       <translation>General</translation>
     </message>
     <message>
-      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="420" />
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="423" />
       <source>Timing</source>
       <translation type="unfinished" />
     </message>

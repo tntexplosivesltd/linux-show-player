@@ -63,9 +63,17 @@
     </message>
   </context>
   <context>
+    <name>CueAction</name>
+    <message>
+      <location filename="../../../plugins/action_cues/stop_cue.py" line="117" />
+      <source>Hibernate</source>
+      <translation type="unfinished" />
+    </message>
+  </context>
+  <context>
     <name>CueCategory</name>
     <message>
-      <location filename="../../../plugins/action_cues/stop_cue.py" line="47" />
+      <location filename="../../../plugins/action_cues/stop_cue.py" line="56" />
       <source>Action cues</source>
       <translation type="unfinished" />
     </message>
@@ -113,7 +121,7 @@
       <translation>Volume Control</translation>
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/stop_cue.py" line="46" />
+      <location filename="../../../plugins/action_cues/stop_cue.py" line="55" />
       <source>Fade &amp; Stop</source>
       <translation type="unfinished" />
     </message>
@@ -192,22 +200,22 @@
   <context>
     <name>ResumeCue</name>
     <message>
-      <location filename="../../../plugins/action_cues/resume_cue.py" line="236" />
+      <location filename="../../../plugins/action_cues/resume_cue.py" line="304" />
       <source>Target</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/resume_cue.py" line="237" />
+      <location filename="../../../plugins/action_cues/resume_cue.py" line="305" />
       <source>Click to select</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/resume_cue.py" line="238" />
+      <location filename="../../../plugins/action_cues/resume_cue.py" line="306" />
       <source>Not selected</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/resume_cue.py" line="239" />
+      <location filename="../../../plugins/action_cues/resume_cue.py" line="307" />
       <source>Fade</source>
       <translation type="unfinished" />
     </message>
@@ -243,7 +251,7 @@
   <context>
     <name>SettingsPageName</name>
     <message>
-      <location filename="../../../plugins/action_cues/resume_cue.py" line="178" />
+      <location filename="../../../plugins/action_cues/resume_cue.py" line="246" />
       <source>Fade &amp; Resume Settings</source>
       <translation type="unfinished" />
     </message>
@@ -283,7 +291,7 @@
       <translation>Volume Settings</translation>
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/stop_cue.py" line="141" />
+      <location filename="../../../plugins/action_cues/stop_cue.py" line="291" />
       <source>Fade &amp; Stop Settings</source>
       <translation type="unfinished" />
     </message>
@@ -299,27 +307,27 @@
   <context>
     <name>StopCue</name>
     <message>
-      <location filename="../../../plugins/action_cues/stop_cue.py" line="220" />
+      <location filename="../../../plugins/action_cues/stop_cue.py" line="375" />
       <source>Target</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/stop_cue.py" line="221" />
+      <location filename="../../../plugins/action_cues/stop_cue.py" line="376" />
       <source>Click to select</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/stop_cue.py" line="222" />
+      <location filename="../../../plugins/action_cues/stop_cue.py" line="377" />
       <source>Not selected</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/stop_cue.py" line="223" />
+      <location filename="../../../plugins/action_cues/stop_cue.py" line="378" />
       <source>Action:</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/stop_cue.py" line="224" />
+      <location filename="../../../plugins/action_cues/stop_cue.py" line="379" />
       <source>Fade</source>
       <translation type="unfinished" />
     </message>

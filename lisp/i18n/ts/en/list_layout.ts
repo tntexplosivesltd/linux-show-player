@@ -241,22 +241,22 @@
   <context>
     <name>ListLayoutHeader</name>
     <message>
-      <location filename="../../../plugins/list_layout/list_view.py" line="80" />
+      <location filename="../../../plugins/list_layout/list_view.py" line="88" />
       <source>Cue</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/list_layout/list_view.py" line="85" />
+      <location filename="../../../plugins/list_layout/list_view.py" line="93" />
       <source>Pre wait</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/list_layout/list_view.py" line="88" />
+      <location filename="../../../plugins/list_layout/list_view.py" line="96" />
       <source>Action</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/list_layout/list_view.py" line="91" />
+      <location filename="../../../plugins/list_layout/list_view.py" line="99" />
       <source>Post wait</source>
       <translation type="unfinished" />
     </message>
