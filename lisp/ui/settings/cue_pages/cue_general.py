@@ -235,6 +235,20 @@ class CueGeneralSettingsPage(CueSettingsPage):
 
         grid.addWidget(self.exclusiveGroup, 3, 2)
 
+        # Enabled sits under Exclusive in the appearance column.
+        # The stored property is `disabled` (default False); the
+        # checkbox is labelled "Enabled" because ticked-means-active
+        # reads more naturally in a settings context.
+        self.enabledGroup = make_flat_group()
+        self.enabledGroup.setLayout(QVBoxLayout())
+        self.enabledGroup.layout().setContentsMargins(0, 0, 0, 0)
+
+        self.enabledCheckBox = QCheckBox(self.enabledGroup)
+        self.enabledCheckBox.setChecked(True)
+        self.enabledGroup.layout().addWidget(self.enabledCheckBox)
+
+        grid.addWidget(self.enabledGroup, 4, 2)
+
         # Behaviour controls are compact (combos + spinboxes), identity
         # owns the description editor and gets the lion's share, and
         # appearance needs only enough for the 8-slot palette strip —
@@ -303,6 +317,19 @@ class CueGeneralSettingsPage(CueSettingsPage):
                 "While playing, prevent other media cues from starting",
             )
         )
+        self.enabledGroup.setTitle(
+            translate("CueSettings", "Enabled")
+        )
+        self.enabledCheckBox.setText(
+            translate("CueSettings", "Cue is enabled")
+        )
+        self.enabledCheckBox.setToolTip(
+            translate(
+                "CueSettings",
+                "When unchecked, the cue is skipped by GO, "
+                "auto-follow chains, and group playback.",
+            )
+        )
 
     def showIconSelector(self):
         if self.iconSelectorDialog is None:
@@ -331,6 +358,7 @@ class CueGeneralSettingsPage(CueSettingsPage):
         self.setGroupEnabled(self.fadeInGroup, enabled)
         self.setGroupEnabled(self.fadeOutGroup, enabled)
         self.setGroupEnabled(self.exclusiveGroup, enabled)
+        self.setGroupEnabled(self.enabledGroup, enabled)
 
     def loadSettings(self, settings):
         if "name" in settings:
@@ -364,6 +392,12 @@ class CueGeneralSettingsPage(CueSettingsPage):
         self.fadeOutEdit.setDuration(settings.get("fadeout_duration", 0))
 
         self.exclusiveCheckBox.setChecked(settings.get("exclusive", False))
+        # Checkbox is "Enabled" (ticked = playable); stored property
+        # is `disabled` (inverse). Default False means new cues /
+        # legacy sessions load as Enabled.
+        self.enabledCheckBox.setChecked(
+            not settings.get("disabled", False)
+        )
 
     def getSettings(self):
         settings = {}
@@ -415,6 +449,9 @@ class CueGeneralSettingsPage(CueSettingsPage):
 
         if self.isGroupEnabled(self.exclusiveGroup):
             settings["exclusive"] = self.exclusiveCheckBox.isChecked()
+
+        if self.isGroupEnabled(self.enabledGroup):
+            settings["disabled"] = not self.enabledCheckBox.isChecked()
 
         return settings
 

@@ -129,37 +129,37 @@
   <context>
     <name>GroupCue</name>
     <message>
-      <location filename="../../../plugins/action_cues/group_cue.py" line="503" />
+      <location filename="../../../plugins/action_cues/group_cue.py" line="517" />
       <source>Parallel</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/group_cue.py" line="506" />
+      <location filename="../../../plugins/action_cues/group_cue.py" line="520" />
       <source>Playlist</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/group_cue.py" line="509" />
+      <location filename="../../../plugins/action_cues/group_cue.py" line="523" />
       <source>Mode</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/group_cue.py" line="518" />
+      <location filename="../../../plugins/action_cues/group_cue.py" line="532" />
       <source>Crossfade</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/group_cue.py" line="523" />
+      <location filename="../../../plugins/action_cues/group_cue.py" line="537" />
       <source>Loop</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/group_cue.py" line="528" />
+      <location filename="../../../plugins/action_cues/group_cue.py" line="542" />
       <source>Shuffle</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/group_cue.py" line="539" />
+      <location filename="../../../plugins/action_cues/group_cue.py" line="553" />
       <source>Group Settings</source>
       <translation type="unfinished" />
     </message>
@@ -261,7 +261,7 @@
       <translation>Action Settings</translation>
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/group_cue.py" line="489" />
+      <location filename="../../../plugins/action_cues/group_cue.py" line="503" />
       <source>Group Settings</source>
       <translation type="unfinished" />
     </message>
@@ -291,7 +291,7 @@
       <translation>Volume Settings</translation>
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/stop_cue.py" line="291" />
+      <location filename="../../../plugins/action_cues/stop_cue.py" line="308" />
       <source>Fade &amp; Stop Settings</source>
       <translation type="unfinished" />
     </message>
@@ -307,27 +307,27 @@
   <context>
     <name>StopCue</name>
     <message>
-      <location filename="../../../plugins/action_cues/stop_cue.py" line="375" />
+      <location filename="../../../plugins/action_cues/stop_cue.py" line="392" />
       <source>Target</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/stop_cue.py" line="376" />
+      <location filename="../../../plugins/action_cues/stop_cue.py" line="393" />
       <source>Click to select</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/stop_cue.py" line="377" />
+      <location filename="../../../plugins/action_cues/stop_cue.py" line="394" />
       <source>Not selected</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/stop_cue.py" line="378" />
+      <location filename="../../../plugins/action_cues/stop_cue.py" line="395" />
       <source>Action:</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/stop_cue.py" line="379" />
+      <location filename="../../../plugins/action_cues/stop_cue.py" line="396" />
       <source>Fade</source>
       <translation type="unfinished" />
     </message>
