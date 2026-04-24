@@ -321,7 +321,7 @@ class ListLayout(CueLayout):
             self._advance_standby_past_children(advance)
 
     def _advance_standby_past_children(self, advance=1):
-        """Advance standby, skipping any grouped child cues."""
+        """Advance standby, skipping grouped children and disabled cues."""
         while True:
             prev = self.standby_index()
             self.set_standby_index(prev + advance)
@@ -335,7 +335,9 @@ class ListLayout(CueLayout):
                 and self.app.cue_model.get(cue.group_id)
                 is not None
             ):
-                continue  # Skip this child
+                continue  # Skip grouped child
+            if cue.effective_disabled:
+                continue  # Skip disabled cue
             break
 
     def cue_at(self, index):
