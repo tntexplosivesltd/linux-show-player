@@ -339,9 +339,15 @@ class Cue(HasProperties):
             if init_state & (
                 CueState.IsStopped | CueState.Pause | CueState.PreWait_Pause
             ):
+                was_hibernating = bool(
+                    self._state & CueState.Hibernating
+                )
                 running = self.__start__(fade)
                 self._state = CueState.Running
                 self.started.emit(self)
+
+                if was_hibernating:
+                    self.awoken.emit(self)
 
                 if not running:
                     self._ended()
@@ -432,12 +438,19 @@ class Cue(HasProperties):
                         # Stop operation interrupted
                         return
 
-                    # Remove Running or Pause state
+                    was_hibernating = bool(
+                        self._state & CueState.Hibernating
+                    )
+                    # Remove Running, Pause, and Hibernating.
                     self._state = (self._state ^ CueState.Running) & (
                         self._state ^ CueState.Pause
                     )
+                    self._state &= ~CueState.Hibernating
                     self._state |= CueState.Stop
                     self.stopped.emit(self)
+
+                    if was_hibernating:
+                        self.awoken.emit(self)
         finally:
             self._st_lock.release()
 
@@ -537,12 +550,19 @@ class Cue(HasProperties):
                 if self._state & (CueState.Running | CueState.Pause):
                     self.__interrupt__(fade)
 
-                    # Remove Running or Pause state
+                    was_hibernating = bool(
+                        self._state & CueState.Hibernating
+                    )
+                    # Remove Running, Pause, and Hibernating.
                     self._state = (self._state ^ CueState.Running) & (
                         self._state ^ CueState.Pause
                     )
+                    self._state &= ~CueState.Hibernating
                     self._state |= CueState.Stop
                     self.interrupted.emit(self)
+
+                    if was_hibernating:
+                        self.awoken.emit(self)
 
     def __interrupt__(self, fade=False):
         """Implement the cue `interrupt` behavior.
@@ -591,16 +611,20 @@ class Cue(HasProperties):
             self._st_lock.release()
 
     def _error(self):
-        """Remove Running/Pause/Stop state and add Error state."""
+        """Remove Running/Pause/Stop/Hibernating and add Error."""
         locked = self._st_lock.acquire(blocking=False)
 
+        was_hibernating = bool(self._state & CueState.Hibernating)
         self._state = (
             (self._state ^ CueState.Running)
             & (self._state ^ CueState.Pause)
             & (self._state ^ CueState.Stop)
         ) | CueState.Error
+        self._state &= ~CueState.Hibernating
 
         self.error.emit(self)
+        if was_hibernating:
+            self.awoken.emit(self)
 
         if locked:
             self._st_lock.release()
