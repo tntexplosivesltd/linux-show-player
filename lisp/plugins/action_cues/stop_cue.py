@@ -158,11 +158,13 @@ class StopCue(Cue):
             self._run_fade_then_action(target)
             return True
 
-        # Instant path: no fade to run, dispatch action synchronously.
+        # Instant path: no fade to run, dispatch action.
+        # NOTE: Cue.pause() is @async_function — returns before the
+        # target actually transitions and emits `paused`. We do NOT
+        # disarm here; the handler's `fired` flag makes it
+        # self-idempotent, and weak-ref cleanup disposes it when
+        # StopCue is GC'd.
         self._dispatch_action(target)
-        # Dispatch has returned → the target's paused signal has
-        # emitted and our handler has fired. Safe to disarm now.
-        self._disarm_hibernate_listener(target)
         return False
 
     @async_function
@@ -178,8 +180,12 @@ class StopCue(Cue):
                 # unrelated pause.
                 self._disarm_hibernate_listener(target)
                 return  # caller's __stop__ handled state
+            # Dispatch Pause. Cue.pause() is @async_function — it
+            # returns before the target transitions. We do NOT disarm
+            # here (it would race with the pending paused emission).
+            # The handler's `fired` flag makes it idempotent; weak-
+            # ref cleanup disposes it when StopCue is GC'd.
             self._dispatch_action(target)
-            self._disarm_hibernate_listener(target)
         except Exception:
             logger.exception("StopCue: error during fade-and-action")
             self._disarm_hibernate_listener(target)
