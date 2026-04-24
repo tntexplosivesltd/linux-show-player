@@ -101,6 +101,32 @@ class TestSetHibernated:
         assert calls == []
         assert cue._state == CueState.Pause
 
+    def test_set_true_on_stopped_cue_is_noop(self, mock_app):
+        """Guard against setting Hibernating on a non-Paused cue —
+        Stop|Hibernating has no auto-clear path and would leak."""
+        cue = Cue(app=mock_app)
+        cue._state = CueState.Stop
+
+        calls = []
+
+        def on_hib(c):
+            calls.append(c)
+        cue.hibernated.connect(on_hib)
+
+        cue._set_hibernated(True)
+
+        assert calls == []
+        assert cue._state == CueState.Stop
+
+    def test_set_true_on_running_cue_is_noop(self, mock_app):
+        cue = Cue(app=mock_app)
+        cue._state = CueState.Running
+
+        cue._set_hibernated(True)
+
+        assert not (cue._state & CueState.Hibernating)
+        assert cue._state == CueState.Running
+
 
 class TestAutoClearOnTransitions:
     """Base class must clear the Hibernating bit on any pause-exit

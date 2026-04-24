@@ -804,3 +804,90 @@ class TestHibernateGroupCascade:
 
         assert not (child_a._state & CueState.Hibernating)
         assert child_b._state & CueState.Hibernating
+
+
+class TestHibernateMidFadeAbort:
+    """Mid-fade abort with action=Hibernate: the paused-listener
+    must be disarmed so the bit is NOT set later, and the target
+    cue must be released cleanly from subsequent unrelated pauses."""
+
+    def test_abort_mid_fade_disarms_listener(self, mock_app):
+        """Set up a StopCue with action=Hibernate and a real runner;
+        abort before the runner completes; assert _hib_handlers is
+        cleared."""
+        from lisp.cues.cue import Cue, CueState
+        target = Cue(app=mock_app, id="t1")
+        target._state = CueState.Running
+        mock_app.cue_model.get = lambda cid: (
+            target if cid == "t1" else None
+        )
+        mock_app.cue_model.__iter__ = lambda self=None: iter([target])
+
+        cue = StopCue(app=mock_app)
+        cue.target_id = "t1"
+        cue.action = "Hibernate"
+        cue.duration = 500
+
+        # Monkey-patch the runner so _run_fade_then_action sees an
+        # aborted fade. This avoids spinning up a real thread.
+        class _StubRunner:
+            def run_until_complete(self_):
+                return False  # aborted
+
+            def abort(self_):
+                pass
+
+            def current_time(self_):
+                return 0
+
+        # Arm the listener the way __start__ would, then call the
+        # fade loop with a stub runner to simulate abort.
+        cue._arm_hibernate_listener(target)
+        assert cue._hib_handlers is not None
+
+        cue._runner = _StubRunner()
+        # _run_fade_then_action is @async_function; drive the body
+        # inline by calling the underlying function.
+        cue._run_fade_then_action.__wrapped__(cue, target)
+
+        assert cue._hib_handlers is None
+        # An unrelated subsequent pause on the target must NOT set
+        # the bit.
+        target._state = CueState.Pause
+        target.paused.emit(target)
+        assert not (target._state & CueState.Hibernating)
+
+    def test_rearm_rebuilds_handlers(self, mock_app):
+        """Re-arming (e.g. reusing the same StopCue for a second
+        hibernate) must disarm any stale handlers with fired=True
+        and rebuild from scratch."""
+        from lisp.cues.cue import Cue, CueState
+        target = Cue(app=mock_app, id="t1")
+        mock_app.cue_model.get = lambda cid: (
+            target if cid == "t1" else None
+        )
+        mock_app.cue_model.__iter__ = lambda self=None: iter([target])
+
+        cue = StopCue(app=mock_app)
+        cue.target_id = "t1"
+        cue.action = "Hibernate"
+
+        # First arm: capture the handler and fire it to set fired=True.
+        cue._arm_hibernate_listener(target)
+        _old_target, old_handler = cue._hib_handlers[0]
+        target._state = CueState.Pause
+        target.paused.emit(target)  # handler fires, flips bit
+        assert target._state & CueState.Hibernating
+
+        # Clear the bit (simulates the cue having been resumed).
+        target._state = CueState.Running
+
+        # Re-arm: must discard the stale handler and build a new one.
+        cue._arm_hibernate_listener(target)
+        _new_target, new_handler = cue._hib_handlers[0]
+        assert new_handler is not old_handler
+
+        # The new handler must fire fresh (fired=[False]).
+        target._state = CueState.Pause
+        target.paused.emit(target)
+        assert target._state & CueState.Hibernating

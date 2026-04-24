@@ -210,8 +210,9 @@ class StopCue(Cue):
         emit returns — disconnecting from inside emit would mutate the
         slot dict mid-iteration and raise RuntimeError.
 
-        Cascades listeners to GroupCue children via
-        `cue_model.filter_by_group_id`.
+        Cascades listeners to GroupCue children by iterating a
+        snapshot of cue_model and matching children via the
+        `group_id` property.
         """
         # Discard any stale handlers from a previous invocation.
         self._disarm_hibernate_listener(target)
@@ -235,25 +236,27 @@ class StopCue(Cue):
 
         connect(target)
 
-        # If target is a group (or any cue that has children), arm
-        # each child. CueModel doesn't expose a dedicated filter
-        # method — iterate and match on the `group_id` property.
-        # Works with both the real model and MagicMock-based fakes
-        # (MagicMock iteration yields MagicMock children; tests that
-        # want to exercise this path can still override the lookup
-        # by replacing app.cue_model entirely).
+        # If target is a group (or any cue with children), arm each
+        # direct child. Iterate a *snapshot* of cue_model so a
+        # concurrent add/remove (via test harness, OSC, etc.) can't
+        # raise "dictionary changed size during iteration".
+        #
+        # Only direct children are cascaded — grandchildren (if a
+        # nested group is a child of this target) pick up their bit
+        # through their own `paused` emission when the parent group's
+        # cascade reaches them. If deeper nesting is ever added to
+        # GroupCue, this may need to recurse.
         target_id = getattr(target, "id", None)
         if target_id:
             try:
-                iterator = iter(self.app.cue_model)
+                children_snapshot = list(self.app.cue_model)
             except TypeError:
-                iterator = None
-            if iterator is not None:
-                for child in iterator:
-                    if child is target:
-                        continue
-                    if getattr(child, "group_id", "") == target_id:
-                        connect(child)
+                children_snapshot = []
+            for child in children_snapshot:
+                if child is target:
+                    continue
+                if getattr(child, "group_id", "") == target_id:
+                    connect(child)
 
     def _disarm_hibernate_listener(self, _target):
         """Disconnect every armed hibernate listener (no-op if none)."""
