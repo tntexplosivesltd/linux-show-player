@@ -231,6 +231,26 @@ class Cue(HasProperties):
         if action == CueAction.DoNothing:
             return
 
+        # Disable gate: block start/resume from any trigger source
+        # when the cue (or any ancestor group) is disabled. Stop,
+        # Pause and Interrupt stay allowed — a cue can be disabled
+        # while already playing, and "Stop All" must still stop it.
+        _ALLOWED_WHEN_DISABLED = (
+            CueAction.Stop,
+            CueAction.FadeOutStop,
+            CueAction.Pause,
+            CueAction.FadeOutPause,
+            CueAction.Interrupt,
+            CueAction.FadeOutInterrupt,
+            CueAction.FadeOut,
+            CueAction.LoopRelease,
+        )
+        if (
+            action not in _ALLOWED_WHEN_DISABLED
+            and self.effective_disabled
+        ):
+            return False
+
         # Block start/resume actions if an exclusive cue is running,
         # or if a video/image cue is already playing.
         #
