@@ -182,6 +182,8 @@ class Cue(HasProperties):
         self.error = Signal()
         self.next = Signal()
         self.end = Signal()
+        self.hibernated = Signal()
+        self.awoken = Signal()
 
         self.changed("next_action").connect(self.__next_action_changed)
 
@@ -602,6 +604,32 @@ class Cue(HasProperties):
 
         if locked:
             self._st_lock.release()
+
+    def _set_hibernated(self, value):
+        """Set or clear the Hibernating state bit (idempotent).
+
+        Owns emission of hibernated / awoken. Only toggles the bit
+        when the requested value differs from current — a redundant
+        call is a no-op that emits nothing. Mutation is under
+        _st_lock; signals fire outside the lock to prevent
+        reentrancy if a handler touches cue state.
+        """
+        emit_signal = None
+        locked = self._st_lock.acquire(blocking=False)
+        try:
+            currently = bool(self._state & CueState.Hibernating)
+            if value and not currently:
+                self._state |= CueState.Hibernating
+                emit_signal = self.hibernated
+            elif not value and currently:
+                self._state &= ~CueState.Hibernating
+                emit_signal = self.awoken
+        finally:
+            if locked:
+                self._st_lock.release()
+
+        if emit_signal is not None:
+            emit_signal.emit(self)
 
     def current_time(self):
         """Return the current execution time if available, otherwise 0.
