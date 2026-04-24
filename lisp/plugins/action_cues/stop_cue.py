@@ -75,6 +75,12 @@ class StopCue(Cue):
         # on completion/abort. Used by __stop__ to cancel the fade.
         self._runner = None
 
+        # List of (cue, handler) pairs armed by _arm_hibernate_listener
+        # when action=Hibernate. For single-target cases this is one
+        # entry; GroupCue cascades add one per affected child (Task 6).
+        # None = not armed.
+        self._hib_handlers = None
+
         # Tracks what the auto-rename handler last wrote to `name`.
         # If `self.name` still matches this value, auto-management is
         # still "on" and a target/action change re-derives. If it
@@ -137,6 +143,11 @@ class StopCue(Cue):
         affected = build_affected_set(target)
         faders = collect_live_faders(affected)
 
+        # Arm the hibernate listener BEFORE any dispatch so the
+        # pause-to-hibernate hop is race-free.
+        if self.action == HIBERNATE_ACTION.value:
+            self._arm_hibernate_listener(target)
+
         if self.duration > 0 and faders:
             self._runner = ParallelFadeRunner(
                 faders,
@@ -148,7 +159,10 @@ class StopCue(Cue):
             return True
 
         # Instant path: no fade to run, dispatch action synchronously.
-        target.execute(CueAction(self.action))
+        self._dispatch_action(target)
+        # Dispatch has returned → the target's paused signal has
+        # emitted and our handler has fired. Safe to disarm now.
+        self._disarm_hibernate_listener(target)
         return False
 
     @async_function
@@ -159,16 +173,72 @@ class StopCue(Cue):
         try:
             completed = self._runner.run_until_complete()
             if not completed:
-                return  # aborted — caller's __stop__ handled state
-            target.execute(CueAction(self.action))
+                # Fade aborted — disarm the hibernate listener so the
+                # target isn't accidentally hibernated by a later
+                # unrelated pause.
+                self._disarm_hibernate_listener(target)
+                return  # caller's __stop__ handled state
+            self._dispatch_action(target)
+            self._disarm_hibernate_listener(target)
         except Exception:
             logger.exception("StopCue: error during fade-and-action")
+            self._disarm_hibernate_listener(target)
             self._error()
             return
         finally:
             self._runner = None
 
         self._ended()
+
+    def _arm_hibernate_listener(self, target):
+        """Subscribe one-shot-style handlers to target.paused that flip
+        the Hibernating bit on the target. Safe to call twice.
+
+        Each handler uses a `fired` flag for idempotence; the actual
+        signal disconnect happens in _disarm_hibernate_listener after
+        emit returns — disconnecting from inside emit would mutate the
+        slot dict mid-iteration and raise RuntimeError.
+
+        Task 6 extends this to cascade to GroupCue children.
+        """
+        if self._hib_handlers is not None:
+            return
+
+        self._hib_handlers = []
+
+        def make_handler(cue):
+            fired = [False]
+
+            def handler(_emitter):
+                if fired[0]:
+                    return
+                fired[0] = True
+                cue._set_hibernated(True)
+            return handler
+
+        h = make_handler(target)
+        target.paused.connect(h)
+        self._hib_handlers.append((target, h))
+
+    def _disarm_hibernate_listener(self, _target):
+        """Disconnect every armed hibernate listener (no-op if none)."""
+        if self._hib_handlers is None:
+            return
+        for cue, handler in self._hib_handlers:
+            try:
+                cue.paused.disconnect(handler)
+            except (TypeError, ValueError, RuntimeError):
+                pass
+        self._hib_handlers = None
+
+    def _dispatch_action(self, target):
+        """Dispatch the configured action. The Hibernate sentinel is
+        translated to CueAction.Pause; the listener armed by
+        _arm_hibernate_listener handles the bit flip."""
+        if self.action == HIBERNATE_ACTION.value:
+            target.execute(CueAction.Pause)
+        else:
+            target.execute(CueAction(self.action))
 
     def __stop__(self, fade=False):
         """Cancel the in-flight fade, if any.

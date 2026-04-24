@@ -626,3 +626,89 @@ class TestHibernateAction:
         cue.action = "Hibernate"
         props = cue.properties()
         assert props["action"] == "Hibernate"
+
+
+class TestHibernateRuntimeDispatch:
+    """StopCue with action=Hibernate fades, then pauses target, then
+    flips the Hibernating bit via target._set_hibernated."""
+
+    def _make_target(self, mock_app, state=None):
+        from lisp.cues.cue import Cue, CueState
+        target = Cue(app=mock_app)
+        target.name = "Target"
+        target._state = (
+            state if state is not None else CueState.Running
+        )
+
+        def pause_emit():
+            target._state = CueState.Pause
+            target.paused.emit(target)
+
+        def routed_execute(action):
+            if action == CueAction.Pause:
+                pause_emit()
+        target.execute = routed_execute
+
+        mock_app.cue_model.get = lambda cid: (
+            target if cid == "t1" else None
+        )
+        mock_app.cue_model.filter_by_group_id = lambda _gid: []
+        return target
+
+    def test_hibernate_duration_zero_flips_bit(self, mock_app):
+        from lisp.cues.cue import CueState
+        target = self._make_target(mock_app)
+
+        cue = StopCue(app=mock_app)
+        cue.target_id = "t1"
+        cue.action = "Hibernate"
+        cue.duration = 0
+
+        cue.__start__()
+
+        assert target._state & CueState.Pause
+        assert target._state & CueState.Hibernating
+
+    def test_hibernate_bit_not_set_if_target_already_paused(
+        self, mock_app,
+    ):
+        """Target already Pause → dispatched Pause is a no-op → paused
+        never fires → bit stays clear."""
+        from lisp.cues.cue import CueState
+        target = self._make_target(
+            mock_app, state=CueState.Pause,
+        )
+        target.execute = lambda action: None
+
+        cue = StopCue(app=mock_app)
+        cue.target_id = "t1"
+        cue.action = "Hibernate"
+        cue.duration = 0
+
+        cue.__start__()
+
+        assert not (target._state & CueState.Hibernating)
+
+    def test_hibernate_with_stop_action_does_not_flip_bit(
+        self, mock_app,
+    ):
+        from lisp.cues.cue import CueState
+        target = self._make_target(mock_app)
+
+        def stop_emit():
+            target._state = CueState.Stop
+            target.stopped.emit(target)
+
+        def routed(action):
+            if action == CueAction.Stop:
+                stop_emit()
+        target.execute = routed
+
+        cue = StopCue(app=mock_app)
+        cue.target_id = "t1"
+        cue.action = CueAction.Stop.value
+        cue.duration = 0
+
+        cue.__start__()
+
+        assert not (target._state & CueState.Hibernating)
