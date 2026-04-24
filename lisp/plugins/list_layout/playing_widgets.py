@@ -318,12 +318,18 @@ class RunningCueWidget(QWidget):
             # Snapshot current sub-widget visibilities (media cues).
             db = getattr(self, "dbmeter", None)
             seek = getattr(self, "seekSlider", None)
+            vol = getattr(self, "volumeIndicator", None)
             self._dbmeter_requested = bool(db and db.isVisible())
             self._seek_requested = bool(seek and seek.isVisible())
+            self._volume_indicator_requested_at_hibernate = bool(
+                vol and vol.isVisible()
+            )
             if db is not None:
                 db.setVisible(False)
             if seek is not None:
                 seek.setVisible(False)
+            if vol is not None:
+                vol.setVisible(False)
             self.controlButtons.setVisible(False)
             self.timeDisplay.setVisible(False)
             # Give the name row all the space.
@@ -347,6 +353,7 @@ class RunningCueWidget(QWidget):
         else:
             db = getattr(self, "dbmeter", None)
             seek = getattr(self, "seekSlider", None)
+            vol = getattr(self, "volumeIndicator", None)
             if db is not None:
                 db.setVisible(
                     bool(getattr(self, "_dbmeter_requested", False))
@@ -355,6 +362,12 @@ class RunningCueWidget(QWidget):
                 seek.setVisible(
                     bool(getattr(self, "_seek_requested", False))
                 )
+            if vol is not None:
+                vol.setVisible(bool(getattr(
+                    self,
+                    "_volume_indicator_requested_at_hibernate",
+                    False,
+                )))
             self.controlButtons.setVisible(True)
             self.timeDisplay.setVisible(True)
             # Restore the normal row stretch.

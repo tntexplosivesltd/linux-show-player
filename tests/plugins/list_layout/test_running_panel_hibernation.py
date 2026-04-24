@@ -42,6 +42,7 @@ class TestSetHibernatedBase:
         # the real __init__ was bypassed via __new__.
         w.dbmeter = None
         w.seekSlider = None
+        w.volumeIndicator = None
 
         def fake_size():
             return MagicMock(
@@ -57,6 +58,7 @@ class TestSetHibernatedBase:
         if with_media_attrs:
             w.dbmeter = _FakeSubWidget()
             w.seekSlider = _FakeSubWidget()
+            w.volumeIndicator = _FakeSubWidget()
 
         return w
 
