@@ -45,6 +45,7 @@ class RunningCuesListWidget(QListWidget):
         )
 
         self.__dbmeter_visible = False
+        self.__volume_indicator_visible = False
         self.__seek_visible = False
         self.__accurate_time = False
 
@@ -59,6 +60,24 @@ class RunningCuesListWidget(QListWidget):
             try:
                 self.itemWidget(item).set_dbmeter_visible(visible)
             except AttributeError:
+                pass
+
+    @property
+    def volume_indicator_visible(self):
+        return self.__volume_indicator_visible
+
+    @volume_indicator_visible.setter
+    def volume_indicator_visible(self, visible):
+        self.__volume_indicator_visible = visible
+        for item in self._running_cues.values():
+            try:
+                self.itemWidget(item).set_volume_indicator_visible(
+                    visible
+                )
+            except AttributeError:
+                # Non-MediaCue running widgets don't have a volume
+                # indicator (no Volume element to sample). Silently
+                # skipped — matches the dbmeter_visible pattern.
                 pass
 
     @property
@@ -91,6 +110,9 @@ class RunningCuesListWidget(QListWidget):
         try:
             widget.set_dbmeter_visible(self.__dbmeter_visible)
             widget.set_seek_visible(self.__seek_visible)
+            widget.set_volume_indicator_visible(
+                self.__volume_indicator_visible
+            )
         except AttributeError:
             pass
 

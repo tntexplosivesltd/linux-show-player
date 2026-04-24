@@ -52,6 +52,11 @@ class ListLayoutSettings(QScrollArea, SettingsPage):
         self.showDbMeters = QCheckBox(self.defaultBehaviorsGroup)
         self.defaultBehaviorsGroup.layout().addWidget(self.showDbMeters)
 
+        self.showVolumeIndicators = QCheckBox(self.defaultBehaviorsGroup)
+        self.defaultBehaviorsGroup.layout().addWidget(
+            self.showVolumeIndicators
+        )
+
         self.showAccurate = QCheckBox(self.defaultBehaviorsGroup)
         self.defaultBehaviorsGroup.layout().addWidget(self.showAccurate)
 
@@ -126,6 +131,9 @@ class ListLayoutSettings(QScrollArea, SettingsPage):
             )
         )
         self.showDbMeters.setText(translate("ListLayout", "Show dB-meters"))
+        self.showVolumeIndicators.setText(
+            translate("ListLayout", "Show volume indicators")
+        )
         self.showAccurate.setText(translate("ListLayout", "Show accurate time"))
         self.showSeek.setText(translate("ListLayout", "Show seek-bars"))
         self.autoNext.setText(translate("ListLayout", "Auto-select next cue"))
@@ -161,6 +169,9 @@ class ListLayoutSettings(QScrollArea, SettingsPage):
 
     def loadSettings(self, settings):
         self.showDbMeters.setChecked(settings["show"]["dBMeters"])
+        self.showVolumeIndicators.setChecked(
+            settings["show"].get("volumeIndicators", False)
+        )
         self.showAccurate.setChecked(settings["show"]["accurateTime"])
         self.showSeek.setChecked(settings["show"]["seekSliders"])
         self.useWaveformSeek.setChecked(settings["show"]["waveformSlider"])
@@ -191,6 +202,9 @@ class ListLayoutSettings(QScrollArea, SettingsPage):
                 "dBMeters": self.showDbMeters.isChecked(),
                 "seekSliders": self.showSeek.isChecked(),
                 "waveformSlider": self.useWaveformSeek.isChecked(),
+                "volumeIndicators": (
+                    self.showVolumeIndicators.isChecked()
+                ),
             },
             "autoContinue": self.autoNext.isChecked(),
             "selectionMode": self.selectionMode.isChecked(),

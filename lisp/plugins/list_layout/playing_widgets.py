@@ -15,18 +15,23 @@
 # You should have received a copy of the GNU General Public License
 # along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
+import math
+
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QWidget,
     QGridLayout,
+    QLabel,
     QSizePolicy,
     QLCDNumber,
     QHBoxLayout,
+    QVBoxLayout,
 )
 from qdigitalmeter import QDigitalMeter
 
 from lisp.backend import get_backend
+from lisp.backend.audio_utils import MIN_VOLUME_DB, linear_to_db
 from lisp.core.signal import Connection
 from lisp.core.util import strtime
 from lisp.cues.cue import CueAction
@@ -37,6 +42,29 @@ from lisp.ui.ui_utils import css_to_dict
 from lisp.ui.widgets import QClickSlider
 from lisp.ui.widgets.elidedlabel import ElidedLabel
 from lisp.ui.widgets.waveform import WaveformSlider
+
+
+def _format_db_text(linear_volume: float) -> str:
+    """Format a linear volume value (0.0-10.0) as a dB-string.
+
+    Silence (linear <= MIN_VOLUME) renders as "-∞ dB" rather than the
+    raw -144 sentinel — matches audio-software convention and avoids
+    a visually noisy magic number on a fully faded cue. The sign
+    prefix is always explicit (+/-) so the label's text width is
+    stable as the value crosses 0 dB.
+
+    Non-finite inputs (NaN/inf) should never arrive from the GStreamer
+    Volume element (its live_volume is clamped to (0, 10) by
+    ``GstLiveProperty``), but we guard anyway — if an uninitialised
+    pipeline or a future caller supplies one, render "-∞ dB" rather
+    than "+inf dB" / "+nan dB".
+    """
+    if not math.isfinite(linear_volume):
+        return "-∞ dB"
+    db = linear_to_db(linear_volume)
+    if db <= MIN_VOLUME_DB:
+        return "-∞ dB"
+    return f"{db:+.1f} dB"
 
 
 class _ColorStripe(QWidget):
@@ -85,6 +113,40 @@ class _ColorStripe(QWidget):
         else:
             self.setStyleSheet("")
             self.setVisible(False)
+
+
+class VolumeIndicatorLabel(QLabel):
+    """Compact read-only dB readout for a running MediaCue.
+
+    Displays the cue's current ``Volume.live_volume`` as a signed
+    dB value (e.g. ``-12.3 dB``). Right-aligned monospace text so
+    digits do not jitter horizontally as the value changes — the
+    sign prefix in :func:`_format_db_text` keeps the width stable
+    across zero-crossings.
+
+    Updates are not self-driven — the parent widget calls
+    :meth:`setVolumeLinear` on each tick of ``CueTime.notify``.
+    This keeps the class oblivious to GStreamer and to the pull-
+    vs-push question: it just displays whatever it is told to.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        # Monospace font so digit position does not shift as values
+        # change width on e.g. "+9.9" -> "+10.0".
+        font = self.font()
+        font.setStyleHint(font.Monospace)
+        font.setFamily("monospace")
+        self.setFont(font)
+        self.setVisible(False)
+        # Initial text so layout size hints are stable before the
+        # first real value arrives.
+        self.setText("+0.0 dB")
+
+    def setVolumeLinear(self, linear_volume: float) -> None:
+        self.setText(_format_db_text(linear_volume))
 
 
 def get_running_widget(cue, config, **kwargs):
@@ -297,6 +359,32 @@ class RunningMediaCueWidget(RunningCueWidget):
             self._update_duration, Connection.QtQueued
         )
 
+        # Volume indicator: stacked above timeDisplay in cell (1, 1).
+        # The time LCD has ample vertical headroom, so we reclaim a
+        # single-line strip at the top of its cell for a compact dB
+        # readout. Name row and seek-slider row are untouched.
+        self.volumeIndicator = VolumeIndicatorLabel(self.gridLayoutWidget)
+        self.gridLayout.removeWidget(self.timeDisplay)
+        self._timeVolumeCell = QWidget(self.gridLayoutWidget)
+        vbox = QVBoxLayout(self._timeVolumeCell)
+        vbox.setContentsMargins(0, 0, 0, 0)
+        vbox.setSpacing(0)
+        vbox.addWidget(self.volumeIndicator)
+        vbox.addWidget(self.timeDisplay)
+        self.gridLayout.addWidget(self._timeVolumeCell, 1, 1)
+
+        # Track the layout-level visibility request separately from
+        # Qt's isVisible() so cues with no Volume element stay hidden
+        # without losing the operator's enabled state between ticks.
+        self._volume_indicator_requested = False
+
+        # Piggy-back on CueTime's 30 Hz Clock_33 — active only while
+        # the cue is playing, auto-stops on pause/stop/end/error.
+        # Matches the existing connection type for _time_updated.
+        self.cue_time.notify.connect(
+            self._update_volume_label, Connection.QtQueued
+        )
+
     def updateSize(self, width):
         self.resize(width, int(width / 2.75))
 
@@ -329,6 +417,48 @@ class RunningMediaCueWidget(RunningCueWidget):
             self.gridLayout.setColumnStretch(2, 0)
 
         self.dbmeter.setVisible(visible)
+
+    def _update_volume_label(self, _time_ms):
+        """Pull current Volume.live_volume and refresh the label.
+
+        Connected to CueTime.notify; the time argument is unused.
+        The Volume element is looked up fresh on every call rather
+        than cached — if the user toggles the element off in media
+        settings (or media is reloaded), the lookup returns None
+        and we silently hide the label. Re-enabling flips it back
+        on at the next tick.
+        """
+        # Early return when the operator has the feature disabled —
+        # at 30 Hz across every running cue, a setText call per tick
+        # triggers pointless QVBoxLayout geometry work for a hidden
+        # widget. The toggle's off-state is the default, so this
+        # path is the common case.
+        if not self._volume_indicator_requested:
+            return
+
+        element = self.cue.media.element("Volume")
+        if element is None:
+            self.volumeIndicator.setVisible(False)
+            return
+
+        self.volumeIndicator.setVisible(True)
+        self.volumeIndicator.setVolumeLinear(element.live_volume)
+
+    def set_volume_indicator_visible(self, visible):
+        """Apply the layout-level toggle to this widget.
+
+        When enabled, the label starts rendering on the next
+        CueTime.notify tick. We also paint once synchronously so a
+        freshly-revealed label does not flash empty before the first
+        tick (and so paused/not-yet-started cues still show their
+        configured volume).
+        """
+        self._volume_indicator_requested = visible
+        if not visible:
+            self.volumeIndicator.setVisible(False)
+            return
+
+        self._update_volume_label(0)
 
     def _seek(self, position):
         self.cue.media.seek(position)

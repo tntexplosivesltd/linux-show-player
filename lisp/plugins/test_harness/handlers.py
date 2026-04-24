@@ -375,6 +375,100 @@ def register_all(dispatcher, app, signal_manager):
         _require_session()
         return [serialize_cue_brief(cue) for cue in app.layout.cues()]
 
+    def handle_layout_running_widget_info(params):
+        """Return per-running-widget introspection for E2E tests.
+
+        Response shape:
+            [{
+                "cue_id": str,
+                "volume_indicator_visible": bool,
+                "volume_indicator_text": str,
+            }, ...]
+
+        The list is ordered as the running panel's QListWidget
+        iterates. Non-MediaCue running widgets report
+        ``volume_indicator_visible=False`` and empty text — they do
+        not have the indicator at all.
+        """
+        _require_session()
+        run_view = app.layout.view.runView
+
+        results = []
+
+        def collect():
+            for n in range(run_view.count()):
+                item = run_view.item(n)
+                widget = run_view.itemWidget(item)
+                if widget is None:
+                    continue
+                cue = getattr(widget, "cue", None)
+                cue_id = cue.id if cue is not None else ""
+                indicator = getattr(widget, "volumeIndicator", None)
+                if indicator is None:
+                    results.append({
+                        "cue_id": cue_id,
+                        "volume_indicator_visible": False,
+                        "volume_indicator_text": "",
+                    })
+                else:
+                    results.append({
+                        "cue_id": cue_id,
+                        "volume_indicator_visible": (
+                            indicator.isVisible()
+                        ),
+                        "volume_indicator_text": indicator.text(),
+                    })
+
+        invoke_on_main_thread(collect)
+        return results
+
+    def handle_layout_set_property(params):
+        """Set a named ProxyProperty on the current layout.
+
+        Used by E2E tests to flip visibility toggles declaratively.
+        """
+        _require_session()
+        name = params.get("name")
+        if not name:
+            raise AppError("name is required")
+        value = params.get("value")
+
+        def do_set():
+            setattr(app.layout, name, value)
+
+        invoke_on_main_thread(do_set)
+        return {"ok": True}
+
+    def handle_cue_get_element_property(params):
+        """Read a media-element property (e.g. Volume.live_volume).
+
+        Params:
+            id (str): cue id
+            element (str): element name (e.g. "Volume")
+            property (str): element property (e.g. "live_volume")
+        """
+        _require_session()
+        cue_id = params.get("id")
+        element_name = params.get("element")
+        prop = params.get("property")
+        if not (cue_id and element_name and prop):
+            raise AppError(
+                "id, element, property are all required"
+            )
+
+        cue = app.cue_model.get(cue_id)
+        if cue is None:
+            raise AppError(f"No cue with id {cue_id}")
+        media = getattr(cue, "media", None)
+        if media is None:
+            raise AppError(f"Cue {cue_id} has no media")
+        element = media.element(element_name)
+        if element is None:
+            raise AppError(
+                f"Cue {cue_id} has no {element_name} element"
+            )
+        return {"value": getattr(element, prop)}
+
     def handle_layout_cue_at(params):
         _require_session()
         index = params.get("index")
@@ -1000,9 +1094,12 @@ def register_all(dispatcher, app, signal_manager):
         "cue.add_from_uri": handle_cue_add_from_uri,
         "cue.add_video_from_uri": handle_cue_add_video_from_uri,
         "cue.add_image_from_uri": handle_cue_add_image_from_uri,
+        "cue.get_element_property": handle_cue_get_element_property,
         # Layout
         "layout.go": handle_layout_go,
         "layout.cues": handle_layout_cues,
+        "layout.running_widget_info": handle_layout_running_widget_info,
+        "layout.set_property": handle_layout_set_property,
         "layout.cue_at": handle_layout_cue_at,
         "layout.standby": handle_layout_standby,
         "layout.set_standby_index": handle_layout_set_standby_index,
