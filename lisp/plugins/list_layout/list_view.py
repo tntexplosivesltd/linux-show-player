@@ -400,21 +400,52 @@ class CueListView(QTreeWidget):
                     color.setAlpha(150)
                     brush = QBrush(color)
 
+            # Dim disabled cues so they remain readable but visibly
+            # de-emphasised. The foreground colour is muted grey;
+            # any background-brush alpha is multiplied by 0.4 so
+            # coloured rows stay recognisable but muted.
+            if item.cue.effective_disabled:
+                widget_css["color"] = "rgba(160, 160, 160, 0.5)"
+                if brush.color().alpha() > 0:
+                    dimmed = QColor(brush.color())
+                    dimmed.setAlpha(int(dimmed.alpha() * 0.4))
+                    brush = QBrush(dimmed)
+
             for column in range(self.columnCount()):
                 self.itemWidget(item, column).setStyleSheet(
                     dict_to_css(widget_css)
                 )
                 item.setBackground(column, brush)
 
+    def _iter_all_items(self):
+        """Yield every QTreeWidgetItem in the tree (top-level + children)."""
+        for i in range(self.topLevelItemCount()):
+            top = self.topLevelItem(i)
+            yield top
+            for j in range(top.childCount()):
+                yield top.child(j)
+
     def __cuePropChanged(self, cue, property_name, _):
         if property_name == "stylesheet":
             item = self.cueItemAt(cue.index)
             if item is not None:
                 self.__updateItemStyle(item)
+        elif property_name == "disabled":
+            # A disable toggle on a group also flips every
+            # descendant's effective state. Re-style all rows rather
+            # than walking the group-id graph — O(N) once per toggle
+            # is negligible at realistic session sizes.
+            for item in self._iter_all_items():
+                self.__updateItemStyle(item)
         if property_name == "name":
             QTimer.singleShot(1, self.updateHeadersSizes)
         if property_name == "group_id":
             self.__cueGroupChanged(cue)
+            # Re-style the moved cue: its effective disabled state
+            # may have flipped even though `disabled` didn't.
+            item = self.cueItemAt(cue.index)
+            if item is not None:
+                self.__updateItemStyle(item)
         if property_name == "group_mode":
             self.viewport().update()
 
