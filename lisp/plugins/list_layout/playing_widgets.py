@@ -301,7 +301,17 @@ class RunningCueWidget(QWidget):
     def set_hibernated(self, hibernated):
         """Toggle the compact-dimmed rendering mode used for
         hibernated cues. Idempotent. Preserves operator dbmeter/seek
-        visibility preferences for restoration on wake."""
+        visibility preferences for restoration on wake.
+
+        Visible when hibernated: the name label only. Controls,
+        timeDisplay, dbmeter, and seekSlider are hidden (a paused-
+        hidden cue has no meaningful playback metrics).
+
+        The grid's normal rowStretch gives row 1 (controls+time)
+        three-quarters of the height; we invert that while
+        hibernated so the name row (row 0) dominates the compact
+        strip.
+        """
         if getattr(self, "_hibernated", False) == hibernated:
             return
 
@@ -316,13 +326,21 @@ class RunningCueWidget(QWidget):
             if seek is not None:
                 seek.setVisible(False)
             self.controlButtons.setVisible(False)
+            self.timeDisplay.setVisible(False)
+            # Give the name row all the space.
+            self.gridLayout.setRowStretch(0, 1)
+            self.gridLayout.setRowStretch(1, 0)
             self.setStyleSheet(self._HIBERNATED_STYLE)
-            # Shrink the widget height. updateSize()'s formula
-            # (width/3.75 for base, width/2.75 for media) gives
-            # ~100-150 px; we compress to ~one-third.
-            current = self.size()
-            compact_h = max(24, current.height() // 3)
-            self.resize(current.width(), compact_h)
+            # Compact height: enough for the name label's natural
+            # line height + the grid's vertical margins (3px top,
+            # 3px bottom = 6px). Falls back to a sane floor if the
+            # font metrics are unavailable.
+            try:
+                line_h = self.nameLabel.fontMetrics().height()
+            except Exception:
+                line_h = 18
+            compact_h = max(28, line_h + 10)
+            self.resize(self.size().width(), compact_h)
         else:
             db = getattr(self, "dbmeter", None)
             seek = getattr(self, "seekSlider", None)
@@ -335,16 +353,14 @@ class RunningCueWidget(QWidget):
                     bool(getattr(self, "_seek_requested", False))
                 )
             self.controlButtons.setVisible(True)
+            self.timeDisplay.setVisible(True)
+            # Restore the normal row stretch.
+            self.gridLayout.setRowStretch(0, 1)
+            self.gridLayout.setRowStretch(1, 3)
             self.setStyleSheet("")
-            # Restore the normal size. Delegating to updateSize
-            # is tricky without the enclosing list's width, so
-            # we just request the normal ratio based on current
-            # width.
-            current = self.size()
-            self.resize(
-                current.width(),
-                int(current.width() / self._normal_size_ratio()),
-            )
+            # Restore the normal size (width / subclass's ratio).
+            w = self.size().width()
+            self.resize(w, int(w / self._normal_size_ratio()))
 
         self._hibernated = hibernated
         self.updateGeometry()

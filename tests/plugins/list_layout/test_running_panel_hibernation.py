@@ -29,6 +29,10 @@ class TestSetHibernatedBase:
         w = RunningCueWidget.__new__(RunningCueWidget)
         w._hibernated = False
         w.controlButtons = _FakeSubWidget()
+        w.timeDisplay = _FakeSubWidget()
+        w.nameLabel = MagicMock()
+        w.nameLabel.fontMetrics.return_value.height.return_value = 18
+        w.gridLayout = MagicMock()
         w.setStyleSheet = MagicMock()
         w.updateGeometry = MagicMock()
         w.size_override = None
@@ -77,6 +81,28 @@ class TestSetHibernatedBase:
         w = self._make_widget()
         w.set_hibernated(True)
         assert w.controlButtons.isVisible() is False
+
+    def test_hides_timedisplay_when_hibernated(self):
+        w = self._make_widget()
+        w.set_hibernated(True)
+        assert w.timeDisplay.isVisible() is False
+
+    def test_inverts_row_stretch_so_name_dominates(self):
+        w = self._make_widget()
+        w.set_hibernated(True)
+        # Name row (0) gets the stretch; content row (1) gets 0.
+        stretch_calls = w.gridLayout.setRowStretch.call_args_list
+        assert (0, 1) in [c.args for c in stretch_calls]
+        assert (1, 0) in [c.args for c in stretch_calls]
+
+    def test_restores_timedisplay_and_stretch_on_wake(self):
+        w = self._make_widget()
+        w.set_hibernated(True)
+        w.set_hibernated(False)
+        assert w.timeDisplay.isVisible() is True
+        # Normal stretch restored: row 0 = 1, row 1 = 3.
+        stretch_calls = w.gridLayout.setRowStretch.call_args_list
+        assert (1, 3) in [c.args for c in stretch_calls]
 
     def test_shrinks_height_when_hibernated(self):
         w = self._make_widget()
