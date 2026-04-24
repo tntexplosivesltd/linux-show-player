@@ -652,7 +652,9 @@ class TestHibernateRuntimeDispatch:
         mock_app.cue_model.get = lambda cid: (
             target if cid == "t1" else None
         )
-        mock_app.cue_model.filter_by_group_id = lambda _gid: []
+        # StopCue iterates the model for group children — single-target
+        # test: model has just the target itself.
+        mock_app.cue_model.__iter__ = lambda self=None: iter([target])
         return target
 
     def test_hibernate_duration_zero_flips_bit(self, mock_app):
@@ -753,10 +755,10 @@ class TestHibernateGroupCascade:
 
         by_id = {"g": group, "a": child_a, "b": child_b}
         mock_app.cue_model.get = lambda cid: by_id.get(cid)
-        mock_app.cue_model.filter_by_group_id = lambda gid: [
-            c for c in by_id.values()
-            if getattr(c, "group_id", "") == gid
-        ]
+        # StopCue iterates the model to find children via group_id.
+        mock_app.cue_model.__iter__ = lambda self=None: iter(
+            by_id.values()
+        )
         return group, child_a, child_b
 
     def test_hibernate_group_cascades_bit_to_children(self, mock_app):

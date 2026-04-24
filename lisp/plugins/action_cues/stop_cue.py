@@ -198,17 +198,23 @@ class StopCue(Cue):
 
     def _arm_hibernate_listener(self, target):
         """Subscribe one-shot-style handlers to target.paused that flip
-        the Hibernating bit on the target. Safe to call twice.
+        the Hibernating bit on the target.
+
+        Re-arming: always discards any previously-armed handlers
+        (typically left behind by the non-disarming success path —
+        the handler's `fired` flag is sticky across invocations, so
+        stale handlers would no-op and block re-hibernation on reuse).
 
         Each handler uses a `fired` flag for idempotence; the actual
         signal disconnect happens in _disarm_hibernate_listener after
         emit returns — disconnecting from inside emit would mutate the
         slot dict mid-iteration and raise RuntimeError.
 
-        Task 6 extends this to cascade to GroupCue children.
+        Cascades listeners to GroupCue children via
+        `cue_model.filter_by_group_id`.
         """
-        if self._hib_handlers is not None:
-            return
+        # Discard any stale handlers from a previous invocation.
+        self._disarm_hibernate_listener(target)
 
         self._hib_handlers = []
 
@@ -229,17 +235,25 @@ class StopCue(Cue):
 
         connect(target)
 
-        # If target is a group, arm each currently-affected child too.
-        # Duck-typed via filter_by_group_id — tests can pass a
-        # simplified group fake without using the real GroupCue.
-        filter_fn = getattr(
-            self.app.cue_model, "filter_by_group_id", None,
-        )
-        if filter_fn is not None:
-            for child in filter_fn(target.id):
-                if child is target:
-                    continue
-                connect(child)
+        # If target is a group (or any cue that has children), arm
+        # each child. CueModel doesn't expose a dedicated filter
+        # method — iterate and match on the `group_id` property.
+        # Works with both the real model and MagicMock-based fakes
+        # (MagicMock iteration yields MagicMock children; tests that
+        # want to exercise this path can still override the lookup
+        # by replacing app.cue_model entirely).
+        target_id = getattr(target, "id", None)
+        if target_id:
+            try:
+                iterator = iter(self.app.cue_model)
+            except TypeError:
+                iterator = None
+            if iterator is not None:
+                for child in iterator:
+                    if child is target:
+                        continue
+                    if getattr(child, "group_id", "") == target_id:
+                        connect(child)
 
     def _disarm_hibernate_listener(self, _target):
         """Disconnect every armed hibernate listener (no-op if none)."""
