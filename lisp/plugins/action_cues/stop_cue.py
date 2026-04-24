@@ -58,7 +58,7 @@ class StopCue(Cue):
     target_id = Property()
     action = Property(default=CueAction.Stop.value)
     fade_type = Property(default=FadeOutType.Linear.name)
-    icon = Property(default="action-stop")
+    icon = Property(default="fade-stop")
 
     CueActions = (
         CueAction.Default,
