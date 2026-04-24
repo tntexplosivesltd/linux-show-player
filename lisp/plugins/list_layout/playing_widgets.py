@@ -21,6 +21,7 @@ from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QWidget,
+    QGraphicsOpacityEffect,
     QGridLayout,
     QLabel,
     QSizePolicy,
@@ -294,9 +295,7 @@ class RunningCueWidget(QWidget):
     # stylesheet. The operator's current dbmeter/seek visibility
     # preferences are snapshotted so they can be restored on wake.
 
-    _HIBERNATED_STYLE = (
-        "QWidget { color: palette(mid); }"
-    )
+    _HIBERNATED_OPACITY = 0.55
 
     def set_hibernated(self, hibernated):
         """Toggle the compact-dimmed rendering mode used for
@@ -330,7 +329,11 @@ class RunningCueWidget(QWidget):
             # Give the name row all the space.
             self.gridLayout.setRowStretch(0, 1)
             self.gridLayout.setRowStretch(1, 0)
-            self.setStyleSheet(self._HIBERNATED_STYLE)
+            # Dim via graphics opacity effect rather than a palette
+            # colour override — stylesheet colour changes interact
+            # unpredictably with theme palettes and can render text
+            # invisible in some themes. Opacity is theme-agnostic.
+            self._apply_hibernated_opacity(True)
             # Compact height: enough for the name label's natural
             # line height + the grid's vertical margins (3px top,
             # 3px bottom = 6px). Falls back to a sane floor if the
@@ -357,7 +360,7 @@ class RunningCueWidget(QWidget):
             # Restore the normal row stretch.
             self.gridLayout.setRowStretch(0, 1)
             self.gridLayout.setRowStretch(1, 3)
-            self.setStyleSheet("")
+            self._apply_hibernated_opacity(False)
             # Restore the normal size (width / subclass's ratio).
             w = self.size().width()
             self.resize(w, int(w / self._normal_size_ratio()))
@@ -369,6 +372,18 @@ class RunningCueWidget(QWidget):
         """Width-to-height ratio for the normal (non-hibernated)
         size. Overridden by RunningMediaCueWidget."""
         return 3.75
+
+    def _apply_hibernated_opacity(self, dim):
+        """Apply/remove a QGraphicsOpacityEffect on the internal grid
+        widget (not the outer widget — the colorStripe should stay
+        at full saturation so the tint remains recognisable)."""
+        if dim:
+            effect = QGraphicsOpacityEffect(self.gridLayoutWidget)
+            effect.setOpacity(self._HIBERNATED_OPACITY)
+            self.gridLayoutWidget.setGraphicsEffect(effect)
+        else:
+            # Passing None clears any existing effect.
+            self.gridLayoutWidget.setGraphicsEffect(None)
 
     def _time_updated(self, time):
         if not self.visibleRegion().isEmpty():

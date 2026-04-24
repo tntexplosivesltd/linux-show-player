@@ -33,6 +33,8 @@ class TestSetHibernatedBase:
         w.nameLabel = MagicMock()
         w.nameLabel.fontMetrics.return_value.height.return_value = 18
         w.gridLayout = MagicMock()
+        w.gridLayoutWidget = MagicMock()
+        w._apply_hibernated_opacity = MagicMock()
         w.setStyleSheet = MagicMock()
         w.updateGeometry = MagicMock()
         w.size_override = None
@@ -71,11 +73,10 @@ class TestSetHibernatedBase:
 
     def test_idempotent_no_double_work(self):
         w = self._make_widget()
-        w.setStyleSheet = MagicMock()
         w.set_hibernated(True)
-        calls1 = w.setStyleSheet.call_count
+        calls1 = w._apply_hibernated_opacity.call_count
         w.set_hibernated(True)
-        assert w.setStyleSheet.call_count == calls1
+        assert w._apply_hibernated_opacity.call_count == calls1
 
     def test_hides_controls_when_hibernated(self):
         w = self._make_widget()
