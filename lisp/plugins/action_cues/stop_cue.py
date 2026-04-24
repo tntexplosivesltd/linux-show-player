@@ -216,9 +216,24 @@ class StopCue(Cue):
                 cue._set_hibernated(True)
             return handler
 
-        h = make_handler(target)
-        target.paused.connect(h)
-        self._hib_handlers.append((target, h))
+        def connect(cue):
+            h = make_handler(cue)
+            cue.paused.connect(h)
+            self._hib_handlers.append((cue, h))
+
+        connect(target)
+
+        # If target is a group, arm each currently-affected child too.
+        # Duck-typed via filter_by_group_id — tests can pass a
+        # simplified group fake without using the real GroupCue.
+        filter_fn = getattr(
+            self.app.cue_model, "filter_by_group_id", None,
+        )
+        if filter_fn is not None:
+            for child in filter_fn(target.id):
+                if child is target:
+                    continue
+                connect(child)
 
     def _disarm_hibernate_listener(self, _target):
         """Disconnect every armed hibernate listener (no-op if none)."""

@@ -712,3 +712,93 @@ class TestHibernateRuntimeDispatch:
         cue.__start__()
 
         assert not (target._state & CueState.Hibernating)
+
+
+class TestHibernateGroupCascade:
+    """Hibernate on a GroupCue cascades the bit to each child that
+    transitions to Pause as part of the cascade."""
+
+    def _make_group_with_children(self, mock_app):
+        from lisp.cues.cue import Cue, CueState
+        from lisp.plugins.action_cues.group_cue import GroupCue
+
+        # Cue.id is WriteOnceProperty — must be passed to constructor.
+        child_a = Cue(app=mock_app, id="a")
+        child_a.group_id = "g"
+        child_a._state = CueState.Running
+
+        child_b = Cue(app=mock_app, id="b")
+        child_b.group_id = "g"
+        child_b._state = CueState.Running
+
+        def make_child_exec(cue):
+            def routed(action):
+                if action == CueAction.Pause:
+                    cue._state = CueState.Pause
+                    cue.paused.emit(cue)
+            return routed
+
+        child_a.execute = make_child_exec(child_a)
+        child_b.execute = make_child_exec(child_b)
+
+        group = GroupCue(app=mock_app, id="g")
+
+        def group_exec(action):
+            if action == CueAction.Pause:
+                for child in (child_a, child_b):
+                    child.execute(CueAction.Pause)
+                group._state = CueState.Pause
+                group.paused.emit(group)
+        group.execute = group_exec
+
+        by_id = {"g": group, "a": child_a, "b": child_b}
+        mock_app.cue_model.get = lambda cid: by_id.get(cid)
+        mock_app.cue_model.filter_by_group_id = lambda gid: [
+            c for c in by_id.values()
+            if getattr(c, "group_id", "") == gid
+        ]
+        return group, child_a, child_b
+
+    def test_hibernate_group_cascades_bit_to_children(self, mock_app):
+        from lisp.cues.cue import CueState
+        group, child_a, child_b = self._make_group_with_children(
+            mock_app,
+        )
+
+        cue = StopCue(app=mock_app)
+        cue.target_id = "g"
+        cue.action = "Hibernate"
+        cue.duration = 0
+
+        cue.__start__()
+
+        assert group._state & CueState.Hibernating
+        assert child_a._state & CueState.Hibernating
+        assert child_b._state & CueState.Hibernating
+
+    def test_resume_one_child_only_clears_its_own_bit(self, mock_app):
+        import threading
+        import time
+        from lisp.cues.cue import CueState
+        group, child_a, child_b = self._make_group_with_children(
+            mock_app,
+        )
+
+        cue = StopCue(app=mock_app)
+        cue.target_id = "g"
+        cue.action = "Hibernate"
+        cue.duration = 0
+        cue.__start__()
+
+        done = threading.Event()
+
+        def on_started(c):
+            done.set()
+        child_a.started.connect(on_started)
+
+        child_a.resume()
+        done.wait(timeout=2.0)
+        time.sleep(0.02)
+
+        assert not (child_a._state & CueState.Hibernating)
+        assert child_b._state & CueState.Hibernating
