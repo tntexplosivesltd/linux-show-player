@@ -139,19 +139,33 @@ class GroupCue(Cue):
                 cues.append(cue)
         return cues
 
+    def _resolve_playable_children(self):
+        """Like `_resolve_children`, but excludes children whose
+        `effective_disabled` is True. Used by playback paths so
+        disabled children are skipped at start, during playlist
+        advance, and during crossfade hand-off. Bookkeeping paths
+        (e.g. `_resync_layout_to_children`) continue to use
+        `_resolve_children` since they need the full list
+        regardless of runtime state.
+        """
+        return [
+            c for c in self._resolve_children()
+            if not c.effective_disabled
+        ]
+
     def execute(self, action=CueAction.Default):
-        # Block start if no children can be resolved
+        # Block start if no playable children can be resolved.
         if action in (
             CueAction.Default,
             CueAction.Start,
             CueAction.FadeInStart,
         ):
-            if not self._resolve_children():
+            if not self._resolve_playable_children():
                 return
         return super().execute(action)
 
     def __start__(self, fade=False):
-        children = self._resolve_children()
+        children = self._resolve_playable_children()
         if not children:
             return False
 
@@ -203,7 +217,7 @@ class GroupCue(Cue):
     def _play_child_at(self, index, children=None, fade=False):
         """Start the child at the given playlist index."""
         if children is None:
-            children = self._resolve_children()
+            children = self._resolve_playable_children()
 
         if not children:
             self._ended()
@@ -322,7 +336,7 @@ class GroupCue(Cue):
                 return
             index = self._playlist_index
 
-        children = self._resolve_children()
+        children = self._resolve_playable_children()
         if not children or index >= len(children):
             self._stop_crossfade_monitor()
             return
@@ -428,7 +442,7 @@ class GroupCue(Cue):
                 return
             next_index = self._playlist_index + 1
 
-        children = self._resolve_children()
+        children = self._resolve_playable_children()
 
         if next_index >= len(children):
             if self.loop:

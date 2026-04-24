@@ -30,6 +30,11 @@ def _make_child(cue_id, state=CueState.Stop, duration=10000):
     child.fadeout_duration = 0
     child.group_id = ""
     child.exclusive = False
+    # Disable state — must be explicit False, otherwise MagicMock
+    # auto-creates a truthy value and the playable-children filter
+    # in GroupCue excludes it.
+    child.disabled = False
+    child.effective_disabled = False
     # Signals
     child.end = MagicMock()
     child.stopped = MagicMock()
