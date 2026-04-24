@@ -138,6 +138,7 @@ class Cue(HasProperties):
     default_stop_action = Property(default=CueAction.Stop.value)
     exclusive = Property(default=False)
     group_id = Property(default="")
+    disabled = Property(default=False)
 
     CueActions = (CueAction.Start,)
 
@@ -186,6 +187,29 @@ class Cue(HasProperties):
         self.awoken = Signal()
 
         self.changed("next_action").connect(self.__next_action_changed)
+
+    @property
+    def effective_disabled(self):
+        """True if this cue or any ancestor group is disabled.
+
+        Walks up the `group_id` chain at read time (no caching), so
+        enabling a group preserves any individual child flags that
+        were set independently.
+        """
+        if self.disabled:
+            return True
+        gid = self.group_id
+        # Guard against cycles created by a corrupted session.
+        visited = set()
+        while gid and gid not in visited:
+            visited.add(gid)
+            parent = self.app.cue_model.get(gid)
+            if parent is None:
+                break
+            if parent.disabled:
+                return True
+            gid = parent.group_id
+        return False
 
     def execute(self, action=CueAction.Default):
         """Execute the specified action, if supported.
