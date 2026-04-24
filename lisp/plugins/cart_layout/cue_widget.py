@@ -248,14 +248,17 @@ class CueWidget(QWidget):
             self._updateStyle, Connection.QtQueued
         )
         # Effective_disabled may flip via the cue's own `disabled`
-        # or via an ancestor group's — subscribe to both so the
-        # dimmed appearance tracks the cascade without a reload.
+        # or via any ancestor group's. Subscribe to the full chain:
+        # own `disabled`, own `group_id` (to re-walk ancestors when
+        # re-parented), and every ancestor group's `disabled`. The
+        # ancestor subscriptions are (re)wired via `_wire_ancestor_disable`.
         self._cue.changed("disabled").connect(
             self._refreshStyle, Connection.QtQueued
         )
         self._cue.changed("group_id").connect(
-            self._refreshStyle, Connection.QtQueued
+            self._onGroupIdChanged, Connection.QtQueued
         )
+        self._wire_ancestor_disable()
         self._cue.changed("duration").connect(
             self._updateDuration, Connection.QtQueued
         )
@@ -348,6 +351,37 @@ class CueWidget(QWidget):
     def _refreshStyle(self, _value=None):
         """Re-apply styling when disabled/group_id changes."""
         self._updateStyle(self._cue.stylesheet)
+
+    def _onGroupIdChanged(self, _value=None):
+        """Handle re-parenting: rewire ancestor subscriptions and
+        refresh dim state."""
+        self._wire_ancestor_disable()
+        self._refreshStyle()
+
+    def _wire_ancestor_disable(self):
+        """Subscribe to `disabled` on every ancestor group so a
+        parent-group toggle refreshes this cell's dim state.
+
+        Rewired whenever the cell's own `group_id` changes.
+        Connecting the same slot to the same signal twice is a
+        no-op (the slot is identified by identity), so re-entry
+        is safe. Weak-ref signal system means stale subscriptions
+        to detached ancestors are collected automatically.
+        """
+        model = getattr(self._cue.app, "cue_model", None)
+        if model is None:
+            return
+        gid = self._cue.group_id
+        visited = set()
+        while gid and gid not in visited:
+            visited.add(gid)
+            parent = model.get(gid)
+            if parent is None:
+                break
+            parent.changed("disabled").connect(
+                self._refreshStyle, Connection.QtQueued
+            )
+            gid = parent.group_id
 
     def _enterFadein(self):
         p = self.timeDisplay.palette()

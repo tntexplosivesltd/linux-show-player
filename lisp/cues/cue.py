@@ -232,9 +232,20 @@ class Cue(HasProperties):
             return
 
         # Disable gate: block start/resume from any trigger source
-        # when the cue (or any ancestor group) is disabled. Stop,
-        # Pause and Interrupt stay allowed — a cue can be disabled
-        # while already playing, and "Stop All" must still stop it.
+        # when the cue (or any ancestor group) is disabled. The
+        # allow-list covers every action that operates on an
+        # already-playing cue, so a cue disabled mid-playback can
+        # still be stopped / paused / faded / loop-released by
+        # Stop All, operator triggers, and in-flight fade machinery:
+        #   Stop / FadeOutStop            — Stop All, explicit stop
+        #   Pause / FadeOutPause          — Pause All, explicit pause
+        #   Interrupt / FadeOutInterrupt  — Interrupt All
+        #   FadeOut                       — Fade Out All (volume ramp
+        #                                   on a playing cue, not a start)
+        #   LoopRelease                   — cleanly exit a loop
+        # Start / Resume / FadeInStart / FadeInResume / FadeIn
+        # (which can only meaningfully act on a stopped cue as the
+        # initial volume ramp) all fall through the gate.
         _ALLOWED_WHEN_DISABLED = (
             CueAction.Stop,
             CueAction.FadeOutStop,

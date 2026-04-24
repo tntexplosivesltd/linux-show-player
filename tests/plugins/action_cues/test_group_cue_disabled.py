@@ -122,6 +122,46 @@ class TestPlaylistSkipsDisabled:
         children[1].execute.assert_not_called()
         children[2].execute.assert_called_once()
 
+    def test_playlist_advance_after_leading_sibling_disabled(
+        self, mock_app,
+    ):
+        """Operator disables an earlier-played sibling while a
+        later child is playing. When the playing child ends, the
+        next enabled child must still play (index drift guard).
+
+        Timeline: [A, B, C] all enabled. A plays, ends, B starts.
+        Operator disables A mid-B. B ends. _playlist_index is 1
+        (B's position when playable = [A, B, C]). After A is
+        disabled, playable = [B, C] and _playlist_index=1 would
+        naively point past B's current position. C must still
+        play; fix locates the ended child by id in the full list.
+        """
+        group, children = _group_with_children(
+            mock_app,
+            [("A", False), ("B", False), ("C", False)],
+        )
+        group.group_mode = "playlist"
+        for c in children:
+            c.execute = MagicMock()
+        # Simulate: B is the currently-playing child (index 1 in
+        # the full enabled playable list), A was played before.
+        group._playlist_index = 1
+        group._state = group._state | CueState.Running
+        group._connected_children = set()
+        group._disconnect_child = MagicMock()
+
+        # Now operator disables A.
+        children[0].disabled = True
+
+        # B ends naturally.
+        group._on_playlist_child_ended(children[1])
+
+        # C (index 2 in full list, index 1 in post-disable
+        # playable list) must fire; B must not re-fire.
+        children[0].execute.assert_not_called()
+        children[1].execute.assert_not_called()
+        children[2].execute.assert_called_once()
+
 
 class TestParallelSkipsDisabled:
     def test_parallel_starts_only_enabled_children(self, mock_app):
@@ -152,10 +192,41 @@ class TestParallelSkipsDisabled:
         for c in children:
             c.execute = MagicMock()
 
-        result = group.execute()
+        # Explicit Start — exercises the guard directly (Default
+        # would remap through super().execute() and then hit
+        # exclusive_manager mocks that would add noise).
+        group.execute(CueAction.Start)
 
-        # execute returns None (guard triggers) when nothing is
-        # playable. No child is fired.
-        assert result is None
+        # Guard fires: no playable children, no child fired.
         for c in children:
             c.execute.assert_not_called()
+
+    def test_default_on_running_disabled_group_reaches_stop(
+        self, mock_app,
+    ):
+        """A group that's playing when disabled must still be
+        stoppable via CueAction.Default — otherwise Stop All /
+        operator-triggered Default on the group would be swallowed
+        by the playable-children guard."""
+        group, children = _group_with_children(
+            mock_app,
+            [("A", False), ("B", False)],
+        )
+        group.group_mode = "parallel"
+        # Group is in Running state and becomes disabled (so
+        # _resolve_playable_children() == [] for the cascade).
+        group._state = CueState.Running
+        group.disabled = True
+        group.stop = MagicMock()
+
+        # Set up app managers so Cue.execute's exclusive block
+        # does not interfere (it short-circuits on start actions
+        # that would transition; we're testing a stop action).
+        mock_app.exclusive_manager = MagicMock()
+        mock_app.exclusive_manager.is_start_blocked.return_value = False
+        mock_app.video_exclusive_manager = MagicMock()
+        mock_app.video_exclusive_manager.is_start_blocked.return_value = False
+
+        group.execute(CueAction.Default)
+
+        group.stop.assert_called_once()

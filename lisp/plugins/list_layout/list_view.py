@@ -441,11 +441,14 @@ class CueListView(QTreeWidget):
             QTimer.singleShot(1, self.updateHeadersSizes)
         if property_name == "group_id":
             self.__cueGroupChanged(cue)
-            # Re-style the moved cue: its effective disabled state
-            # may have flipped even though `disabled` didn't.
-            item = self.cueItemAt(cue.index)
-            if item is not None:
-                self.__updateItemStyle(item)
+            # Re-style every row — the moved cue's effective
+            # disabled state may have flipped (now under a
+            # disabled ancestor, or no longer under one), and if
+            # the moved cue is itself a group, all of ITS
+            # descendants' effective state flip too. A full sweep
+            # is O(N) and avoids missing the transitive cascade.
+            for row in self._iter_all_items():
+                self.__updateItemStyle(row)
         if property_name == "group_mode":
             self.viewport().update()
 
