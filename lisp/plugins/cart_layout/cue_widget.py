@@ -15,8 +15,8 @@
 # You should have received a copy of the GNU General Public License
 # along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
-from PyQt5.QtCore import Qt, QMimeData, pyqtSignal, QPoint
-from PyQt5.QtGui import QColor, QDrag
+from PyQt5.QtCore import Qt, QMimeData, pyqtSignal, QPoint, QSize
+from PyQt5.QtGui import QColor, QDrag, QIcon, QPainter, QPixmap
 from PyQt5.QtWidgets import (
     QProgressBar,
     QLCDNumber,
@@ -38,6 +38,27 @@ from lisp.plugins.cart_layout.page_widget import CartPageWidget
 from lisp.ui.icons import IconTheme
 from lisp.ui.widgets import QClickLabel, QClickSlider
 from lisp import ICON_THEMES_DIR
+
+
+_DIM_ICON_SIZE = 64  # px; cart buttons render at <= 48px
+
+
+def _dim_icon(icon):
+    """Return a copy of `icon` rendered at 40% opacity.
+
+    Qt's QIcon does not respect parent widget opacity or
+    stylesheet `opacity:` rules, so we composite a new pixmap
+    at half opacity and wrap it in a fresh QIcon. Rendered at
+    _DIM_ICON_SIZE; QPushButton scales smoothly on display.
+    """
+    source = icon.pixmap(QSize(_DIM_ICON_SIZE, _DIM_ICON_SIZE))
+    result = QPixmap(source.size())
+    result.fill(Qt.transparent)
+    painter = QPainter(result)
+    painter.setOpacity(0.4)
+    painter.drawPixmap(0, 0, source)
+    painter.end()
+    return QIcon(result)
 
 
 class CueWidget(QWidget):
@@ -338,7 +359,8 @@ class CueWidget(QWidget):
                     self.cueExecuted.emit(self._cue)
 
     def _updateStyle(self, stylesheet):
-        if self._cue.effective_disabled:
+        disabled = self._cue.effective_disabled
+        if disabled:
             # Append a dim overlay. Keep the original stylesheet so
             # colour/font selections survive re-enabling.
             stylesheet = (
@@ -346,7 +368,10 @@ class CueWidget(QWidget):
                 + "\nQWidget { color: rgba(160, 160, 160, 0.5); }"
             )
         self.nameButton.setStyleSheet(stylesheet)
-        self.nameButton.setIcon(IconTheme.get(f"{self._cue.icon}-cart"))
+        icon = IconTheme.get(f"{self._cue.icon}-cart")
+        if disabled:
+            icon = _dim_icon(icon)
+        self.nameButton.setIcon(icon)
 
     def _refreshStyle(self, _value=None):
         """Re-apply styling when disabled/group_id changes."""

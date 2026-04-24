@@ -312,15 +312,12 @@ class ListLayout(CueLayout):
         ):
             return
 
-        # If standby sits on a disabled cue, skip past it to the
-        # next enabled cue before firing. Standby may legitimately
-        # land on a disabled row (visual reference), but GO never
-        # fires it.
+        # GO on a disabled standby is a no-op — do not fire the
+        # cue, do not advance standby. The operator must manually
+        # move standby off the disabled row. (Auto-continue AFTER
+        # a successful GO still skips disabled cues, below.)
         if standby_cue.effective_disabled:
-            self._advance_standby_past_children(advance)
-            standby_cue = self.standby_cue()
-            if standby_cue is None or standby_cue.effective_disabled:
-                return  # Nothing playable downstream
+            return
 
         if standby_cue.execute(action) is False:
             return

@@ -111,7 +111,50 @@ class CueStatusIcons(QWidget):
             self.updateIcon, Connection.QtQueued
         )
 
+        # Repaint when effective_disabled could flip — own flag,
+        # own parent re-parenting, and any ancestor's disabled.
+        # Wrap `update` in a Python slot so the lisp signal system
+        # (which inspects callable signatures) doesn't trip on
+        # QWidget.update being a C++ builtin.
+        self._item.cue.changed("disabled").connect(
+            self._repaint, Connection.QtQueued
+        )
+        self._item.cue.changed("group_id").connect(
+            self._onGroupIdChanged, Connection.QtQueued
+        )
+        self._wire_ancestor_disable()
+
         self.updateIcon()
+
+    def _repaint(self, _value=None):
+        self.update()
+
+    def _onGroupIdChanged(self, _value=None):
+        self._wire_ancestor_disable()
+        self.update()
+
+    def _wire_ancestor_disable(self):
+        """Subscribe to `disabled` on every ancestor group so a
+        parent-group toggle triggers a repaint. Rewired whenever
+        the cue's own `group_id` changes. Re-connecting the same
+        slot to the same signal is a no-op (slot identity match),
+        and the weak-ref signal system collects stale connections
+        to detached ancestors automatically.
+        """
+        model = getattr(self._item.cue.app, "cue_model", None)
+        if model is None:
+            return
+        gid = self._item.cue.group_id
+        visited = set()
+        while gid and gid not in visited:
+            visited.add(gid)
+            parent = model.get(gid)
+            if parent is None:
+                break
+            parent.changed("disabled").connect(
+                self._repaint, Connection.QtQueued
+            )
+            gid = parent.group_id
 
     def updateIcon(self):
         state = self._item.cue.state
@@ -162,6 +205,10 @@ class CueStatusIcons(QWidget):
             qp.setBrush(QBrush(QColor(250, 220, 0)))
             qp.drawPath(path)
         if self._icon is not None:
+            # Dim the icon when the cue (or any ancestor group) is
+            # disabled. Matches the row-text dim in list_view.
+            if self._item.cue.effective_disabled:
+                qp.setOpacity(0.4)
             qp.drawPixmap(
                 QRect(
                     indicator_width + CueStatusIcons.MARGIN,

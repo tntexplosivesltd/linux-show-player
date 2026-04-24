@@ -53,17 +53,29 @@ def run_tests(t):
         cue_prop(ids[0], "disabled") is True,
     )
 
+    # GO with standby on a disabled cue is a no-op — nothing fires,
+    # standby does not advance. Operator must manually move standby
+    # off the disabled row.
     call("layout.set_standby_index", {"index": 0})
-    # Subscribe BEFORE triggering so we don't miss events.
     with cue_signal(ids[0], "started") as sub0, \
             cue_signal(ids[1], "started") as sub1:
         call("layout.go")
-        # The first GO on a disabled standby should skip to cue 1.
-        event1 = wait_for_signal(sub1, timeout=3.0)
-        t.check("1c: cue 1 (enabled) started via GO", event1 is not None)
-        # Confirm disabled cue did NOT start.
         event0 = wait_for_signal(sub0, timeout=0.5)
-        t.check("1d: cue 0 (disabled) did not start", event0 is None)
+        event1 = wait_for_signal(sub1, timeout=0.2)
+        t.check("1c: cue 0 (disabled) did not start", event0 is None)
+        t.check(
+            "1d: GO did not auto-advance to cue 1",
+            event1 is None,
+        )
+
+    # With standby moved to an enabled cue, GO works normally and
+    # auto-continue skips past subsequent disabled cues when firing
+    # the next one in the chain.
+    call("layout.set_standby_index", {"index": 1})
+    with cue_signal(ids[1], "started") as sub1:
+        call("layout.go")
+        event1 = wait_for_signal(sub1, timeout=3.0)
+        t.check("1e: cue 1 fires when standby moved to it", event1 is not None)
 
     stop_all()
     _set_disabled(ids[0], False)

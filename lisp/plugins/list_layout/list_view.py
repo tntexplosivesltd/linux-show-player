@@ -412,9 +412,12 @@ class CueListView(QTreeWidget):
                     brush = QBrush(dimmed)
 
             for column in range(self.columnCount()):
-                self.itemWidget(item, column).setStyleSheet(
-                    dict_to_css(widget_css)
-                )
+                # itemWidget may be None if this item's column
+                # widgets haven't been set up yet (e.g. called
+                # during insertion or before __setupItemWidgets).
+                widget = self.itemWidget(item, column)
+                if widget is not None:
+                    widget.setStyleSheet(dict_to_css(widget_css))
                 item.setBackground(column, brush)
 
     def _iter_all_items(self):

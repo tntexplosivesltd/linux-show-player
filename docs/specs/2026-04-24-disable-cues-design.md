@@ -49,8 +49,13 @@ row/cell renderer.
    to the next enabled cue. If nothing enabled is downstream, the
    chain ends silently.
 8. The **standby indicator** can still be placed on a disabled cue
-   (e.g. by clicking it). GO from there skips it and fires the next
-   enabled cue.
+   (e.g. by clicking it). **GO from there is a no-op** — it does
+   not fire the cue and does not advance standby. The operator
+   must manually move standby to an enabled cue. This is more
+   explicit than silently skipping, which could obscure that the
+   standby had been left on a disabled row.
+   Auto-continue AFTER a successful GO still skips past disabled
+   cues when parking standby on the next one.
 9. Toggling the flag is **undoable** through the standard Ctrl+Z
    path.
 10. The flag **persists in the session file** and round-trips
