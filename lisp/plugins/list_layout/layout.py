@@ -312,6 +312,16 @@ class ListLayout(CueLayout):
         ):
             return
 
+        # If standby sits on a disabled cue, skip past it to the
+        # next enabled cue before firing. Standby may legitimately
+        # land on a disabled row (visual reference), but GO never
+        # fires it.
+        if standby_cue.effective_disabled:
+            self._advance_standby_past_children(advance)
+            standby_cue = self.standby_cue()
+            if standby_cue is None or standby_cue.effective_disabled:
+                return  # Nothing playable downstream
+
         if standby_cue.execute(action) is False:
             return
 
@@ -321,7 +331,7 @@ class ListLayout(CueLayout):
             self._advance_standby_past_children(advance)
 
     def _advance_standby_past_children(self, advance=1):
-        """Advance standby, skipping any grouped child cues."""
+        """Advance standby, skipping grouped children and disabled cues."""
         while True:
             prev = self.standby_index()
             self.set_standby_index(prev + advance)
@@ -335,7 +345,9 @@ class ListLayout(CueLayout):
                 and self.app.cue_model.get(cue.group_id)
                 is not None
             ):
-                continue  # Skip this child
+                continue  # Skip grouped child
+            if cue.effective_disabled:
+                continue  # Skip disabled cue
             break
 
     def cue_at(self, index):
@@ -622,21 +634,28 @@ class ListLayout(CueLayout):
             ):
                 return
 
-            # Find the next non-child cue (skip grouped children)
+            # Find the next playable cue, skipping both grouped
+            # children (the group manages them) and disabled cues.
             next_index = cue.index + 1
+            next_cue = None
             while next_index < len(self._list_model):
-                next_cue = self._list_model.item(next_index)
+                candidate = self._list_model.item(next_index)
                 if (
-                    next_cue.group_id
+                    candidate.group_id
                     and self.app.cue_model.get(
-                        next_cue.group_id
+                        candidate.group_id
                     ) is not None
                 ):
                     next_index += 1
                     continue
+                if candidate.effective_disabled:
+                    next_index += 1
+                    continue
+                next_cue = candidate
                 break
-            else:
-                return  # No more cues
+
+            if next_cue is None:
+                return  # No more playable cues
 
             action = CueNextAction(cue.next_action)
             if (

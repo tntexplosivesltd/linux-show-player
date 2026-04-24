@@ -138,6 +138,7 @@ class Cue(HasProperties):
     default_stop_action = Property(default=CueAction.Stop.value)
     exclusive = Property(default=False)
     group_id = Property(default="")
+    disabled = Property(default=False)
 
     CueActions = (CueAction.Start,)
 
@@ -187,6 +188,29 @@ class Cue(HasProperties):
 
         self.changed("next_action").connect(self.__next_action_changed)
 
+    @property
+    def effective_disabled(self):
+        """True if this cue or any ancestor group is disabled.
+
+        Walks up the `group_id` chain at read time (no caching), so
+        enabling a group preserves any individual child flags that
+        were set independently.
+        """
+        if self.disabled:
+            return True
+        gid = self.group_id
+        # Guard against cycles created by a corrupted session.
+        visited = set()
+        while gid and gid not in visited:
+            visited.add(gid)
+            parent = self.app.cue_model.get(gid)
+            if parent is None:
+                break
+            if parent.disabled:
+                return True
+            gid = parent.group_id
+        return False
+
     def execute(self, action=CueAction.Default):
         """Execute the specified action, if supported.
 
@@ -206,6 +230,37 @@ class Cue(HasProperties):
 
         if action == CueAction.DoNothing:
             return
+
+        # Disable gate: block start/resume from any trigger source
+        # when the cue (or any ancestor group) is disabled. The
+        # allow-list covers every action that operates on an
+        # already-playing cue, so a cue disabled mid-playback can
+        # still be stopped / paused / faded / loop-released by
+        # Stop All, operator triggers, and in-flight fade machinery:
+        #   Stop / FadeOutStop            — Stop All, explicit stop
+        #   Pause / FadeOutPause          — Pause All, explicit pause
+        #   Interrupt / FadeOutInterrupt  — Interrupt All
+        #   FadeOut                       — Fade Out All (volume ramp
+        #                                   on a playing cue, not a start)
+        #   LoopRelease                   — cleanly exit a loop
+        # Start / Resume / FadeInStart / FadeInResume / FadeIn
+        # (which can only meaningfully act on a stopped cue as the
+        # initial volume ramp) all fall through the gate.
+        _ALLOWED_WHEN_DISABLED = (
+            CueAction.Stop,
+            CueAction.FadeOutStop,
+            CueAction.Pause,
+            CueAction.FadeOutPause,
+            CueAction.Interrupt,
+            CueAction.FadeOutInterrupt,
+            CueAction.FadeOut,
+            CueAction.LoopRelease,
+        )
+        if (
+            action not in _ALLOWED_WHEN_DISABLED
+            and self.effective_disabled
+        ):
+            return False
 
         # Block start/resume actions if an exclusive cue is running,
         # or if a video/image cue is already playing.

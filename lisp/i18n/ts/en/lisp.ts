@@ -265,37 +265,37 @@ This is likely because of corrupted data from a plugin. Try to revert recent cha
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="274" />
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="288" />
       <source>Change icon</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="270" />
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="284" />
       <source>Cue Name and Icon</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="272" />
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="286" />
       <source>NoName</source>
       <translation>NoName</translation>
     </message>
     <message>
-      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="277" />
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="291" />
       <source>Description/Note</source>
       <translation>Description/Note</translation>
     </message>
     <message>
-      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="279" />
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="293" />
       <source>Color</source>
       <translation>Color</translation>
     </message>
     <message>
-      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="281" />
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="295" />
       <source>Set Font Size</source>
       <translation>Set Font Size</translation>
     </message>
     <message>
-      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="284" />
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="298" />
       <source>The appearance depends on the layout</source>
       <translation>The appearance depends on the layout</translation>
     </message>
@@ -383,52 +383,67 @@ This is likely because of corrupted data from a plugin. Try to revert recent cha
   <context>
     <name>CueSettings</name>
     <message>
-      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="289" />
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="303" />
       <source>Default Start action</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="292" />
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="306" />
       <source>Default Stop action</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="296" />
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="310" />
       <source>Exclusive</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="298" />
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="312" />
       <source>Cue is exclusive</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="301" />
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="315" />
       <source>While playing, prevent other media cues from starting</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="476" />
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="321" />
+      <source>Enabled</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="324" />
+      <source>Cue is enabled</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="327" />
+      <source>When unchecked, the cue is skipped by GO, auto-follow chains, and group playback.</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="513" />
       <source>Pre wait</source>
       <translation>Pre wait</translation>
     </message>
     <message>
-      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="478" />
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="515" />
       <source>Wait before cue execution</source>
       <translation>Wait before cue execution</translation>
     </message>
     <message>
-      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="480" />
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="517" />
       <source>Post wait</source>
       <translation>Post wait</translation>
     </message>
     <message>
-      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="482" />
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="519" />
       <source>Wait after cue execution</source>
       <translation>Wait after cue execution</translation>
     </message>
     <message>
-      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="484" />
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="521" />
       <source>Next action</source>
       <translation>Next action</translation>
     </message>
@@ -512,12 +527,12 @@ This is likely because of corrupted data from a plugin. Try to revert recent cha
   <context>
     <name>FadeSettings</name>
     <message>
-      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="294" />
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="308" />
       <source>Fade In</source>
       <translation>Fade In</translation>
     </message>
     <message>
-      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="295" />
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="309" />
       <source>Fade Out</source>
       <translation>Fade Out</translation>
     </message>
@@ -1038,7 +1053,7 @@ This is likely because of corrupted data from a plugin. Try to revert recent cha
       <translation>General</translation>
     </message>
     <message>
-      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="423" />
+      <location filename="../../../ui/settings/cue_pages/cue_general.py" line="460" />
       <source>Timing</source>
       <translation type="unfinished" />
     </message>

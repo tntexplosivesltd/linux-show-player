@@ -139,19 +139,35 @@ class GroupCue(Cue):
                 cues.append(cue)
         return cues
 
+    def _resolve_playable_children(self):
+        """Like `_resolve_children`, but excludes children whose
+        `effective_disabled` is True. Used by playback paths so
+        disabled children are skipped at start, during playlist
+        advance, and during crossfade hand-off. Bookkeeping paths
+        (e.g. `_resync_layout_to_children`) continue to use
+        `_resolve_children` since they need the full list
+        regardless of runtime state.
+        """
+        return [
+            c for c in self._resolve_children()
+            if not c.effective_disabled
+        ]
+
     def execute(self, action=CueAction.Default):
-        # Block start if no children can be resolved
-        if action in (
-            CueAction.Default,
-            CueAction.Start,
-            CueAction.FadeInStart,
-        ):
-            if not self._resolve_children():
+        # Block start if no playable children can be resolved.
+        # Only guard explicit start actions here — CueAction.Default
+        # is resolved to default_start_action or default_stop_action
+        # by super().execute() based on the group's own state, and
+        # Default on a running-but-now-disabled group must still
+        # reach super() so it remaps to Stop (Stop All / operator
+        # trigger on a playing group stays functional).
+        if action in (CueAction.Start, CueAction.FadeInStart):
+            if not self._resolve_playable_children():
                 return
         return super().execute(action)
 
     def __start__(self, fade=False):
-        children = self._resolve_children()
+        children = self._resolve_playable_children()
         if not children:
             return False
 
@@ -203,7 +219,7 @@ class GroupCue(Cue):
     def _play_child_at(self, index, children=None, fade=False):
         """Start the child at the given playlist index."""
         if children is None:
-            children = self._resolve_children()
+            children = self._resolve_playable_children()
 
         if not children:
             self._ended()
@@ -322,7 +338,7 @@ class GroupCue(Cue):
                 return
             index = self._playlist_index
 
-        children = self._resolve_children()
+        children = self._resolve_playable_children()
         if not children or index >= len(children):
             self._stop_crossfade_monitor()
             return
@@ -426,17 +442,52 @@ class GroupCue(Cue):
             # overlap), wait for them to finish too.
             if self._connected_children:
                 return
-            next_index = self._playlist_index + 1
 
-        children = self._resolve_children()
+        # Locate the next enabled child after the one that just
+        # ended, using the FULL ordered children list so mid-
+        # playback disable of a sibling doesn't shift the index.
+        # `_playlist_index` may have drifted if a leading sibling
+        # was disabled since the current child started, so we
+        # can't just increment it — walk by id instead.
+        full_children = self._resolve_children()
+        try:
+            ended_pos = next(
+                i for i, c in enumerate(full_children)
+                if c.id == cue.id
+            )
+        except StopIteration:
+            # Ended cue is no longer in the children list (rare:
+            # removed from the group mid-playback). Fall through
+            # to end-of-playlist handling.
+            ended_pos = len(full_children)
 
-        if next_index >= len(children):
-            if self.loop:
-                self._play_child_at(0, children)
+        next_cue = None
+        for c in full_children[ended_pos + 1:]:
+            if not c.effective_disabled:
+                next_cue = c
+                break
+
+        playable = self._resolve_playable_children()
+
+        if next_cue is None:
+            if self.loop and playable:
+                self._play_child_at(0, playable)
             else:
                 self._ended()
-        else:
-            self._play_child_at(next_index, children)
+            return
+
+        # _play_child_at takes an index into the playable list.
+        try:
+            next_idx = next(
+                i for i, c in enumerate(playable) if c.id == next_cue.id
+            )
+        except StopIteration:
+            # Shouldn't happen (next_cue was chosen from the
+            # enabled walk), but fail safe.
+            self._ended()
+            return
+
+        self._play_child_at(next_idx, playable)
 
     def _on_playlist_child_stopped(self, cue):
         """Playlist mode: child was stopped/interrupted, stop group."""
