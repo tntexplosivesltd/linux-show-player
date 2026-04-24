@@ -247,6 +247,15 @@ class CueWidget(QWidget):
         self._cue.changed("stylesheet").connect(
             self._updateStyle, Connection.QtQueued
         )
+        # Effective_disabled may flip via the cue's own `disabled`
+        # or via an ancestor group's — subscribe to both so the
+        # dimmed appearance tracks the cascade without a reload.
+        self._cue.changed("disabled").connect(
+            self._refreshStyle, Connection.QtQueued
+        )
+        self._cue.changed("group_id").connect(
+            self._refreshStyle, Connection.QtQueued
+        )
         self._cue.changed("duration").connect(
             self._updateDuration, Connection.QtQueued
         )
@@ -326,8 +335,19 @@ class CueWidget(QWidget):
                     self.cueExecuted.emit(self._cue)
 
     def _updateStyle(self, stylesheet):
+        if self._cue.effective_disabled:
+            # Append a dim overlay. Keep the original stylesheet so
+            # colour/font selections survive re-enabling.
+            stylesheet = (
+                (stylesheet or "")
+                + "\nQWidget { color: rgba(160, 160, 160, 0.5); }"
+            )
         self.nameButton.setStyleSheet(stylesheet)
         self.nameButton.setIcon(IconTheme.get(f"{self._cue.icon}-cart"))
+
+    def _refreshStyle(self, _value=None):
+        """Re-apply styling when disabled/group_id changes."""
+        self._updateStyle(self._cue.stylesheet)
 
     def _enterFadein(self):
         p = self.timeDisplay.palette()
