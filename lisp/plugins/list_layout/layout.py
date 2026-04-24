@@ -624,21 +624,28 @@ class ListLayout(CueLayout):
             ):
                 return
 
-            # Find the next non-child cue (skip grouped children)
+            # Find the next playable cue, skipping both grouped
+            # children (the group manages them) and disabled cues.
             next_index = cue.index + 1
+            next_cue = None
             while next_index < len(self._list_model):
-                next_cue = self._list_model.item(next_index)
+                candidate = self._list_model.item(next_index)
                 if (
-                    next_cue.group_id
+                    candidate.group_id
                     and self.app.cue_model.get(
-                        next_cue.group_id
+                        candidate.group_id
                     ) is not None
                 ):
                     next_index += 1
                     continue
+                if candidate.effective_disabled:
+                    next_index += 1
+                    continue
+                next_cue = candidate
                 break
-            else:
-                return  # No more cues
+
+            if next_cue is None:
+                return  # No more playable cues
 
             action = CueNextAction(cue.next_action)
             if (
