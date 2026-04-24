@@ -40,6 +40,11 @@ class CueState:
     PreWait_Pause = 64
     PostWait_Pause = 128
 
+    # Composes with Pause. A cue paused by Fade & Stop with action
+    # "Hibernate" has state == Pause | Hibernating. Any pause-exit
+    # transition (start/resume/stop/interrupt/error) clears the bit.
+    Hibernating = 256
+
     IsRunning = Running | PreWait | PostWait
     IsPaused = Pause | PreWait_Pause | PostWait_Pause
     IsStopped = Error | Stop
