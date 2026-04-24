@@ -15,6 +15,8 @@
 # You should have received a copy of the GNU General Public License
 # along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
+import math
+
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
@@ -50,7 +52,15 @@ def _format_db_text(linear_volume: float) -> str:
     a visually noisy magic number on a fully faded cue. The sign
     prefix is always explicit (+/-) so the label's text width is
     stable as the value crosses 0 dB.
+
+    Non-finite inputs (NaN/inf) should never arrive from the GStreamer
+    Volume element (its live_volume is clamped to (0, 10) by
+    ``GstLiveProperty``), but we guard anyway — if an uninitialised
+    pipeline or a future caller supplies one, render "-∞ dB" rather
+    than "+inf dB" / "+nan dB".
     """
+    if not math.isfinite(linear_volume):
+        return "-∞ dB"
     db = linear_to_db(linear_volume)
     if db <= MIN_VOLUME_DB:
         return "-∞ dB"
@@ -418,13 +428,20 @@ class RunningMediaCueWidget(RunningCueWidget):
         and we silently hide the label. Re-enabling flips it back
         on at the next tick.
         """
+        # Early return when the operator has the feature disabled —
+        # at 30 Hz across every running cue, a setText call per tick
+        # triggers pointless QVBoxLayout geometry work for a hidden
+        # widget. The toggle's off-state is the default, so this
+        # path is the common case.
+        if not self._volume_indicator_requested:
+            return
+
         element = self.cue.media.element("Volume")
         if element is None:
             self.volumeIndicator.setVisible(False)
             return
 
-        if self._volume_indicator_requested:
-            self.volumeIndicator.setVisible(True)
+        self.volumeIndicator.setVisible(True)
         self.volumeIndicator.setVolumeLinear(element.live_volume)
 
     def set_volume_indicator_visible(self, visible):

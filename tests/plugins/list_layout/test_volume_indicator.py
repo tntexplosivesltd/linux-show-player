@@ -17,10 +17,13 @@
 
 """Tests for the cue volume indicator label."""
 
+from unittest.mock import MagicMock
+
 import pytest
 
 from lisp.plugins.list_layout.playing_widgets import (
     _format_db_text,
+    RunningMediaCueWidget,
     VolumeIndicatorLabel,
 )
 
@@ -61,6 +64,18 @@ class TestFormatDbText:
         """
         assert len(_format_db_text(1.0)) == len(_format_db_text(0.999))
 
+    @pytest.mark.parametrize(
+        "non_finite",
+        [float("nan"), float("inf"), float("-inf")],
+    )
+    def test_non_finite_inputs_render_minus_infinity(self, non_finite):
+        """GStreamer's live_volume is clamped to (0, 10) so this
+        should never arrive from the pipeline — the guard is
+        defense-in-depth against an uninitialised pipeline or a
+        future caller supplying a non-finite value. Rendering
+        "+inf dB" or "nan dB" would be worse than "-∞ dB"."""
+        assert _format_db_text(non_finite) == "-∞ dB"
+
 
 class TestVolumeIndicatorLabel:
     """The label is a dumb display — it takes a linear volume and
@@ -95,13 +110,6 @@ class TestVolumeIndicatorLabel:
         qtbot.addWidget(label)
 
         assert not label.isVisible()
-
-
-from unittest.mock import MagicMock  # noqa: E402
-
-from lisp.plugins.list_layout.playing_widgets import (  # noqa: E402
-    RunningMediaCueWidget,
-)
 
 
 class _FakeMedia:
@@ -197,4 +205,29 @@ class TestUpdateVolumeLabel:
         cue.media._elements["Volume"] = None
         widget._update_volume_label(0)
 
+        assert not widget.volumeIndicator.isVisible()
+
+    def test_update_is_a_noop_when_indicator_disabled(self, qtbot):
+        """When the operator has the feature off (the default), the
+        update slot must not touch the label — 30 Hz setText calls
+        on a hidden widget still trigger QVBoxLayout geometry work.
+        This test guards that early-return.
+        """
+        fake_vol = MagicMock()
+        fake_vol.live_volume = 0.5
+        cue = _FakeMediaCue(volume_element=fake_vol)
+        widget = _bare_volume_widget(cue)
+        qtbot.addWidget(widget.volumeIndicator)
+
+        # Seed the label with a distinctive value; the initial
+        # state of VolumeIndicatorLabel is "+0.0 dB".
+        widget.volumeIndicator.setText("SENTINEL")
+        # Flag defaults to False — simulates the toggle being off.
+        assert widget._volume_indicator_requested is False
+
+        widget._update_volume_label(0)
+
+        # Text unchanged — proves the early-return fired before
+        # any element lookup or setText on the label.
+        assert widget.volumeIndicator.text() == "SENTINEL"
         assert not widget.volumeIndicator.isVisible()
