@@ -123,10 +123,44 @@ class RunningCuesListWidget(QListWidget):
         self.setItemWidget(item, widget)
         self._running_cues[cue] = item
 
+        # Hibernation: apply current state, then subscribe for changes.
+        from lisp.cues.cue import CueState
+        if cue.state & CueState.Hibernating:
+            widget.set_hibernated(True)
+            item.setSizeHint(widget.size())
+
+        def on_hibernated(_c):
+            widget.set_hibernated(True)
+            item.setSizeHint(widget.size())
+
+        def on_awoken(_c):
+            widget.set_hibernated(False)
+            item.setSizeHint(widget.size())
+
+        self._hib_handlers = getattr(self, "_hib_handlers", {})
+        self._hib_handlers[cue] = (on_hibernated, on_awoken)
+
+        cue.hibernated.connect(on_hibernated, Connection.QtQueued)
+        cue.awoken.connect(on_awoken, Connection.QtQueued)
+
     def _item_removed(self, cue):
         item = self._running_cues.pop(cue)
         widget = self.itemWidget(item)
         row = self.indexFromItem(item).row()
+
+        # Disconnect hibernation handlers.
+        handlers = getattr(self, "_hib_handlers", {})
+        pair = handlers.pop(cue, None)
+        if pair is not None:
+            on_hib, on_awake = pair
+            try:
+                cue.hibernated.disconnect(on_hib)
+            except (TypeError, ValueError, RuntimeError):
+                pass
+            try:
+                cue.awoken.disconnect(on_awake)
+            except (TypeError, ValueError, RuntimeError):
+                pass
 
         self.removeItemWidget(item)
         self.takeItem(row)

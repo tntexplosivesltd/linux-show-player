@@ -166,6 +166,7 @@ class RunningCueWidget(QWidget):
 
         self._accurate_time = False
         self._config = config
+        self._hibernated = False
 
         self.cue = cue
         self.cue_time = CueTime(cue)
@@ -286,6 +287,73 @@ class RunningCueWidget(QWidget):
     def set_accurate_time(self, enable):
         self._accurate_time = enable
 
+    # --- Hibernation rendering -------------------------------------
+    # When a cue is hibernated, we keep the widget in the Playing
+    # panel but render it compact + dimmed. Controls, dbmeter and
+    # seek slider are hidden; a muted palette is applied via
+    # stylesheet. The operator's current dbmeter/seek visibility
+    # preferences are snapshotted so they can be restored on wake.
+
+    _HIBERNATED_STYLE = (
+        "QWidget { color: palette(mid); }"
+    )
+
+    def set_hibernated(self, hibernated):
+        """Toggle the compact-dimmed rendering mode used for
+        hibernated cues. Idempotent. Preserves operator dbmeter/seek
+        visibility preferences for restoration on wake."""
+        if getattr(self, "_hibernated", False) == hibernated:
+            return
+
+        if hibernated:
+            # Snapshot current sub-widget visibilities (media cues).
+            db = getattr(self, "dbmeter", None)
+            seek = getattr(self, "seekSlider", None)
+            self._dbmeter_requested = bool(db and db.isVisible())
+            self._seek_requested = bool(seek and seek.isVisible())
+            if db is not None:
+                db.setVisible(False)
+            if seek is not None:
+                seek.setVisible(False)
+            self.controlButtons.setVisible(False)
+            self.setStyleSheet(self._HIBERNATED_STYLE)
+            # Shrink the widget height. updateSize()'s formula
+            # (width/3.75 for base, width/2.75 for media) gives
+            # ~100-150 px; we compress to ~one-third.
+            current = self.size()
+            compact_h = max(24, current.height() // 3)
+            self.resize(current.width(), compact_h)
+        else:
+            db = getattr(self, "dbmeter", None)
+            seek = getattr(self, "seekSlider", None)
+            if db is not None:
+                db.setVisible(
+                    bool(getattr(self, "_dbmeter_requested", False))
+                )
+            if seek is not None:
+                seek.setVisible(
+                    bool(getattr(self, "_seek_requested", False))
+                )
+            self.controlButtons.setVisible(True)
+            self.setStyleSheet("")
+            # Restore the normal size. Delegating to updateSize
+            # is tricky without the enclosing list's width, so
+            # we just request the normal ratio based on current
+            # width.
+            current = self.size()
+            self.resize(
+                current.width(),
+                int(current.width() / self._normal_size_ratio()),
+            )
+
+        self._hibernated = hibernated
+        self.updateGeometry()
+
+    def _normal_size_ratio(self):
+        """Width-to-height ratio for the normal (non-hibernated)
+        size. Overridden by RunningMediaCueWidget."""
+        return 3.75
+
     def _time_updated(self, time):
         if not self.visibleRegion().isEmpty():
             # If the given value is the duration or < 0 set the time to 0
@@ -387,6 +455,9 @@ class RunningMediaCueWidget(RunningCueWidget):
 
     def updateSize(self, width):
         self.resize(width, int(width / 2.75))
+
+    def _normal_size_ratio(self):
+        return 2.75
 
     def set_seek_visible(self, visible):
         if visible and not self.seekSlider.isVisible():
