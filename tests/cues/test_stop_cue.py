@@ -570,3 +570,59 @@ class TestStopCueSettings:
         pages = list(CueSettingsRegistry().filter(StopCue))
         assert StopCueSettings in pages, \
             "StopCueSettings not registered for StopCue"
+
+
+class TestHibernateAction:
+    """Hibernate as a third UI option alongside Stop and Pause."""
+
+    def test_hibernate_sentinel_exists_in_supported_actions(self):
+        from lisp.plugins.action_cues.stop_cue import (
+            HIBERNATE_ACTION, StopCueSettings,
+        )
+        assert HIBERNATE_ACTION in StopCueSettings.SupportedActions
+
+    def test_hibernate_sentinel_has_duck_typed_name_value(self):
+        from lisp.plugins.action_cues.stop_cue import HIBERNATE_ACTION
+        assert HIBERNATE_ACTION.name == "Hibernate"
+        assert HIBERNATE_ACTION.value == "Hibernate"
+
+    def test_action_property_accepts_hibernate_value(self, mock_app):
+        cue = StopCue(app=mock_app)
+        cue.action = "Hibernate"
+        assert cue.action == "Hibernate"
+
+    def _setup_target(self, mock_app, name="Sound1"):
+        target = MagicMock()
+        target.name = name
+        mock_app.cue_model.get = lambda cid: (
+            target if cid == "t1" else None
+        )
+        return target
+
+    def test_auto_name_uses_hibernate_verb(self, mock_app):
+        self._setup_target(mock_app, "Sound1")
+        cue = StopCue(app=mock_app)
+        cue.target_id = "t1"
+        cue.action = "Hibernate"
+        assert cue.name == "Fade and Hibernate 'Sound1'"
+
+    def test_auto_name_switches_between_actions(self, mock_app):
+        self._setup_target(mock_app, "Sound1")
+        cue = StopCue(app=mock_app)
+        cue.target_id = "t1"
+
+        cue.action = CueAction.Pause.value
+        assert cue.name == "Fade and Pause 'Sound1'"
+
+        cue.action = "Hibernate"
+        assert cue.name == "Fade and Hibernate 'Sound1'"
+
+        cue.action = CueAction.Stop.value
+        assert cue.name == "Fade and Stop 'Sound1'"
+
+    def test_hibernate_property_survives_round_trip(self, mock_app):
+        cue = StopCue(app=mock_app)
+        cue.target_id = "t1"
+        cue.action = "Hibernate"
+        props = cue.properties()
+        assert props["action"] == "Hibernate"

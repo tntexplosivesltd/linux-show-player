@@ -16,6 +16,7 @@
 # along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
 import logging
+from collections import namedtuple
 
 from PyQt5.QtCore import QT_TRANSLATE_NOOP, Qt
 from PyQt5.QtWidgets import (
@@ -40,6 +41,14 @@ from lisp.ui.ui_utils import translate
 from lisp.ui.widgets import FadeEdit
 
 logger = logging.getLogger(__name__)
+
+# Duck-typed CueAction-like for the StopCue-local "Hibernate"
+# option. Has .name and .value so the combo populator
+# (`for a in SupportedActions: addItem(translate(..., a.name),
+# a.value)`) handles it unchanged. Not a CueAction enum value —
+# hibernation is StopCue-originated; targets only ever see Pause.
+_ActionLike = namedtuple("_ActionLike", ["name", "value"])
+HIBERNATE_ACTION = _ActionLike(name="Hibernate", value="Hibernate")
 
 
 class StopCue(Cue):
@@ -96,8 +105,13 @@ class StopCue(Cue):
         target = self.app.cue_model.get(self.target_id)
         if target is None:
             return translate("CueName", self.Name)
-        action = CueAction(self.action)
-        verb = translate("CueAction", action.name)
+        if self.action == HIBERNATE_ACTION.value:
+            # "Hibernate" is StopCue-local, not a CueAction enum —
+            # translate its label directly.
+            verb = translate("CueAction", "Hibernate")
+        else:
+            action = CueAction(self.action)
+            verb = translate("CueAction", action.name)
         return f"Fade and {verb} '{target.name}'"
 
     def update_properties(self, properties):
@@ -189,6 +203,7 @@ class StopCueSettings(SettingsPage):
     SupportedActions = [
         CueAction.Stop,
         CueAction.Pause,
+        HIBERNATE_ACTION,
         CueAction.Interrupt,
     ]
 
