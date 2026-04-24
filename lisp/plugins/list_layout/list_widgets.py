@@ -104,15 +104,28 @@ class CueStatusIcons(QWidget):
         self._item.cue.paused.connect(self.updateIcon, Connection.QtQueued)
         self._item.cue.error.connect(self.updateIcon, Connection.QtQueued)
         self._item.cue.end.connect(self.updateIcon, Connection.QtQueued)
+        self._item.cue.hibernated.connect(
+            self.updateIcon, Connection.QtQueued
+        )
+        self._item.cue.awoken.connect(
+            self.updateIcon, Connection.QtQueued
+        )
 
         self.updateIcon()
 
     def updateIcon(self):
-        if self._item.cue.state & CueState.Running:
+        state = self._item.cue.state
+        # Hibernating composes with Pause (state == Pause|Hibernating),
+        # so check it first — we want the hibernating glyph, not pause.
+        if state & CueState.Hibernating:
+            self._icon = IconTheme.get(
+                f"{self._item.cue.icon}-hibernating"
+            )
+        elif state & CueState.Running:
             self._icon = IconTheme.get(f"{self._item.cue.icon}-running")
-        elif self._item.cue.state & CueState.Pause:
+        elif state & CueState.Pause:
             self._icon = IconTheme.get(f"{self._item.cue.icon}-pause")
-        elif self._item.cue.state & CueState.Error:
+        elif state & CueState.Error:
             self._icon = IconTheme.get(f"{self._item.cue.icon}-error")
         else:
             self._icon = IconTheme.get(self._item.cue.icon)
