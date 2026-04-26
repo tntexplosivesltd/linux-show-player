@@ -15,6 +15,7 @@
 # You should have received a copy of the GNU General Public License
 # along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
+import logging
 from abc import abstractmethod
 from enum import Enum
 from typing import Union
@@ -79,6 +80,11 @@ class Media(HasProperties):
         self.elements_changed = Signal()
         # Emitted when one or more elements are added/removed (self)
 
+        self.armed = Signal()
+        # Emitted after a successful pre-arm (self)
+        self.disarmed = Signal()
+        # Emitted after disarm (self)
+
     @property
     @abstractmethod
     def state(self) -> MediaState:
@@ -117,3 +123,26 @@ class Media(HasProperties):
     @abstractmethod
     def stop(self):
         """The media go in READY state (stop the playback)."""
+
+    def prearm(self) -> bool:
+        """Pre-arm the media into a started-but-not-playing state.
+
+        Returns True on success, False on any failure. Must not raise.
+        Default implementation refuses to arm — backends that don't
+        support pre-arm return False rather than crashing.
+        """
+        logging.debug(
+            "%s: backend doesn't support pre-arm",
+            type(self).__name__,
+        )
+        return False
+
+    def disarm(self) -> None:
+        """Tear down a pre-armed pipeline back to Null. Idempotent."""
+        pass
+
+    def reseek(self, position: int) -> None:
+        """Re-seek to a new start position while armed, without
+        rebuilding the pipeline. No-op if not armed.
+        """
+        pass
