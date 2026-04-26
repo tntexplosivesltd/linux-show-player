@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Mapping, Optional
 
-from PyQt5.QtGui import QColor, QPalette
+from PyQt5.QtGui import QColor
 
 
 CUE_COLOR_NAMES = (
