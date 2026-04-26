@@ -71,3 +71,27 @@ def test_armed_signal_exists():
     m = _DummyMedia()
     assert hasattr(m, "armed")
     assert hasattr(m, "disarmed")
+
+
+def test_armed_signal_emits():
+    m = _DummyMedia()
+    received = []
+
+    def _handler(media):
+        received.append(media)
+
+    m.armed.connect(_handler)
+    m.armed.emit(m)
+    assert received == [m]
+
+
+def test_disarmed_signal_emits():
+    m = _DummyMedia()
+    received = []
+
+    def _handler(media):
+        received.append(media)
+
+    m.disarmed.connect(_handler)
+    m.disarmed.emit(m)
+    assert received == [m]
