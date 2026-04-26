@@ -33,6 +33,7 @@ class MediaState(Enum):
     Playing = 1
     Paused = 2
     Ready = 3
+    Armed = 4
 
 
 class Media(HasProperties):
