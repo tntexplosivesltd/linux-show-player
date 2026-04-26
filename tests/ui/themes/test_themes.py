@@ -17,6 +17,7 @@
 
 import pytest
 from PyQt5.QtGui import QColor, QPalette
+from unittest.mock import MagicMock
 
 from lisp.ui.themes.base import (
     CUE_COLOR_NAMES,
@@ -174,3 +175,63 @@ class TestBaseThemeApply:
         theme = self._make_dark_theme()
         theme.apply(qapp)
         assert themes._active is theme
+
+
+class TestCueColorHelpers:
+    """Active-theme-aware lookups for cue colors."""
+
+    def setup_method(self):
+        from lisp.ui import themes
+        themes._active = None  # reset between tests
+
+    def test_cue_color_hex_returns_empty_for_empty(self):
+        from lisp.ui.themes import cue_color_hex
+        assert cue_color_hex("") == ""
+
+    def test_cue_color_hex_no_active_theme_uses_default(self):
+        from lisp.ui.themes import cue_color_hex
+        assert cue_color_hex("Red") == DEFAULT_CUE_PALETTE["Red"]
+
+    def test_cue_color_hex_uses_active_theme(self, qapp):
+        from lisp.ui.themes import cue_color_hex
+        from lisp.ui.themes.base import BaseTheme
+
+        custom_palette = dict(DEFAULT_CUE_PALETTE)
+        custom_palette["Red"] = "#dc322f"  # solarized red
+
+        class _Solarized(BaseTheme):
+            Colors = ThemeColors(
+                background=QColor(253, 246, 227),
+                foreground=QColor(238, 232, 213),
+                text=QColor(101, 123, 131),
+                highlight=QColor(38, 139, 210),
+                cue_palette=custom_palette,
+            )
+
+        _Solarized().apply(qapp)
+        assert cue_color_hex("Red") == "#dc322f"
+
+    def test_cue_palette_returns_default_when_no_active(self):
+        from lisp.ui.themes import cue_palette
+        assert cue_palette() == DEFAULT_CUE_PALETTE
+
+    def test_cue_background_hex_themed_takes_precedence(self):
+        from lisp.ui.themes import cue_background_hex
+        cue = MagicMock()
+        cue.color_name = "Red"
+        cue.stylesheet = "background: #aabbcc"
+        assert cue_background_hex(cue) == DEFAULT_CUE_PALETTE["Red"]
+
+    def test_cue_background_hex_falls_back_to_legacy_hex(self):
+        from lisp.ui.themes import cue_background_hex
+        cue = MagicMock()
+        cue.color_name = ""
+        cue.stylesheet = "background: #aabbcc"
+        assert cue_background_hex(cue) == "#aabbcc"
+
+    def test_cue_background_hex_returns_empty_when_no_color(self):
+        from lisp.ui.themes import cue_background_hex
+        cue = MagicMock()
+        cue.color_name = ""
+        cue.stylesheet = ""
+        assert cue_background_hex(cue) == ""
