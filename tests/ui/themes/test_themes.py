@@ -321,3 +321,37 @@ class TestDarkPaletteUnchanged:
                 f"role {role} = {qapp.palette().color(role).getRgb()}, "
                 f"expected {expected.getRgb()}"
             )
+
+
+class TestSystemTheme:
+    def test_applies_without_changing_palette(self, qapp):
+        from lisp.ui.themes.system.system import System
+        before = QColor(qapp.palette().color(QPalette.Window))
+        System().apply(qapp)
+        after = qapp.palette().color(QPalette.Window)
+        assert before == after
+
+    def test_applies_without_changing_stylesheet(self, qapp):
+        from lisp.ui.themes.system.system import System
+        qapp.setStyleSheet("/* sentinel */")
+        System().apply(qapp)
+        assert qapp.styleSheet() == "/* sentinel */"
+
+    def test_sets_active(self, qapp):
+        from lisp.ui import themes
+        from lisp.ui.themes.system.system import System
+        s = System()
+        s.apply(qapp)
+        assert themes._active is s
+
+    def test_cue_color_hex_falls_back_to_default(self, qapp):
+        from lisp.ui.themes import cue_color_hex
+        from lisp.ui.themes.system.system import System
+        System().apply(qapp)
+        assert cue_color_hex("Red") == DEFAULT_CUE_PALETTE["Red"]
+
+    def test_discovery_finds_system(self):
+        from lisp.ui import themes
+        themes._THEMES.clear()  # reset cache so new theme is discovered
+        from lisp.ui.themes import themes_names
+        assert "System" in themes_names()
