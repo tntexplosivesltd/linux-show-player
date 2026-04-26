@@ -28,14 +28,21 @@ def get_theme(theme_name):
 def cue_color_hex(name: str) -> str:
     """Resolve a canonical cue color name to the active theme's hex.
 
-    Returns ``""`` for an empty name. Falls back to ``DEFAULT_CUE_PALETTE``
-    when no theme is active or the active theme has no ``Colors``.
+    Returns ``""`` for an empty name OR for any name not in
+    ``CUE_COLOR_NAMES`` (defensive against hand-edited sessions,
+    future palette extensions, or third-party theme drift). Paint
+    code depends on this never raising.
+
+    Falls back to ``DEFAULT_CUE_PALETTE`` when no theme is active or
+    the active theme has no ``Colors``.
     """
     if not name:
         return ""
     if _active is not None and hasattr(_active, "Colors"):
-        return _active.Colors.cue_palette.get(name, DEFAULT_CUE_PALETTE[name])
-    return DEFAULT_CUE_PALETTE[name]
+        palette = _active.Colors.cue_palette
+    else:
+        palette = DEFAULT_CUE_PALETTE
+    return palette.get(name, DEFAULT_CUE_PALETTE.get(name, ""))
 
 
 def cue_palette() -> Mapping[str, str]:

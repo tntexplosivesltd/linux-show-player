@@ -235,3 +235,11 @@ class TestCueColorHelpers:
         cue.color_name = ""
         cue.stylesheet = ""
         assert cue_background_hex(cue) == ""
+
+    def test_cue_color_hex_unknown_name_returns_empty(self):
+        """Hand-edited sessions or schema drift can produce unknown
+        names. We must degrade gracefully, not raise — paint code
+        depends on this."""
+        from lisp.ui.themes import cue_color_hex
+        assert cue_color_hex("Magenta") == ""
+        assert cue_color_hex("NotAColor") == ""
