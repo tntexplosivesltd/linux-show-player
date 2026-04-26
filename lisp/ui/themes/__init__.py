@@ -3,6 +3,7 @@ from os import path
 from lisp.core.loading import load_classes
 
 _THEMES = {}
+_active = None
 
 
 def load_themes():

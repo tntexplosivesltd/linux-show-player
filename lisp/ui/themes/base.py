@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Mapping, Optional
 
-from PyQt5.QtGui import QColor
+from PyQt5.QtGui import QColor, QPalette
 
 
 CUE_COLOR_NAMES = (
@@ -97,3 +97,53 @@ class ThemeColors:
 
     def resolved_highlighted_text(self) -> QColor:
         return self.highlighted_text or QColor(0, 0, 0)
+
+
+class BaseTheme:
+    """Base class for QPalette-driven themes.
+
+    Subclasses set ``Colors`` (a ``ThemeColors`` instance) and optionally
+    ``QssPath`` (path to a Qt stylesheet file). ``apply()`` constructs a
+    ``QPalette`` from ``Colors`` and installs it on the given
+    ``QApplication``, then loads the stylesheet if set.
+    """
+
+    Colors: ThemeColors = None  # subclasses MUST override
+    QssPath: Optional[str] = None
+
+    def apply(self, qt_app):
+        c = self.Colors
+        palette = qt_app.palette()
+
+        palette.setColor(QPalette.Window, c.foreground)
+        palette.setColor(QPalette.WindowText, c.text)
+        palette.setColor(QPalette.Base, c.background)
+        palette.setColor(QPalette.AlternateBase, c.resolved_alternate_base())
+        palette.setColor(QPalette.ToolTipBase, c.foreground)
+        palette.setColor(QPalette.ToolTipText, c.text)
+        palette.setColor(QPalette.Text, c.text)
+        palette.setColor(QPalette.Button, c.foreground)
+        palette.setColor(QPalette.ButtonText, c.text)
+        palette.setColor(QPalette.BrightText, c.resolved_bright_text())
+        palette.setColor(QPalette.Link, c.highlight)
+
+        palette.setColor(QPalette.Light, c.resolved_light())
+        palette.setColor(QPalette.Midlight, c.resolved_midlight())
+        palette.setColor(QPalette.Dark, c.resolved_dark())
+        palette.setColor(QPalette.Mid, c.resolved_mid())
+
+        palette.setColor(QPalette.Highlight, c.highlight)
+        palette.setColor(
+            QPalette.HighlightedText, c.resolved_highlighted_text()
+        )
+
+        qt_app.setPalette(palette)
+
+        # Track active theme for cue color lookups.
+        # Imported lazily to avoid a circular import at module load.
+        from lisp.ui import themes
+        themes._active = self
+
+        if self.QssPath:
+            with open(self.QssPath, mode="r", encoding="utf-8") as f:
+                qt_app.setStyleSheet(f.read())

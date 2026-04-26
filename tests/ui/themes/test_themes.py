@@ -16,7 +16,7 @@
 # along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
 import pytest
-from PyQt5.QtGui import QColor
+from PyQt5.QtGui import QColor, QPalette
 
 from lisp.ui.themes.base import (
     CUE_COLOR_NAMES,
@@ -118,3 +118,53 @@ class TestThemeColorsDerivations:
     def test_highlighted_text_default_is_black(self):
         c = self._theme()
         assert c.resolved_highlighted_text() == QColor(0, 0, 0)
+
+
+class TestBaseThemeApply:
+    """BaseTheme.apply maps ThemeColors to a QPalette on the QApplication."""
+
+    def _make_dark_theme(self):
+        from lisp.ui.themes.base import BaseTheme
+
+        class _TestDark(BaseTheme):
+            Colors = ThemeColors(
+                background=QColor(30, 30, 30),
+                foreground=QColor(52, 52, 52),
+                text=QColor(230, 230, 230),
+                highlight=QColor(65, 155, 230),
+            )
+
+        return _TestDark()
+
+    def test_window_role_uses_foreground(self, qapp):
+        theme = self._make_dark_theme()
+        theme.apply(qapp)
+        assert qapp.palette().color(QPalette.Window) == QColor(52, 52, 52)
+
+    def test_base_role_uses_background(self, qapp):
+        theme = self._make_dark_theme()
+        theme.apply(qapp)
+        assert qapp.palette().color(QPalette.Base) == QColor(30, 30, 30)
+
+    def test_text_role_uses_text(self, qapp):
+        theme = self._make_dark_theme()
+        theme.apply(qapp)
+        assert qapp.palette().color(QPalette.Text) == QColor(230, 230, 230)
+
+    def test_highlight_role_uses_highlight(self, qapp):
+        theme = self._make_dark_theme()
+        theme.apply(qapp)
+        assert qapp.palette().color(QPalette.Highlight) == QColor(65, 155, 230)
+
+    def test_alternate_base_uses_derived_default(self, qapp):
+        theme = self._make_dark_theme()
+        theme.apply(qapp)
+        assert qapp.palette().color(QPalette.AlternateBase) == \
+            QColor(52, 52, 52).darker(125)
+
+    def test_no_qss_when_qsspath_unset(self, qapp):
+        theme = self._make_dark_theme()
+        qapp.setStyleSheet("/* sentinel */")
+        theme.apply(qapp)
+        # QssPath is None, so apply should not touch the stylesheet
+        assert qapp.styleSheet() == "/* sentinel */"
