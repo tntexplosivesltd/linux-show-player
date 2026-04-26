@@ -115,6 +115,23 @@ def test_reseek_while_armed(gst_media):
     assert gst_media.state == MediaState.Armed
 
 
+def test_stop_on_armed_disarms(gst_media):
+    """stop() on an Armed pipeline must release resources via disarm,
+    not silently no-op (regression guard for code review finding).
+    """
+    gst_media.prearm()
+    assert gst_media.state == MediaState.Armed
+    received = []
+
+    def _handler(m):
+        received.append(m)
+
+    gst_media.disarmed.connect(_handler)
+    gst_media.stop()
+    assert gst_media.state == MediaState.Null
+    assert len(received) == 1
+
+
 def test_prearm_failed_uri_returns_false(short_wav, caplog):
     media = GstMedia()
     media.pipe = ("UriInput", "AutoSink")

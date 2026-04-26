@@ -127,6 +127,13 @@ class GstMedia(Media):
             self.paused.emit(self)
 
     def stop(self):
+        if self.state == MediaState.Armed:
+            # An Armed pipeline holds audio device resources in PAUSED
+            # state. stop() on Armed must release them — defer to
+            # disarm() rather than emitting on_stop/stopped signals,
+            # since the cue never started playing.
+            self.disarm()
+            return
         if self.state == MediaState.Playing or self.state == MediaState.Paused:
             self.on_stop.emit(self)
 
@@ -303,6 +310,11 @@ class GstMedia(Media):
         # Make a copy of the current elements properties
         elements_properties = self.elements.properties()
 
+        # Pipeline is being torn down and rebuilt — any previous arm
+        # state is invalid. Don't emit `disarmed` here; this is an
+        # internal reset, not a user-visible disarm.
+        self.__armed = False
+
         # Call the current media-finalizer, if any
         if self.__finalizer is not None:
             # Set pipeline to NULL, finalize bus-handler and elements
@@ -399,6 +411,11 @@ class GstMedia(Media):
             # Clear arm state — an Armed pipeline that errors out is no
             # longer armed; without this the state property would keep
             # reporting Armed despite the pipeline being NULL.
+            # Note: we deliberately do NOT emit `disarmed` here. The
+            # `disarmed` signal contract is "emitted by disarm()". The
+            # `error` signal (emitted below) is the canonical channel
+            # for "pipeline gone, including any armed state" — adding
+            # `disarmed` would be redundant for `error` subscribers.
             self.__armed = False
             self.__reset_media()
 
