@@ -65,6 +65,7 @@ class GstMedia(Media):
         self.__finalizer = None
         self.__loop = 0  # current number of loops left to do
         self.__current_pipe = None  # A copy of the pipe property
+        self.__armed = False  # True when pre-armed (pipeline in PAUSED)
 
         self.changed("loop").connect(self.__on_loops_changed)
         self.changed("pipe").connect(self.__on_pipe_changed)
@@ -73,6 +74,9 @@ class GstMedia(Media):
     def state(self):
         if self.__pipeline is None:
             return MediaState.Null
+
+        if self.__armed:
+            return MediaState.Armed
 
         return GST_TO_MEDIA_STATE.get(
             self.__pipeline.get_state(Gst.MSECOND)[1], MediaState.Null
@@ -141,6 +145,64 @@ class GstMedia(Media):
             for element in self.elements:
                 element.stop()
 
+    def prearm(self) -> bool:
+        """Drive the pipeline to PAUSED + seek to start_time.
+
+        Returns False on any failure (file missing, decoder error, sink
+        refused, preroll deadline exceeded). Logs WARNING on failure.
+        Idempotent: returns True immediately if already Armed/Playing/Paused.
+        """
+        if self.state in (
+            MediaState.Playing,
+            MediaState.Paused,
+            MediaState.Armed,
+        ):
+            return True
+
+        if self.state == MediaState.Null:
+            try:
+                self.__init_pipeline()
+            except Exception as exc:
+                logger.warning(
+                    "GstMedia.prearm: pipeline init failed: %s", exc
+                )
+                return False
+
+        # Pipeline is now in READY; drive it to PAUSED for preroll
+        ret = self.__pipeline.set_state(Gst.State.PAUSED)
+        if ret == Gst.StateChangeReturn.FAILURE:
+            logger.warning("GstMedia.prearm: set_state(PAUSED) FAILURE")
+            self.__pipeline.set_state(Gst.State.NULL)
+            return False
+
+        state_ret, *_ = self.__pipeline.get_state(Gst.SECOND)
+        if state_ret != Gst.StateChangeReturn.SUCCESS:
+            logger.warning(
+                "GstMedia.prearm: preroll did not complete (%s)",
+                state_ret,
+            )
+            self.__pipeline.set_state(Gst.State.NULL)
+            return False
+
+        self.__armed = True
+        self.__seek(self.start_time)
+        self.armed.emit(self)
+        return True
+
+    def disarm(self) -> None:
+        """Tear down an armed pipeline. Idempotent."""
+        if self.state != MediaState.Armed:
+            return
+        self.__pipeline.set_state(Gst.State.NULL)
+        self.__armed = False
+        self.disarmed.emit(self)
+
+    def reseek(self, position: int) -> None:
+        """Re-seek a pre-armed pipeline without tearing it down."""
+        if self.state != MediaState.Armed:
+            return
+        self.__seek(position)
+
     def seek(self, position):
         if self.__seek(position):
             self.sought.emit(self, position)
@@ -186,7 +248,8 @@ class GstMedia(Media):
 
     def __seek(self, position, flush=True):
         if (
-            self.state not in (MediaState.Playing, MediaState.Paused)
+            self.state
+            not in (MediaState.Playing, MediaState.Paused, MediaState.Armed)
             or position > self.__segment_stop_position()
         ):
             return False
