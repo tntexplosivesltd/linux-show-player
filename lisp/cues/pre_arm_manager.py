@@ -152,6 +152,84 @@ class PreArmManager:
             self._armed[cue.id] = new_reason
             self.armed_set_changed.emit()
 
+    # --- Lifecycle hooks ----------------------------------------------
+
+    def session_loaded(self, *_args) -> None:
+        """Called when a session finishes loading. Arms preload-marked
+        cues first (priority), then attempts to arm the standby cue.
+        """
+        if not self._enabled:
+            return
+        # Phase 1: preload-marked cues (priority over auto)
+        for cue in self._app.cue_model:
+            if not getattr(cue, "preload", False):
+                continue
+            if not self._eligible(cue):
+                continue
+            self._try_arm(cue, ArmReason.Preload)
+        # Phase 2: standby cue (best-effort)
+        try:
+            standby = self._app.layout.standby_cue()
+        except Exception:
+            standby = None
+        if standby is not None and self._eligible(standby):
+            self._try_arm(standby, ArmReason.Auto)
+
+    def standby_changed(self, new_cue) -> None:
+        """Called when the active layout's standby cursor moves.
+
+        Cues that were Auto-only get disarmed. Cues with both Auto and
+        Preload get downgraded to Preload (stay armed). The new standby
+        is armed if eligible.
+        """
+        new_id = new_cue.id if new_cue is not None else None
+
+        # Snapshot the current Auto-armed cues (avoid mutation during iter)
+        auto_armed_ids = [
+            cue_id for cue_id, reason in list(self._armed.items())
+            if ArmReason.Auto in reason
+        ]
+
+        # Remove Auto from cues that are no longer standby
+        for cue_id in auto_armed_ids:
+            if cue_id == new_id:
+                continue
+            cue = self._cue_by_id(cue_id)
+            if cue is not None:
+                self._remove_reason(cue, ArmReason.Auto)
+
+        # Arm the new standby
+        if new_cue is not None and self._eligible(new_cue):
+            if new_cue.id in self._armed:
+                self._add_reason(new_cue, ArmReason.Auto)
+            else:
+                self._try_arm(new_cue, ArmReason.Auto)
+
+    def _cue_by_id(self, cue_id: str):
+        """Look up a cue by id. Returns None if not in the model.
+        Tolerates a missing cue_model.get method on test mocks.
+        """
+        try:
+            return self._app.cue_model.get(cue_id)
+        except Exception:
+            return None
+
+    def cue_executed(self, cue) -> None:
+        """Called when a cue is fired. The cue is now Playing, so it
+        leaves the armed set.
+        """
+        if cue.id in self._armed:
+            self._armed.pop(cue.id, None)
+            self._mtime_at_arm.pop(cue.id, None)
+            self.armed_set_changed.emit()
+
+    def on_cue_stopped(self, cue) -> None:
+        """Called when a cue stops/ends/is interrupted/errors. If marked
+        preload, re-arm immediately. Otherwise no-op.
+        """
+        if getattr(cue, "preload", False) and self._eligible(cue):
+            self._try_arm(cue, ArmReason.Preload)
+
     # --- Failure tracking ---------------------------------------------
 
     def _record_failure(

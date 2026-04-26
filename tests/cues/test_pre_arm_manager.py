@@ -209,3 +209,158 @@ def test_disabled_manager_refuses(manager_factory):
     cue = _make_cue("c1")
     assert manager._try_arm(cue, ArmReason.Auto) is False
     assert "c1" not in manager._armed
+
+
+# T8 tests --------------------------------------------------------------
+
+def test_session_loaded_arms_preload_cues(manager, mock_app):
+    cues = [
+        _make_cue("c1", preload=True),
+        _make_cue("c2", preload=False),
+        _make_cue("c3", preload=True),
+    ]
+    mock_app.cue_model = MagicMock()
+    mock_app.cue_model.__iter__ = lambda self: iter(cues)
+    mock_app.layout = MagicMock()
+    mock_app.layout.standby_cue.return_value = None
+
+    manager.session_loaded()
+
+    assert "c1" in manager._armed
+    assert "c2" not in manager._armed
+    assert "c3" in manager._armed
+    assert manager._armed["c1"] == ArmReason.Preload
+
+
+def test_session_loaded_arms_standby(manager, mock_app):
+    standby_cue = _make_cue("s1")
+    mock_app.cue_model = MagicMock()
+    mock_app.cue_model.__iter__ = lambda self: iter([])
+    mock_app.layout = MagicMock()
+    mock_app.layout.standby_cue.return_value = standby_cue
+
+    manager.session_loaded()
+
+    assert "s1" in manager._armed
+    assert manager._armed["s1"] == ArmReason.Auto
+
+
+def test_session_loaded_preload_priority_over_auto(manager_factory, mock_app):
+    manager = manager_factory({"preArm.maxArmed": 1})
+    preload_cue = _make_cue("p", preload=True)
+    standby_cue = _make_cue("s")
+    mock_app.cue_model = MagicMock()
+    mock_app.cue_model.__iter__ = lambda self: iter([preload_cue])
+    mock_app.layout = MagicMock()
+    mock_app.layout.standby_cue.return_value = standby_cue
+
+    manager.session_loaded()
+
+    assert "p" in manager._armed
+    assert "s" not in manager._armed
+
+
+def test_session_loaded_disabled_manager_noop(manager_factory, mock_app):
+    manager = manager_factory({"preArm.enabled": False})
+    preload_cue = _make_cue("p", preload=True)
+    mock_app.cue_model = MagicMock()
+    mock_app.cue_model.__iter__ = lambda self: iter([preload_cue])
+    mock_app.layout = MagicMock()
+    mock_app.layout.standby_cue.return_value = None
+
+    manager.session_loaded()
+
+    assert "p" not in manager._armed
+
+
+# T9 tests --------------------------------------------------------------
+
+def test_standby_changed_arms_new_disarms_old(manager, mock_app):
+    cue1 = _make_cue("c1")
+    cue2 = _make_cue("c2")
+    mock_app.cue_model = MagicMock()
+    mock_app.cue_model.get.side_effect = lambda cue_id: {
+        "c1": cue1, "c2": cue2,
+    }.get(cue_id)
+
+    manager.standby_changed(cue1)
+    assert "c1" in manager._armed
+    manager.standby_changed(cue2)
+    assert "c1" not in manager._armed
+    assert "c2" in manager._armed
+    assert manager._armed["c2"] == ArmReason.Auto
+
+
+def test_standby_changed_to_none_disarms_auto(manager, mock_app):
+    cue1 = _make_cue("c1")
+    mock_app.cue_model = MagicMock()
+    mock_app.cue_model.get.side_effect = lambda cue_id: {"c1": cue1}.get(cue_id)
+    manager.standby_changed(cue1)
+    assert "c1" in manager._armed
+    manager.standby_changed(None)
+    assert "c1" not in manager._armed
+
+
+def test_standby_changed_preserves_preload_when_moving_away(manager, mock_app):
+    cue1 = _make_cue("c1", preload=True)
+    cue2 = _make_cue("c2")
+    mock_app.cue_model = MagicMock()
+    mock_app.cue_model.get.side_effect = lambda cue_id: {
+        "c1": cue1, "c2": cue2,
+    }.get(cue_id)
+
+    # Step 1: arm cue1 as preload
+    manager._try_arm(cue1, ArmReason.Preload)
+    # Step 2: standby moves onto cue1 → should add Auto reason
+    manager.standby_changed(cue1)
+    assert manager._armed["c1"] == ArmReason.Auto | ArmReason.Preload
+    # Step 3: standby moves to cue2 → cue1 keeps Preload, cue2 gets Auto
+    manager.standby_changed(cue2)
+    assert manager._armed["c1"] == ArmReason.Preload
+    assert manager._armed["c2"] == ArmReason.Auto
+
+
+def test_standby_changed_skips_groupcue(manager, mock_app):
+    group = _make_cue("g1", is_group=True)
+    mock_app.cue_model = MagicMock()
+    mock_app.cue_model.get.side_effect = lambda cue_id: {"g1": group}.get(cue_id)
+    manager.standby_changed(group)
+    assert "g1" not in manager._armed
+
+
+# T10 tests -------------------------------------------------------------
+
+def test_cue_executed_removes_from_armed(manager):
+    cue = _make_cue("c1")
+    manager._try_arm(cue, ArmReason.Auto)
+    manager.cue_executed(cue)
+    assert "c1" not in manager._armed
+
+
+def test_cue_executed_does_not_call_media_disarm(manager):
+    """Cue is already in Playing state; no need to call media.disarm
+    (the play() flow already cleared the arm flag).
+    """
+    cue = _make_cue("c1")
+    manager._try_arm(cue, ArmReason.Auto)
+    cue.media.disarm.reset_mock()
+    manager.cue_executed(cue)
+    cue.media.disarm.assert_not_called()
+
+
+def test_cue_stopped_rearms_if_preload(manager):
+    cue = _make_cue("c1", preload=True)
+    manager._try_arm(cue, ArmReason.Preload)
+    manager.cue_executed(cue)
+    assert "c1" not in manager._armed
+    manager.on_cue_stopped(cue)
+    assert "c1" in manager._armed
+    assert manager._armed["c1"] == ArmReason.Preload
+
+
+def test_cue_stopped_does_not_rearm_if_not_preload(manager):
+    cue = _make_cue("c1", preload=False)
+    manager._try_arm(cue, ArmReason.Auto)
+    manager.cue_executed(cue)
+    manager.on_cue_stopped(cue)
+    assert "c1" not in manager._armed
