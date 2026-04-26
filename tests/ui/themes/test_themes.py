@@ -245,6 +245,47 @@ class TestCueColorHelpers:
         assert cue_color_hex("NotAColor") == ""
 
 
+class TestLightTheme:
+    EXPECTED = {
+        QPalette.Window: QColor(230, 230, 230),
+        QPalette.Base: QColor(245, 245, 245),
+        QPalette.Text: QColor(30, 30, 30),
+        QPalette.Highlight: QColor(65, 155, 230),
+        QPalette.HighlightedText: QColor(255, 255, 255),
+        QPalette.AlternateBase: QColor(220, 220, 220),
+        QPalette.BrightText: QColor(200, 0, 0),
+    }
+
+    def test_applies_without_error(self, qapp):
+        from lisp.ui.themes.light.light import Light
+        Light().apply(qapp)  # no exception
+
+    def test_palette_matches_spec(self, qapp):
+        from lisp.ui.themes.light.light import Light
+        Light().apply(qapp)
+        for role, expected in self.EXPECTED.items():
+            assert qapp.palette().color(role) == expected
+
+    def test_applies_no_qss(self, qapp):
+        from lisp.ui.themes.light.light import Light
+        qapp.setStyleSheet("/* sentinel */")
+        Light().apply(qapp)
+        assert qapp.styleSheet() == "/* sentinel */"
+
+    def test_sets_active(self, qapp):
+        from lisp.ui import themes
+        from lisp.ui.themes.light.light import Light
+        light = Light()
+        light.apply(qapp)
+        assert themes._active is light
+
+    def test_uses_default_cue_palette(self, qapp):
+        from lisp.ui.themes import cue_color_hex
+        from lisp.ui.themes.light.light import Light
+        Light().apply(qapp)
+        assert cue_color_hex("Red") == DEFAULT_CUE_PALETTE["Red"]
+
+
 class TestDarkPaletteUnchanged:
     """Lock the Dark theme palette against accidental drift.
 

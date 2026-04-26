@@ -15,7 +15,18 @@
 # You should have received a copy of the GNU General Public License
 # along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
-class Light:
-    def apply(self, qt_app):
-        # TODO: we need some work to have a proper "light" theme
-        pass
+from PyQt5.QtGui import QColor
+
+from lisp.ui.themes.base import BaseTheme, ThemeColors
+
+
+class Light(BaseTheme):
+    Colors = ThemeColors(
+        background=QColor(245, 245, 245),
+        foreground=QColor(230, 230, 230),
+        text=QColor(30, 30, 30),
+        highlight=QColor(65, 155, 230),
+        alternate_base=QColor(220, 220, 220),
+        highlighted_text=QColor(255, 255, 255),
+        bright_text=QColor(200, 0, 0),
+    )
