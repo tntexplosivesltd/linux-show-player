@@ -93,19 +93,30 @@ class GstMedia(Media):
         if self.state == MediaState.Null:
             self.__init_pipeline()
 
-        if self.state == MediaState.Ready or self.state == MediaState.Paused:
+        if self.state in (
+            MediaState.Ready, MediaState.Paused, MediaState.Armed,
+        ):
             self.on_play.emit(self)
 
             for element in self.elements:
                 element.play()
 
-            if self.state != MediaState.Paused:
+            if self.state == MediaState.Armed:
+                # Pre-armed: pipeline already in PAUSED and seeked to
+                # start_time. Skip the preroll/seek work — that latency
+                # was paid at prearm time. This is the latency saving.
+                pass
+            elif self.state == MediaState.Paused:
+                self.__seek(self.current_time())
+            else:  # Ready
                 self.__pipeline.set_state(Gst.State.PAUSED)
                 self.__pipeline.get_state(Gst.SECOND)
                 self.__seek(self.start_time)
-            else:
-                self.__seek(self.current_time())
 
+            # Clear the arm flag — once we go to PLAYING, the state
+            # property must derive from the live pipeline (Playing),
+            # not keep reporting Armed via the override.
+            self.__armed = False
             self.__pipeline.set_state(Gst.State.PLAYING)
             self.__pipeline.get_state(Gst.SECOND)
 

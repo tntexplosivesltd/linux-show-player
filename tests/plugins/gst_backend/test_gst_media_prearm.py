@@ -132,6 +132,58 @@ def test_stop_on_armed_disarms(gst_media):
     assert len(received) == 1
 
 
+def test_play_from_armed_skips_paused_transition(gst_media, monkeypatch):
+    """Once armed, play() should go straight to PLAYING without a
+    second PAUSED transition (that's the latency we're saving).
+    """
+    from lisp.plugins.gst_backend.gi_repository import Gst
+
+    gst_media.prearm()
+    assert gst_media.state == MediaState.Armed
+
+    pipeline = gst_media._GstMedia__pipeline
+    calls = []
+    real_set_state = pipeline.set_state
+
+    def recording_set_state(state):
+        calls.append(state)
+        return real_set_state(state)
+
+    monkeypatch.setattr(pipeline, "set_state", recording_set_state)
+
+    gst_media.play()
+
+    # We should see exactly one set_state call, to PLAYING.
+    # No additional PAUSED transition.
+    assert calls == [Gst.State.PLAYING], (
+        f"expected only PLAYING transition; got {calls}"
+    )
+    gst_media.stop()
+
+
+def test_play_clears_armed_flag(gst_media):
+    """After play() returns, the cue is no longer armed; state must
+    report Playing, not Armed (regression guard against the state
+    property override leaking through).
+    """
+    gst_media.prearm()
+    assert gst_media.state == MediaState.Armed
+    gst_media.play()
+    assert gst_media.state == MediaState.Playing
+    gst_media.stop()
+
+
+def test_play_from_ready_still_prerolls(gst_media):
+    """Regression: non-armed play() must still preroll itself.
+    The fixture starts in Ready state (media.pipe = (...) triggers
+    __init_pipeline → READY), so this verifies the existing path.
+    """
+    assert gst_media.state == MediaState.Ready
+    gst_media.play()
+    assert gst_media.state == MediaState.Playing
+    gst_media.stop()
+
+
 def test_prearm_failed_uri_returns_false(short_wav, caplog):
     media = GstMedia()
     media.pipe = ("UriInput", "AutoSink")
