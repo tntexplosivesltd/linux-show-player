@@ -396,6 +396,10 @@ class GstMedia(Media):
             # Set the pipeline to NULL
             self.__pipeline.set_state(Gst.State.NULL)
             self.__pipeline.get_state(Gst.SECOND)
+            # Clear arm state — an Armed pipeline that errors out is no
+            # longer armed; without this the state property would keep
+            # reporting Armed despite the pipeline being NULL.
+            self.__armed = False
             self.__reset_media()
 
             self.error.emit(self)

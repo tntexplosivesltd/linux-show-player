@@ -123,3 +123,9 @@ def test_prearm_failed_uri_returns_false(short_wav, caplog):
         result = media.prearm()
     assert result is False
     assert media.state == MediaState.Null
+    # Spec requires WARNING log on failure
+    assert any(
+        r.levelno >= logging.WARNING
+        and "prearm" in r.message.lower()
+        for r in caplog.records
+    ), f"no WARNING about prearm logged; got {caplog.records}"
