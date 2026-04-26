@@ -32,13 +32,28 @@ from lisp import ICON_THEMES_DIR, ICON_THEME_COMMON
 _GRAYSCALE_HEX_6_RE = re.compile(rb"#([0-9A-Fa-f]{2})\1{2}\b")
 _GRAYSCALE_HEX_3_RE = re.compile(rb"#([0-9A-Fa-f])\1{2}\b")
 
+# Named grayscale CSS color values appearing as SVG attribute or CSS
+# property values for fill / stroke / stop-color. Constrained to those
+# properties to avoid touching text content elsewhere (titles, descs,
+# ids). Captures the prefix so we can reattach it on the swap.
+_NAMED_GRAYSCALE_RE = re.compile(
+    rb"(?P<prefix>(?:fill|stroke|stop-color)\s*[:=]\s*['\"]?\s*)"
+    rb"(?P<color>white|black)\b"
+)
+
 
 def _invert_grayscale_fills(svg_bytes: bytes) -> bytes:
-    """Invert grayscale hex colors (#XX where R==G==B) in an SVG byte
+    """Invert grayscale color values (hex and CSS named) in an SVG byte
     string; preserve chromatic colors unchanged.
 
     Used to adapt dark-tuned SVG assets for light themes. The inversion
-    is symmetric: ``#969696`` <-> ``#696969``, ``#000000`` <-> ``#ffffff``.
+    is symmetric:
+    - Hex: ``#969696`` <-> ``#696969``, ``#000000`` <-> ``#ffffff``
+    - Named: ``white`` <-> ``black`` (when used as fill/stroke/stop-color)
+
+    Named-color swaps are constrained to known SVG color attributes /
+    CSS color properties (fill, stroke, stop-color) to avoid mangling
+    text content (titles, ids, descriptions).
     """
 
     def _invert_byte(value: int) -> bytes:
@@ -56,8 +71,15 @@ def _invert_grayscale_fills(svg_bytes: bytes) -> bytes:
         v = nibble * 17  # 0xF -> 0xFF
         return b"#" + _invert_byte(v)
 
+    def _repl_named(match):
+        prefix = match.group("prefix")
+        color = match.group("color")
+        swapped = b"black" if color == b"white" else b"white"
+        return prefix + swapped
+
     svg_bytes = _GRAYSCALE_HEX_6_RE.sub(_repl_6, svg_bytes)
     svg_bytes = _GRAYSCALE_HEX_3_RE.sub(_repl_3, svg_bytes)
+    svg_bytes = _NAMED_GRAYSCALE_RE.sub(_repl_named, svg_bytes)
     return svg_bytes
 
 

@@ -111,3 +111,73 @@ class TestActiveThemeIsLight:
         from lisp.ui.icons import _active_theme_is_light
         System().apply(qapp)
         assert _active_theme_is_light() is False
+
+
+class TestNamedGrayscaleInversion:
+    def test_named_white_in_double_quoted_attr_inverts(self):
+        original = b'<svg fill="white" stroke="white"/>'
+        result = _invert_grayscale_fills(original)
+        assert b'fill="black"' in result
+        assert b'stroke="black"' in result
+        assert b'fill="white"' not in result
+
+    def test_named_black_in_double_quoted_attr_inverts(self):
+        original = b'<path fill="black"/>'
+        result = _invert_grayscale_fills(original)
+        assert b'fill="white"' in result
+
+    def test_named_color_in_single_quoted_attr_inverts(self):
+        original = b"<path fill='white'/>"
+        result = _invert_grayscale_fills(original)
+        assert b"fill='black'" in result
+
+    def test_named_color_in_style_attribute_inverts(self):
+        original = b'<path style="fill:white;stroke:black"/>'
+        result = _invert_grayscale_fills(original)
+        assert b"fill:black" in result
+        assert b"stroke:white" in result
+
+    def test_named_color_with_spaces_in_style_inverts(self):
+        original = b'<path style="fill: white; stroke: black;"/>'
+        result = _invert_grayscale_fills(original)
+        assert b"fill: black" in result
+        assert b"stroke: white" in result
+
+    def test_named_color_atomic_swap(self):
+        """Critical: white→black and black→white in the SAME pass.
+        A naive sequential .replace() would convert all white→black,
+        then all black (including the just-converted ones) → white,
+        ending up with all white. The implementation must swap atomically."""
+        original = b'<g fill="white"/><g fill="black"/>'
+        result = _invert_grayscale_fills(original)
+        assert b'<g fill="black"/><g fill="white"/>' == result
+
+    def test_named_color_outside_attribute_value_preserved(self):
+        """Don't mangle text content or non-color attribute uses."""
+        original = b'<title>The white whale</title><desc>black ice</desc>'
+        result = _invert_grayscale_fills(original)
+        # We don't claim perfect content protection, but at minimum
+        # text inside <title>/<desc> should not be touched. The narrow
+        # rule: only fill/stroke/stop-color contexts are eligible.
+        assert b"white whale" in result
+        assert b"black ice" in result
+
+    def test_named_color_only_in_fill_stroke_stop_color(self):
+        """Other attributes (e.g., id, class) must not be swapped."""
+        original = b'<g id="white-bg"><path color="white"/></g>'
+        result = _invert_grayscale_fills(original)
+        assert b'id="white-bg"' in result
+        # `color` attribute is NOT in our prefix allow-list
+        assert b'color="white"' in result
+
+    def test_real_speaker_icon_pattern_inverts(self):
+        """Mirrors the actual lisp/ui/icons/lisp/cues/speaker.svg form."""
+        original = (
+            b'<svg fill="white" stroke="white" opacity="0.8">'
+            b'<path fill="none"/></svg>'
+        )
+        result = _invert_grayscale_fills(original)
+        assert b'fill="black"' in result
+        assert b'stroke="black"' in result
+        # `fill="none"` is not a grayscale color name; preserved
+        assert b'fill="none"' in result
