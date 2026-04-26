@@ -266,11 +266,30 @@ class TestLightTheme:
         for role, expected in self.EXPECTED.items():
             assert qapp.palette().color(role) == expected
 
-    def test_applies_no_qss(self, qapp):
+    def test_applies_minimal_qss(self, qapp):
+        """Light theme ships a minimal QSS (just selection rules).
+        Verify the QSS is loaded — the QssPath file must exist and
+        the application stylesheet must be non-empty after apply()."""
         from lisp.ui.themes.light.light import Light
-        qapp.setStyleSheet("/* sentinel */")
+
+        qapp.setStyleSheet("")
         Light().apply(qapp)
-        assert qapp.styleSheet() == "/* sentinel */"
+        assert qapp.styleSheet() != ""
+        # The minimal QSS must include item-selected styling
+        assert "item:selected" in qapp.styleSheet()
+
+    def test_qss_is_minimal_not_full_restyle(self, qapp):
+        """Sanity: Light's QSS is the small "force selection" file,
+        not a full widget restyle like Dark's. Catch accidental dark
+        QSS theft into Light."""
+        from lisp.ui.themes.light.light import Light
+
+        qapp.setStyleSheet("")
+        Light().apply(qapp)
+        # Heuristic: dark/theme.qss is ~16KB; Light's should be tiny.
+        assert len(qapp.styleSheet()) < 2048, (
+            f"Light QSS unexpectedly large ({len(qapp.styleSheet())} bytes)"
+        )
 
     def test_sets_active(self, qapp):
         from lisp.ui import themes

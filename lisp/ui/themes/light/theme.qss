@@ -1,0 +1,32 @@
+/* Light theme — minimal QSS.
+ *
+ * The Light theme is intentionally palette-only: it does not restyle
+ * widgets the way Dark theme's theme.qss does. However, a small number
+ * of selection-related rules are required to force Qt's default styles
+ * to actually use QPalette.Highlight for selection backgrounds —
+ * without them, Qt's system style rendering sometimes substitutes a
+ * darker default that's hard to distinguish from theme-tinted (black)
+ * icon foregrounds.
+ *
+ * See: docs/superpowers/specs/2026-04-25-light-theme-design.md
+ */
+
+/* Selection: force palette(highlight) for any list/tree/menu item's
+ * selected state. Mirrors the dark theme's equivalent rule. */
+QWidget::item:selected,
+QWidget::item:selected:hover {
+    background-color: palette(highlight);
+    color: palette(highlighted-text);
+}
+
+QTreeView::branch:selected,
+QTreeView::branch:selected:hover {
+    background-color: palette(highlight);
+}
+
+/* QAbstractItemView selections — covers QListView IconMode used by
+ * the icon picker dialog. */
+QAbstractItemView {
+    selection-background-color: palette(highlight);
+    selection-color: palette(highlighted-text);
+}

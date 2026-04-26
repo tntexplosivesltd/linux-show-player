@@ -15,6 +15,8 @@
 # You should have received a copy of the GNU General Public License
 # along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
+import os
+
 from PyQt5.QtGui import QColor
 
 from lisp.ui.themes.base import BaseTheme, ThemeColors
@@ -30,3 +32,4 @@ class Light(BaseTheme):
         highlighted_text=QColor(255, 255, 255),
         bright_text=QColor(200, 0, 0),
     )
+    QssPath = os.path.join(os.path.dirname(__file__), "theme.qss")
