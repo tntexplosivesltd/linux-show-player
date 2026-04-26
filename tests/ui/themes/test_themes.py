@@ -246,9 +246,11 @@ class TestCueColorHelpers:
 
 
 class TestDarkPaletteUnchanged:
-    """De-risks the BaseTheme migration: post-refactor Dark palette must
-    be byte-identical to the pre-refactor implementation. Values below
-    are captured from the pre-refactor dark.py."""
+    """Lock the Dark theme palette against accidental drift.
+
+    Asserts the Active palette group only — Inactive/Disabled groups
+    inherit Qt's automatic propagation, matching the original Dark
+    implementation's coverage."""
 
     EXPECTED = {
         QPalette.Window: QColor(52, 52, 52),
@@ -270,7 +272,7 @@ class TestDarkPaletteUnchanged:
         QPalette.HighlightedText: QColor(0, 0, 0),
     }
 
-    def test_every_role_matches_pre_refactor(self, qapp):
+    def test_palette_roles_match_dark_baseline(self, qapp):
         from lisp.ui.themes.dark.dark import Dark
         Dark().apply(qapp)
         for role, expected in self.EXPECTED.items():
