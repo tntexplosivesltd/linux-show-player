@@ -108,7 +108,7 @@ class BaseTheme:
     ``QApplication``, then loads the stylesheet if set.
     """
 
-    Colors: ThemeColors = None  # subclasses MUST override
+    Colors: Optional[ThemeColors] = None  # subclasses MUST override
     QssPath: Optional[str] = None
 
     def apply(self, qt_app):

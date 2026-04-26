@@ -168,3 +168,9 @@ class TestBaseThemeApply:
         theme.apply(qapp)
         # QssPath is None, so apply should not touch the stylesheet
         assert qapp.styleSheet() == "/* sentinel */"
+
+    def test_apply_sets_active_theme(self, qapp):
+        from lisp.ui import themes
+        theme = self._make_dark_theme()
+        theme.apply(qapp)
+        assert themes._active is theme
