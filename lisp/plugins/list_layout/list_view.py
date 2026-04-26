@@ -79,6 +79,7 @@ class CueTreeWidgetItem(QTreeWidgetItem):
 class CueListView(QTreeWidget):
     keyPressed = pyqtSignal(QKeyEvent)
     contextMenuInvoked = pyqtSignal(QContextMenuEvent)
+    standbyChanged = pyqtSignal(int)
 
     # TODO: add ability to show/hide
     # TODO: implement columns (cue-type / target / etc..)
@@ -159,6 +160,7 @@ class CueListView(QTreeWidget):
         self.currentItemChanged.connect(
             self.__currentItemChanged, Qt.QueuedConnection
         )
+        self.currentItemChanged.connect(self._on_current_item_changed)
         self.itemCollapsed.connect(self.__itemCollapsed)
         self.itemExpanded.connect(self.__itemExpanded)
 
@@ -284,6 +286,13 @@ class CueListView(QTreeWidget):
         item = self.cueItemAt(newIndex)
         if item is not None:
             self.setCurrentItem(item)
+
+    def _on_current_item_changed(self, current, _previous):
+        """Bridge QTreeWidget.currentItemChanged → standbyChanged(index)."""
+        if current is None:
+            self.standbyChanged.emit(-1)
+        else:
+            self.standbyChanged.emit(self.cueIndexOf(current))
 
     def updateHeadersSizes(self):
         """Some hack to have "stretchable" columns with a minimum size

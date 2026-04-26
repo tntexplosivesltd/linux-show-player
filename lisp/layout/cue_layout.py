@@ -53,6 +53,12 @@ class CueLayout(HasProperties):
         # this; the default is never emitted.
         self.selection_changed = Signal()
 
+        # Emitted when the standby cue changes (the cursor that GO
+        # will fire next). Carries the new standby cue or None.
+        # Subclasses without a "standby" concept (e.g. cart layout)
+        # may never emit this.
+        self.standby_changed = Signal()
+
     @property
     def cue_model(self):
         """:rtype: lisp.cues.cue_model.CueModel"""
