@@ -243,3 +243,38 @@ class TestCueColorHelpers:
         from lisp.ui.themes import cue_color_hex
         assert cue_color_hex("Magenta") == ""
         assert cue_color_hex("NotAColor") == ""
+
+
+class TestDarkPaletteUnchanged:
+    """De-risks the BaseTheme migration: post-refactor Dark palette must
+    be byte-identical to the pre-refactor implementation. Values below
+    are captured from the pre-refactor dark.py."""
+
+    EXPECTED = {
+        QPalette.Window: QColor(52, 52, 52),
+        QPalette.WindowText: QColor(230, 230, 230),
+        QPalette.Base: QColor(30, 30, 30),
+        QPalette.AlternateBase: QColor(52, 52, 52).darker(125),
+        QPalette.ToolTipBase: QColor(52, 52, 52),
+        QPalette.ToolTipText: QColor(230, 230, 230),
+        QPalette.Text: QColor(230, 230, 230),
+        QPalette.Button: QColor(52, 52, 52),
+        QPalette.ButtonText: QColor(230, 230, 230),
+        QPalette.BrightText: QColor(255, 0, 0),
+        QPalette.Link: QColor(65, 155, 230),
+        QPalette.Light: QColor(52, 52, 52).lighter(160),
+        QPalette.Midlight: QColor(52, 52, 52).lighter(125),
+        QPalette.Dark: QColor(52, 52, 52).darker(150),
+        QPalette.Mid: QColor(52, 52, 52).darker(125),
+        QPalette.Highlight: QColor(65, 155, 230),
+        QPalette.HighlightedText: QColor(0, 0, 0),
+    }
+
+    def test_every_role_matches_pre_refactor(self, qapp):
+        from lisp.ui.themes.dark.dark import Dark
+        Dark().apply(qapp)
+        for role, expected in self.EXPECTED.items():
+            assert qapp.palette().color(role) == expected, (
+                f"role {role} = {qapp.palette().color(role).getRgb()}, "
+                f"expected {expected.getRgb()}"
+            )
