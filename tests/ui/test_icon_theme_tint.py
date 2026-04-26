@@ -21,8 +21,6 @@ The bytes-level helper is unit-tested standalone. Integration with the
 QIcon load path is verified via the existing icon-theme machinery using
 the active theme's text color to decide direction."""
 
-import pytest
-
 from lisp.ui.icons import _invert_grayscale_fills
 
 

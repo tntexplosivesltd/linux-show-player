@@ -182,19 +182,26 @@ class IconTheme:
         if not _active_theme_is_light() or not svg_path.endswith(".svg"):
             return QIcon(svg_path)
 
-        with open(svg_path, "rb") as f:
-            xml_bytes = f.read()
-        xml_bytes = _invert_grayscale_fills(xml_bytes)
+        try:
+            with open(svg_path, "rb") as f:
+                xml_bytes = f.read()
+            xml_bytes = _invert_grayscale_fills(xml_bytes)
 
-        renderer = QSvgRenderer(QByteArray(xml_bytes))
-        size = renderer.defaultSize()
-        if not size.isValid() or size.width() == 0:
-            # Empty or malformed SVG; return raw QIcon as fallback
+            renderer = QSvgRenderer(QByteArray(xml_bytes))
+            size = renderer.defaultSize()
+            if not size.isValid() or size.width() == 0:
+                # Empty or malformed SVG; return raw QIcon as fallback
+                return QIcon(svg_path)
+
+            pixmap = QPixmap(size)
+            pixmap.fill(Qt.transparent)
+            painter = QPainter(pixmap)
+            renderer.render(painter)
+            painter.end()
+            return QIcon(pixmap)
+        except Exception:
+            # IO error, parse failure, render failure — fall back to raw
+            # load. Matches _load_modified_icon's robustness contract;
+            # pre-tint behavior was a bare QIcon(svg_path) which never
+            # raised, so we preserve that.
             return QIcon(svg_path)
-
-        pixmap = QPixmap(size)
-        pixmap.fill(Qt.transparent)
-        painter = QPainter(pixmap)
-        renderer.render(painter)
-        painter.end()
-        return QIcon(pixmap)
