@@ -76,3 +76,24 @@ class ThemeColors:
                     f"cue_palette[{name!r}] must be a #RRGGBB hex "
                     f"string, got {value!r}"
                 )
+
+    def resolved_alternate_base(self) -> QColor:
+        return self.alternate_base or self.foreground.darker(125)
+
+    def resolved_light(self) -> QColor:
+        return self.light or self.foreground.lighter(160)
+
+    def resolved_midlight(self) -> QColor:
+        return self.midlight or self.foreground.lighter(125)
+
+    def resolved_dark(self) -> QColor:
+        return self.dark or self.foreground.darker(150)
+
+    def resolved_mid(self) -> QColor:
+        return self.mid or self.foreground.darker(125)
+
+    def resolved_bright_text(self) -> QColor:
+        return self.bright_text or QColor(255, 0, 0)
+
+    def resolved_highlighted_text(self) -> QColor:
+        return self.highlighted_text or QColor(0, 0, 0)

@@ -72,3 +72,49 @@ class TestThemeColorsValidation:
         bad["Red"] = "#abc"
         with pytest.raises(ValueError, match="hex"):
             ThemeColors(**self._base_kwargs(), cue_palette=bad)
+
+
+class TestThemeColorsDerivations:
+    """Optional fields derive sensible defaults from base colors."""
+
+    def _theme(self, **overrides):
+        kwargs = dict(
+            background=QColor(30, 30, 30),
+            foreground=QColor(52, 52, 52),
+            text=QColor(230, 230, 230),
+            highlight=QColor(65, 155, 230),
+        )
+        kwargs.update(overrides)
+        return ThemeColors(**kwargs)
+
+    def test_alternate_base_derives_from_foreground_darker(self):
+        c = self._theme()
+        assert c.resolved_alternate_base() == QColor(52, 52, 52).darker(125)
+
+    def test_alternate_base_override_wins(self):
+        c = self._theme(alternate_base=QColor(99, 99, 99))
+        assert c.resolved_alternate_base() == QColor(99, 99, 99)
+
+    def test_light_role_derives_lighter_160(self):
+        c = self._theme()
+        assert c.resolved_light() == QColor(52, 52, 52).lighter(160)
+
+    def test_midlight_role_derives_lighter_125(self):
+        c = self._theme()
+        assert c.resolved_midlight() == QColor(52, 52, 52).lighter(125)
+
+    def test_dark_role_derives_darker_150(self):
+        c = self._theme()
+        assert c.resolved_dark() == QColor(52, 52, 52).darker(150)
+
+    def test_mid_role_derives_darker_125(self):
+        c = self._theme()
+        assert c.resolved_mid() == QColor(52, 52, 52).darker(125)
+
+    def test_bright_text_default_is_pure_red(self):
+        c = self._theme()
+        assert c.resolved_bright_text() == QColor(255, 0, 0)
+
+    def test_highlighted_text_default_is_black(self):
+        c = self._theme()
+        assert c.resolved_highlighted_text() == QColor(0, 0, 0)
