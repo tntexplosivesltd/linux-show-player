@@ -97,6 +97,11 @@ class Cue(HasProperties):
     :ivar icon: Cue icon file name.
     :ivar description: Cue text description.
     :ivar stylesheet: Cue style, used by the view.
+    :ivar color_name: Theme-aware color name (one of CUE_COLOR_NAMES from
+        lisp.ui.themes.base, or the empty string). When set, the cue
+        paints with the active theme's resolved hex for this name; theme
+        switches re-color the cue. When empty, the cue's color (if any)
+        falls back to the legacy hex stored in stylesheet["background"].
     :ivar duration: The cue duration in milliseconds. (0 means no duration)
     :ivar pre_wait: Cue pre-wait in seconds.
     :ivar post_wait: Cue post-wait in seconds.

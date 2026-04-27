@@ -27,10 +27,10 @@ from PyQt5.QtCore import Qt, QByteArray
 
 from lisp import ICON_THEMES_DIR, ICON_THEME_COMMON
 
-# Matches grayscale hex values (R==G==B) in 6-digit or 3-digit form.
-# Both forms must be checked because SVGs use either.
-_GRAYSCALE_HEX_6_RE = re.compile(rb"#([0-9A-Fa-f]{2})\1{2}\b")
-_GRAYSCALE_HEX_3_RE = re.compile(rb"#([0-9A-Fa-f])\1{2}\b")
+# Match any 6-digit hex; the substitution function verifies grayscale
+# equality (case-insensitively) and inverts only matching values.
+_HEX_6_RE = re.compile(rb"#([0-9A-Fa-f]{2})([0-9A-Fa-f]{2})([0-9A-Fa-f]{2})\b")
+_HEX_3_RE = re.compile(rb"#([0-9A-Fa-f])([0-9A-Fa-f])([0-9A-Fa-f])\b")
 
 # Named grayscale CSS color values appearing as SVG attribute or CSS
 # property values for fill / stroke / stop-color. Constrained to those
@@ -61,13 +61,19 @@ def _invert_grayscale_fills(svg_bytes: bytes) -> bytes:
         return f"{inv:02x}{inv:02x}{inv:02x}".encode("ascii")
 
     def _repl_6(match):
-        v = int(match.group(1), 16)
+        a, b, c = match.group(1), match.group(2), match.group(3)
+        if a.lower() != b.lower() or a.lower() != c.lower():
+            return match.group(0)  # not grayscale; preserve verbatim
+        v = int(a, 16)
         return b"#" + _invert_byte(v)
 
     def _repl_3(match):
         # Expand short form (#fff = #ffffff) before inverting so the
         # output is consistently 6-digit.
-        nibble = int(match.group(1), 16)
+        a, b, c = match.group(1), match.group(2), match.group(3)
+        if a.lower() != b.lower() or a.lower() != c.lower():
+            return match.group(0)  # not grayscale; preserve verbatim
+        nibble = int(a, 16)
         v = nibble * 17  # 0xF -> 0xFF
         return b"#" + _invert_byte(v)
 
@@ -77,8 +83,8 @@ def _invert_grayscale_fills(svg_bytes: bytes) -> bytes:
         swapped = b"black" if color == b"white" else b"white"
         return prefix + swapped
 
-    svg_bytes = _GRAYSCALE_HEX_6_RE.sub(_repl_6, svg_bytes)
-    svg_bytes = _GRAYSCALE_HEX_3_RE.sub(_repl_3, svg_bytes)
+    svg_bytes = _HEX_6_RE.sub(_repl_6, svg_bytes)
+    svg_bytes = _HEX_3_RE.sub(_repl_3, svg_bytes)
     svg_bytes = _NAMED_GRAYSCALE_RE.sub(_repl_named, svg_bytes)
     return svg_bytes
 
@@ -173,14 +179,20 @@ class IconTheme:
             with open(svg_path, "rb") as f:
                 xml_bytes = f.read()
 
+            # Invert grayscale fills BEFORE applying the variation's root
+            # attrs, so the variation's deliberate named colors (e.g.,
+            # "black" for the -cart overlay) aren't accidentally swapped to
+            # "white" on light theme. Per-path grayscales in the SVG (e.g.,
+            # legacy #969696) still get inverted as intended.
+            if _active_theme_is_light():
+                xml_bytes = _invert_grayscale_fills(xml_bytes)
+
             root = ET.fromstring(xml_bytes)
             variations = IconTheme._CUE_TYPE_VARIATIONS[suffix]
             for attr, val in variations.items():
                 root.set(attr, val)
 
             modified_svg = ET.tostring(root, encoding="utf-8", xml_declaration=True)
-            if _active_theme_is_light():
-                modified_svg = _invert_grayscale_fills(modified_svg)
 
             renderer = QSvgRenderer(QByteArray(modified_svg))
             size = renderer.defaultSize()

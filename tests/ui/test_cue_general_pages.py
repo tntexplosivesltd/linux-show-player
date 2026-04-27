@@ -114,6 +114,48 @@ class TestCueGeneralSettingsPageRoundTrip:
         assert "background" not in css_to_dict(css)
         assert "color:" not in css
 
+class TestHexToCanonicalNameMapping:
+    """Pin the canonical-hex → name mapping that drives the
+    auto-graduation behavior in loadSettings. If palette hexes change,
+    legacy sessions stop auto-graduating silently — this test fails
+    loudly so we know to update either the palette or this expectation."""
+
+    def test_each_canonical_hex_maps_to_its_name(self):
+        from lisp.ui.themes.base import CUE_COLOR_NAMES, DEFAULT_CUE_PALETTE
+        from lisp.ui.settings.cue_pages.cue_general import (
+            _hex_to_canonical_name,
+        )
+        for name in CUE_COLOR_NAMES:
+            hex_value = DEFAULT_CUE_PALETTE[name]
+            assert _hex_to_canonical_name(hex_value) == name, (
+                f"Expected {hex_value!r} → {name!r}; got something else"
+            )
+
+    def test_lowercase_canonical_hex_matches(self):
+        """Case-insensitive match — a session saved by a user who
+        hand-edited the file with lowercase hex should still
+        graduate."""
+        from lisp.ui.settings.cue_pages.cue_general import (
+            _hex_to_canonical_name,
+        )
+        assert _hex_to_canonical_name("#c03a2a") == "Red"
+
+    def test_non_palette_hex_returns_empty(self):
+        """The no-migration guard. Custom hexes route via
+        setCustomHex(), which only happens when this returns ''."""
+        from lisp.ui.settings.cue_pages.cue_general import (
+            _hex_to_canonical_name,
+        )
+        assert _hex_to_canonical_name("#A0413A") == ""
+
+    def test_empty_string_returns_empty(self):
+        from lisp.ui.settings.cue_pages.cue_general import (
+            _hex_to_canonical_name,
+        )
+        assert _hex_to_canonical_name("") == ""
+
+
+class TestCueGeneralSettingsPageRoundTripLegacy:
     def test_legacy_non_palette_background_preserved_on_save(
         self, qtbot
     ):
