@@ -130,6 +130,7 @@ class Cue(HasProperties):
     cue_number = Property(default="")
     description = Property(default="")
     stylesheet = Property(default="")
+    color_name = Property(default="")
     duration = Property(default=0)
     pre_wait = Property(default=0)
     post_wait = Property(default=0)
