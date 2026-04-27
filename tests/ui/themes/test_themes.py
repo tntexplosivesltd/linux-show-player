@@ -374,3 +374,68 @@ class TestSystemTheme:
         themes._THEMES.clear()  # reset cache so new theme is discovered
         from lisp.ui.themes import themes_names
         assert "System" in themes_names()
+
+
+class TestCueAlpha:
+    """The cue color alpha is theme-controlled — Dark uses the legacy
+    150 default, Light overrides to 220 for less blending against the
+    light background."""
+
+    def setup_method(self):
+        from lisp.ui import themes
+        themes._active = None  # reset between tests
+
+    def test_default_is_150(self):
+        c = ThemeColors(
+            background=QColor(30, 30, 30),
+            foreground=QColor(52, 52, 52),
+            text=QColor(230, 230, 230),
+            highlight=QColor(65, 155, 230),
+        )
+        assert c.cue_alpha == 150
+
+    def test_explicit_override_wins(self):
+        c = ThemeColors(
+            background=QColor(30, 30, 30),
+            foreground=QColor(52, 52, 52),
+            text=QColor(230, 230, 230),
+            highlight=QColor(65, 155, 230),
+            cue_alpha=200,
+        )
+        assert c.cue_alpha == 200
+
+    def test_validation_rejects_non_int(self):
+        with pytest.raises(ValueError, match="cue_alpha"):
+            ThemeColors(
+                background=QColor(30, 30, 30),
+                foreground=QColor(52, 52, 52),
+                text=QColor(230, 230, 230),
+                highlight=QColor(65, 155, 230),
+                cue_alpha="200",
+            )
+
+    def test_validation_rejects_out_of_range(self):
+        with pytest.raises(ValueError, match="cue_alpha"):
+            ThemeColors(
+                background=QColor(30, 30, 30),
+                foreground=QColor(52, 52, 52),
+                text=QColor(230, 230, 230),
+                highlight=QColor(65, 155, 230),
+                cue_alpha=300,
+            )
+
+    def test_helper_no_active_theme_returns_150(self):
+        from lisp.ui.themes import cue_color_alpha
+        assert cue_color_alpha() == 150
+
+    def test_helper_uses_active_theme(self, qapp):
+        from lisp.ui.themes import cue_color_alpha
+        from lisp.ui.themes.light.light import Light
+        Light().apply(qapp)
+        assert cue_color_alpha() == 220
+
+    def test_dark_theme_uses_default_150(self, qapp):
+        from lisp.ui.themes import cue_color_alpha
+        from lisp.ui.themes.dark.dark import Dark
+        Dark().apply(qapp)
+        assert cue_color_alpha() == 150

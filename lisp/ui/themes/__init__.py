@@ -45,6 +45,17 @@ def cue_color_hex(name: str) -> str:
     return palette.get(name, DEFAULT_CUE_PALETTE.get(name, ""))
 
 
+def cue_color_alpha() -> int:
+    """Return the active theme's cue color alpha (0-255).
+
+    Falls back to 150 (the legacy default) when no theme is active or
+    the active theme has no ``Colors``.
+    """
+    if _active is not None and hasattr(_active, "Colors"):
+        return _active.Colors.cue_alpha
+    return 150
+
+
 def cue_palette() -> Mapping[str, str]:
     """Return the active theme's full ``{name: hex}`` palette mapping."""
     if _active is not None and hasattr(_active, "Colors"):

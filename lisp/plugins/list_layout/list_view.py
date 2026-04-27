@@ -55,7 +55,7 @@ from lisp.plugins.list_layout.list_widgets import (
     PostWaitWidget,
     IndexWidget,
 )
-from lisp.ui.themes import cue_background_hex
+from lisp.ui.themes import cue_background_hex, cue_color_alpha
 from lisp.ui.ui_utils import translate, css_to_dict, dict_to_css
 
 logger = logging.getLogger(__name__)
@@ -511,7 +511,7 @@ class CueListView(QTreeWidget):
                 hex_bg = cue_background_hex(item.cue)
                 if hex_bg:
                     color = QColor(hex_bg)
-                    color.setAlpha(150)
+                    color.setAlpha(cue_color_alpha())
                     brush = QBrush(color)
 
             # Dim disabled cues so they remain readable but visibly

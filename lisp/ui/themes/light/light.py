@@ -31,5 +31,6 @@ class Light(BaseTheme):
         alternate_base=QColor(220, 220, 220),
         highlighted_text=QColor(255, 255, 255),
         bright_text=QColor(200, 0, 0),
+        cue_alpha=220,
     )
     QssPath = os.path.join(os.path.dirname(__file__), "theme.qss")

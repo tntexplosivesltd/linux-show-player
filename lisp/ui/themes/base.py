@@ -58,8 +58,13 @@ class ThemeColors:
     cue_palette: Mapping[str, str] = field(
         default_factory=lambda: DEFAULT_CUE_PALETTE
     )
+    cue_alpha: int = 150
 
     def __post_init__(self):
+        if not isinstance(self.cue_alpha, int) or not 0 <= self.cue_alpha <= 255:
+            raise ValueError(
+                f"cue_alpha must be int in 0..255, got {self.cue_alpha!r}"
+            )
         keys = set(self.cue_palette.keys())
         expected = set(CUE_COLOR_NAMES)
         if keys != expected:
