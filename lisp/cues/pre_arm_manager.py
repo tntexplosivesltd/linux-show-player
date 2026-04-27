@@ -81,7 +81,103 @@ class PreArmManager:
         # coalesce a batch of failures into a single summary toast.
         self._collecting_session_failures: list | None = None
 
+        # Strong references to per-cue signal handlers (closures) keyed
+        # by cue.id. LiSP signals use weak refs, so we must keep these
+        # alive here or they get GC'd before any signal can fire.
+        self._cue_handlers: dict = {}
+
         self.armed_set_changed = Signal()
+
+        # Wire to application-level signals so the public methods
+        # fire automatically. (Tests bypass this by calling the
+        # methods directly.) Each connection is wrapped via _safe
+        # at the method level — exceptions in handlers won't leak.
+        self._wire_application_signals()
+        self._wire_layout(getattr(self._app, "layout", None))
+
+    # --- Signal wiring ------------------------------------------------
+
+    def _wire_application_signals(self) -> None:
+        """Connect to app and cue_model signals."""
+        try:
+            self._app.session_loaded.connect(self.session_loaded)
+        except AttributeError:
+            logger.debug("PreArmManager: app.session_loaded missing")
+        cue_model = getattr(self._app, "cue_model", None)
+        if cue_model is not None:
+            try:
+                cue_model.item_added.connect(self.cue_added)
+                cue_model.item_removed.connect(self.cue_removed)
+            except AttributeError:
+                logger.debug(
+                    "PreArmManager: cue_model signals missing"
+                )
+
+    def _wire_layout(self, layout) -> None:
+        """Connect to a CueLayout's signals. Tolerant of None or
+        layouts that lack one of the signals (e.g. cart_layout has
+        no standby_changed).
+        """
+        if layout is None:
+            return
+        if hasattr(layout, "standby_changed"):
+            try:
+                layout.standby_changed.connect(self.standby_changed)
+            except AttributeError:
+                pass
+        if hasattr(layout, "cue_executed"):
+            try:
+                layout.cue_executed.connect(self.cue_executed)
+            except AttributeError:
+                pass
+
+    def _wire_cue_signals(self, cue) -> None:
+        """Connect to per-cue signals on the first arm of a given cue.
+        Idempotent across multiple arm/disarm cycles via the
+        _pre_arm_wired flag attribute on the cue itself.
+        """
+        if getattr(cue, "_pre_arm_wired", False) is True:
+            return
+        # Use a private flag attribute so we can detect re-arms of the
+        # same cue without re-connecting handlers.
+        try:
+            cue._pre_arm_wired = True
+        except Exception:
+            # If cue is read-only (rare; probably a frozen dataclass
+            # in tests), give up — the manager will still function via
+            # tests calling methods directly.
+            return
+
+        # Hold strong refs to bound methods/lambdas so weak-ref signals
+        # don't lose them. Keyed by cue.id for cleanup on cue_removed.
+        handlers = []
+
+        def _on_uri(_v, c=cue):
+            self.on_uri_changed(c)
+
+        def _on_start(_v, c=cue):
+            self.on_start_time_changed(c)
+
+        def _on_preload(value, c=cue):
+            self.on_preload_changed(c, value)
+
+        handlers.extend([_on_uri, _on_start, _on_preload])
+        self._cue_handlers[cue.id] = handlers
+
+        for sig_name in ("stopped", "interrupted", "end", "error"):
+            sig = getattr(cue, sig_name, None)
+            if sig is not None:
+                try:
+                    sig.connect(self.on_cue_stopped)
+                except AttributeError:
+                    pass
+
+        try:
+            cue.changed("uri").connect(_on_uri)
+            cue.changed("start_time").connect(_on_start)
+            cue.changed("preload").connect(_on_preload)
+        except (AttributeError, TypeError):
+            pass
 
     # --- Eligibility --------------------------------------------------
 
@@ -146,6 +242,7 @@ class PreArmManager:
         mtime = self._cue_mtime(cue)
         if mtime is not None:
             self._mtime_at_arm[cue.id] = mtime
+        self._wire_cue_signals(cue)
         self.armed_set_changed.emit()
         return True
 
@@ -425,6 +522,7 @@ class PreArmManager:
         """A cue was removed from the model — disarm + clean up state."""
         self._disarm(cue)
         self._failed.pop(cue.id, None)
+        self._cue_handlers.pop(cue.id, None)
 
     @_safe
     def maybe_rearm_for_mtime(self, cue) -> None:

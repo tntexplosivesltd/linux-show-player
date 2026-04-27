@@ -64,6 +64,15 @@ def manager_factory(mock_app):
     def _build(overrides=None):
         mock_app.conf = MagicMock()
         mock_app.conf.get.side_effect = _config_returner(overrides)
+        # Provide signal-shaped attributes for __init__ wiring.
+        # Tests that need real Signal behavior can set these later.
+        mock_app.session_loaded = MagicMock()
+        mock_app.cue_model = MagicMock()
+        mock_app.cue_model.item_added = MagicMock()
+        mock_app.cue_model.item_removed = MagicMock()
+        mock_app.layout = MagicMock()
+        mock_app.layout.standby_changed = MagicMock()
+        mock_app.layout.cue_executed = MagicMock()
         return PreArmManager(mock_app)
 
     return _build
@@ -672,3 +681,93 @@ def test_no_failures_no_toast(manager, mock_app):
     manager.session_loaded()
 
     mock_app.notify.emit.assert_not_called()
+
+
+# T14 tests --------------------------------------------------------------
+
+def test_subscribes_to_app_signals_on_init(manager_factory, mock_app):
+    """Constructor wires app + cue_model + layout signals."""
+    manager_factory()
+    mock_app.session_loaded.connect.assert_called()
+    mock_app.cue_model.item_added.connect.assert_called()
+    mock_app.cue_model.item_removed.connect.assert_called()
+    mock_app.layout.standby_changed.connect.assert_called()
+    mock_app.layout.cue_executed.connect.assert_called()
+
+
+def test_init_tolerates_missing_layout(mock_app):
+    """If app.layout is not yet set when manager is constructed,
+    no crash. (Layouts can be wired later via _wire_layout.)
+    """
+    mock_app.conf = MagicMock()
+    mock_app.conf.get.side_effect = _config_returner()
+    mock_app.session_loaded = MagicMock()
+    mock_app.cue_model = MagicMock()
+    mock_app.cue_model.item_added = MagicMock()
+    mock_app.cue_model.item_removed = MagicMock()
+    mock_app.layout = None
+    PreArmManager(mock_app)  # should not raise
+
+
+def test_per_cue_signals_connected_on_arm(manager):
+    """First successful arm of a cue connects per-cue signals."""
+    cue = _make_cue("c1")
+    cue.stopped = MagicMock()
+    cue.interrupted = MagicMock()
+    cue.end = MagicMock()
+    cue.error = MagicMock()
+    # Build per-property signal mocks
+    sig_map = {
+        "uri": MagicMock(),
+        "start_time": MagicMock(),
+        "preload": MagicMock(),
+    }
+    cue.changed = lambda prop: sig_map[prop]
+    manager._try_arm(cue, ArmReason.Auto)
+    cue.stopped.connect.assert_called()
+    cue.interrupted.connect.assert_called()
+    cue.end.connect.assert_called()
+    cue.error.connect.assert_called()
+    assert sig_map["uri"].connect.called
+    assert sig_map["start_time"].connect.called
+    assert sig_map["preload"].connect.called
+
+
+def test_per_cue_signals_idempotent_across_rearm(manager):
+    """Re-arming the same cue does NOT re-connect its signals."""
+    cue = _make_cue("c1")
+    cue.stopped = MagicMock()
+    cue.interrupted = MagicMock()
+    cue.end = MagicMock()
+    cue.error = MagicMock()
+    sig_map = {
+        "uri": MagicMock(),
+        "start_time": MagicMock(),
+        "preload": MagicMock(),
+    }
+    cue.changed = lambda prop: sig_map[prop]
+
+    manager._try_arm(cue, ArmReason.Auto)
+    initial_count = cue.stopped.connect.call_count
+    manager._disarm(cue)
+    manager._try_arm(cue, ArmReason.Auto)
+    assert cue.stopped.connect.call_count == initial_count
+
+
+def test_cue_removed_clears_handler_refs(manager):
+    """cue_removed drops the per-cue handler references."""
+    cue = _make_cue("c1")
+    cue.stopped = MagicMock()
+    cue.interrupted = MagicMock()
+    cue.end = MagicMock()
+    cue.error = MagicMock()
+    sig_map = {
+        "uri": MagicMock(),
+        "start_time": MagicMock(),
+        "preload": MagicMock(),
+    }
+    cue.changed = lambda prop: sig_map[prop]
+    manager._try_arm(cue, ArmReason.Auto)
+    assert "c1" in manager._cue_handlers
+    manager.cue_removed(cue)
+    assert "c1" not in manager._cue_handlers
