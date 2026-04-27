@@ -46,13 +46,13 @@ QAbstractItemView {
 }
 
 /* Toolbar control buttons (Go / Pause / Stop / Interrupt etc.) use
- * QIconPushButton, which dynamically sizes its icon to fit the button
+ * QPushButton, which dynamically sizes its icon to fit the button
  * minus 8px. Padding alone isn't enough to override Fusion's chrome —
  * we need to fully replace the button's background and border so the
  * effective content rect matches Dark's flat styling. Targeting
- * QIconPushButton (Python subclass) keeps Fusion's native styling for
+ * QPushButton (Python subclass) keeps Fusion's native styling for
  * dialog buttons; only the toolbar control buttons get this look. */
-QIconPushButton {
+QPushButton {
     background-color: qlineargradient(
         x1: 0,
         y1: 1,
@@ -66,11 +66,11 @@ QIconPushButton {
     padding: 4px;
 }
 
-QIconPushButton:focus {
+QPushButton:focus {
     border: 1px solid palette(highlight);
 }
 
-QIconPushButton:pressed {
+QPushButton:pressed {
     background: palette(mid);
 }
 
