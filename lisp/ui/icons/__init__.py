@@ -212,7 +212,12 @@ class IconTheme:
     def _load_themed_icon(svg_path: str) -> QIcon:
         """Load an icon from disk, applying theme-aware grayscale tinting
         if the active theme is light. Non-SVG files (PNG etc.) are loaded
-        directly; only SVG paths are processed."""
+        directly; only SVG paths are processed.
+
+        Renders the inverted SVG at multiple pixmap sizes and adds them
+        all to a single QIcon — necessary because a single QPixmap-backed
+        QIcon can only downscale, not upscale. Qt's icon engine picks the
+        closest size for any request and downscales sharply."""
         if not _active_theme_is_light() or not svg_path.endswith(".svg"):
             return QIcon(svg_path)
 
@@ -222,20 +227,25 @@ class IconTheme:
             xml_bytes = _invert_grayscale_fills(xml_bytes)
 
             renderer = QSvgRenderer(QByteArray(xml_bytes))
-            size = renderer.defaultSize()
-            if not size.isValid() or size.width() == 0:
+            if not renderer.defaultSize().isValid():
                 # Empty or malformed SVG; return raw QIcon as fallback
                 return QIcon(svg_path)
 
-            pixmap = QPixmap(size)
-            pixmap.fill(Qt.transparent)
-            painter = QPainter(pixmap)
-            renderer.render(painter)
-            painter.end()
-            return QIcon(pixmap)
+            icon = QIcon()
+            # Multiple sizes covering the range LiSP actually requests:
+            # 16/24 for cue list status, 32 for inspector swatches,
+            # 48 for icon picker dialog, 128/256 for toolbar buttons
+            # (which use QIconPushButton's dynamic sizing up to ~200px).
+            for size in (16, 32, 64, 128, 256):
+                pixmap = QPixmap(size, size)
+                pixmap.fill(Qt.transparent)
+                painter = QPainter(pixmap)
+                renderer.render(painter)
+                painter.end()
+                icon.addPixmap(pixmap)
+            return icon
         except Exception:
-            # IO error, parse failure, render failure — fall back to raw
-            # load. Matches _load_modified_icon's robustness contract;
-            # pre-tint behavior was a bare QIcon(svg_path) which never
-            # raised, so we preserve that.
+            # Any IO/parse/render failure: fall back to the un-tinted
+            # SVG file. Better to render the icon dark-tinted on light
+            # background (still legible) than not at all.
             return QIcon(svg_path)

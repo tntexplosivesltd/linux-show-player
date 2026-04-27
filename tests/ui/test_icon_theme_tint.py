@@ -202,6 +202,53 @@ class TestNamedGrayscaleInversion:
         assert b'fill="none"' in result
 
 
+class TestThemedIconScaling:
+    """Themed-tinted icons must scale to any requested size, not just
+    the SVG's defaultSize. Without this, large icon requests (e.g.,
+    QIconPushButton's dynamic sizing on toolbar buttons) get a tiny
+    pixmap upscaled to fit, producing blurry / undersized output."""
+
+    def setup_method(self):
+        from lisp.ui import themes
+        themes._active = None
+
+    def test_themed_icon_scales_to_large_request(self, qapp):
+        """Under Light theme, requesting a 200x200 pixmap from a
+        themed-tinted icon must return a 200x200 pixmap — not the
+        SVG's intrinsic 24x24 size."""
+        from PyQt5.QtCore import QSize
+        from lisp.ui.themes.light.light import Light
+        from lisp.ui.icons import IconTheme
+
+        IconTheme.set_theme_name("Numix")
+        Light().apply(qapp)
+        IconTheme._GlobalCache.clear()  # force re-load under Light
+
+        icon = IconTheme.get("cue-pause")
+        pixmap = icon.pixmap(QSize(200, 200))
+        # Allow some flexibility (Qt may return a slightly different
+        # size due to aspect-ratio handling), but the result must be
+        # substantially larger than the 24x24 default.
+        assert pixmap.size().width() >= 128, (
+            f"expected pixmap >= 128px, got {pixmap.size()}"
+        )
+
+    def test_dark_icon_scales_natively(self, qapp):
+        """Sanity: Dark theme already works because its icons go
+        through QIcon(svg_path), which uses Qt's SVG engine."""
+        from PyQt5.QtCore import QSize
+        from lisp.ui.themes.dark.dark import Dark
+        from lisp.ui.icons import IconTheme
+
+        IconTheme.set_theme_name("Numix")
+        Dark().apply(qapp)
+        IconTheme._GlobalCache.clear()
+
+        icon = IconTheme.get("cue-pause")
+        pixmap = icon.pixmap(QSize(200, 200))
+        assert pixmap.size().width() == 200
+
+
 class TestLoadModifiedIconCartOverlay:
     """The -cart variation injects fill='black' as a root attr to make
     cart cue overlays render as a faint dark silhouette. Light theme's
