@@ -47,24 +47,43 @@ QAbstractItemView {
 
 /* Toolbar control buttons (Go / Pause / Stop / Interrupt etc.) use
  * QIconPushButton, which dynamically sizes its icon to fit the button
- * minus 8px. Fusion's default QPushButton chrome leaves a smaller
- * content rect, which clips the icon noticeably smaller than under
- * Dark's flat styling. Slim the padding to match Dark, restoring the
- * icon-fits-button calculation. Targeting QIconPushButton specifically
- * (not QPushButton) keeps Fusion's native styling for dialog buttons. */
+ * minus 8px. Padding alone isn't enough to override Fusion's chrome —
+ * we need to fully replace the button's background and border so the
+ * effective content rect matches Dark's flat styling. Targeting
+ * QIconPushButton (Python subclass) keeps Fusion's native styling for
+ * dialog buttons; only the toolbar control buttons get this look. */
 QIconPushButton {
+    background-color: qlineargradient(
+        x1: 0,
+        y1: 1,
+        x2: 0,
+        y2: 0,
+        stop: 0 palette(button),
+        stop: 1 palette(midlight)
+    );
+    border: 1px solid palette(mid);
+    border-radius: 4px;
     padding: 4px;
-    padding-left: 5px;
-    padding-right: 5px;
+}
+
+QIconPushButton:focus {
+    border: 1px solid palette(highlight);
+}
+
+QIconPushButton:pressed {
+    background: palette(mid);
 }
 
 /* QProgressBar — the cue list's inline TimeWidget is a QProgressBar
  * subclass. Its height drives the row height (CueStatusIcons computes
  * the cue-status icon size as row_height - 10). Fusion's default
  * QProgressBar is thicker than Dark's slim variant, which makes rows
- * — and cue icons — visibly larger on Light without these rules. */
+ * — and cue icons — visibly larger on Light without these rules. The
+ * `max-height` constraint pins the bar to a fixed size so Fusion's
+ * preferred-size growth doesn't push rows up. */
 QProgressBar {
     border-radius: 2px;
+    max-height: 18px;
 }
 QProgressBar:horizontal {
     text-align: center;
