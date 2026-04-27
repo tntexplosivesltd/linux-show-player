@@ -207,7 +207,15 @@ class PreArmManager:
 
     def _cue_by_id(self, cue_id: str):
         """Look up a cue by id. Returns None if not in the model.
-        Tolerates a missing cue_model.get method on test mocks.
+
+        The try/except is for test isolation: with a MagicMock-based
+        cue_model whose `.get` is not configured with a side_effect,
+        the call would return another MagicMock (not None) and the
+        caller's `if cue is not None` check would behave incorrectly.
+        Wrapping it lets tests that don't care about cue lookup pass
+        a bare MagicMock and still have us return None on misses.
+        Production CueModel.get() honours its None-on-miss contract
+        without raising, so the except branch never trips at runtime.
         """
         try:
             return self._app.cue_model.get(cue_id)

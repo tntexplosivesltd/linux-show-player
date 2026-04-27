@@ -348,6 +348,24 @@ def test_cue_executed_does_not_call_media_disarm(manager):
     cue.media.disarm.assert_not_called()
 
 
+def test_cue_executed_idempotent_when_not_armed(manager):
+    """GO fires on every cue, including those that were never armed
+    (ineligible, cap-refused, prearm-failed). cue_executed must be a
+    safe no-op in that case — no signal emission, no exceptions.
+    """
+    cue = _make_cue("c1")
+    received = []
+
+    def _handler():
+        received.append(True)
+
+    manager.armed_set_changed.connect(_handler)
+    manager.cue_executed(cue)
+    assert "c1" not in manager._armed
+    assert received == []
+    cue.media.disarm.assert_not_called()
+
+
 def test_cue_stopped_rearms_if_preload(manager):
     cue = _make_cue("c1", preload=True)
     manager._try_arm(cue, ArmReason.Preload)
