@@ -488,21 +488,31 @@ class CueGeneralSettingsPage(CueSettingsPage):
             self.updateIconPreview()
         if "description" in settings:
             self.cueDescriptionEdit.setPlainText(settings["description"])
-        if "stylesheet" in settings:
-            style = css_to_dict(settings["stylesheet"])
-            bg_hex = style.get("background", "")
+        # Color picker — themed name takes precedence over legacy
+        # stylesheet hex. See task plan for the precedence rules.
+        color_name = settings.get("color_name", "")
+        style = css_to_dict(settings.get("stylesheet", ""))
+        bg_hex = style.get("background", "")
+
+        if color_name:
+            # Themed cue — picker shows the canonical swatch
+            self.colorPalette.setColor(color_name)
+        elif bg_hex:
             canonical = _hex_to_canonical_name(bg_hex)
             if canonical:
+                # Legacy session whose hex happens to match a canonical
+                # palette entry. Treat as themed — but DON'T mutate the
+                # cue here; the user will see the swatch selected, and
+                # if they re-save, getSettings will commit color_name.
                 self.colorPalette.setColor(canonical)
-            elif bg_hex:
-                # Legacy custom hex (not in the canonical palette).
-                # Show "no swatch selected" annotated with the hex; the
-                # cue's color is preserved verbatim until the user
-                # explicitly picks a palette swatch (graduating it to
-                # themed mode).
-                self.colorPalette.setCustomHex(bg_hex)
             else:
-                self.colorPalette.setColor("")
+                # Legacy custom hex (not in canonical palette).
+                # Show "no swatch selected" annotated with the hex.
+                self.colorPalette.setCustomHex(bg_hex)
+        else:
+            self.colorPalette.setColor("")
+
+        if "stylesheet" in settings:
             if "font-size" in style:
                 # [:-2] strips the trailing "pt"
                 self.fontSizeSpin.setValue(int(style["font-size"][:-2]))
@@ -546,16 +556,20 @@ class CueGeneralSettingsPage(CueSettingsPage):
         font_enabled = self.isGroupEnabled(self.fontSizeGroup)
         if color_enabled:
             name = self.colorPalette.color()
+            custom_hex = self.colorPalette.customHex()
+            settings["color_name"] = name
+
             if name:
-                # Resolve the canonical name to the active theme's hex
-                # for storage in the stylesheet.  Task 15 will migrate
-                # storage to color_name; for now we preserve the hex
-                # contract so existing session files round-trip cleanly.
-                style["background"] = themes.cue_color_hex(name)
-            elif self.colorPalette.customHex():
-                # Legacy custom hex that wasn't a canonical entry: pass
-                # it through unchanged so the session isn't corrupted.
-                style["background"] = self.colorPalette.customHex()
+                # Themed mode owns the background — strip any legacy hex
+                # so the cue commits fully to themed.
+                style.pop("background", None)
+            elif custom_hex:
+                # Legacy custom hex preserved — picker showed "no swatch
+                # selected" because the hex isn't a canonical entry.
+                style["background"] = custom_hex
+            else:
+                # "No color" — drop the background key entirely.
+                style.pop("background", None)
         if font_enabled:
             style["font-size"] = str(self.fontSizeSpin.value()) + "pt"
 

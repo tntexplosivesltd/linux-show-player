@@ -106,13 +106,12 @@ class TestCueGeneralSettingsPageRoundTrip:
         assert result["fadeout_duration"] == 2.5
         assert result["exclusive"] is True
 
-        # Stylesheet is composed from the palette selector and font
-        # spin; key order in the CSS string isn't guaranteed, so
-        # decompose. Foreground color MUST be absent — the palette
-        # only owns background, and unknown keys drop.
+        # Task 15: canonical palette hex on load → color_name is set,
+        # and background is STRIPPED from the stylesheet (themed mode).
+        assert result["color_name"] == "Red"
         css = result["stylesheet"]
         assert "font-size:14pt" in css
-        assert "background:#C03A2A" in css
+        assert "background" not in css_to_dict(css)
         assert "color:" not in css
 
     def test_legacy_non_palette_background_preserved_on_save(
@@ -139,6 +138,38 @@ class TestCueGeneralSettingsPageRoundTrip:
         style = css_to_dict(saved["stylesheet"])
         assert style.get("background") == "#A0413A"
 
+    def test_themed_save_sets_color_name_and_strips_background(
+        self, qtbot, mock_app
+    ):
+        """Picker with a canonical name selected → settings["color_name"]
+        is the name, AND stylesheet has no background key (themed mode
+        owns the background; no duplication)."""
+        page = CueGeneralSettingsPage(Cue)
+        qtbot.addWidget(page)
+
+        page.colorPalette.setColor("Red")
+
+        saved = page.getSettings()
+        assert saved["color_name"] == "Red"
+        style = css_to_dict(saved["stylesheet"])
+        assert "background" not in style
+
+    def test_load_color_name_takes_precedence_over_stylesheet_bg(
+        self, qtbot, mock_app
+    ):
+        """When both color_name and stylesheet bg are set (e.g., session
+        saved by older code that didn't strip), color_name wins on load."""
+        page = CueGeneralSettingsPage(Cue)
+        qtbot.addWidget(page)
+
+        page.loadSettings({
+            "color_name": "Blue",
+            "stylesheet": "background: #aabbcc",
+        })
+
+        assert page.colorPalette.color() == "Blue"
+        assert page.colorPalette.customHex() == ""
+
     def test_empty_load_does_not_crash(self, qtbot):
         page = CueGeneralSettingsPage(MediaCue)
         qtbot.addWidget(page)
@@ -149,8 +180,9 @@ class TestCueGeneralSettingsPageRoundTrip:
         page.getSettings()
 
     def test_stylesheet_without_font_size_loads_background(self, qtbot):
-        # Palette hex round-trips exactly; legacy foreground color is
-        # silently dropped because the palette doesn't own it.
+        # Canonical palette hex on load: legacy foreground color is
+        # silently dropped; background migrates to color_name on save
+        # and is stripped from the stylesheet (Task 15 themed mode).
         page = CueGeneralSettingsPage(MediaCue)
         qtbot.addWidget(page)
 
@@ -158,8 +190,10 @@ class TestCueGeneralSettingsPageRoundTrip:
             {"stylesheet": "background:#3535B8;color:#040506;"}
         )
 
-        css = page.getSettings().get("stylesheet", "")
-        assert "background:#3535B8" in css
+        saved = page.getSettings()
+        assert saved["color_name"] == "Blue"
+        css = saved.get("stylesheet", "")
+        assert "background" not in css_to_dict(css)
         assert "color:" not in css
 
 
@@ -267,6 +301,8 @@ class TestCueGeneralColorGroupEmission:
 
         This was already working pre-fix, but lock it in so the
         No-color fix doesn't overshoot and break the common case.
+        Task 15: themed mode writes color_name, strips background from
+        stylesheet (no duplicate storage).
         """
         page = CueGeneralSettingsPage(MediaCue)
         qtbot.addWidget(page)
@@ -278,7 +314,8 @@ class TestCueGeneralColorGroupEmission:
         settings = page.getSettings()
 
         assert "stylesheet" in settings
-        assert "background:#3E8A3B" in settings["stylesheet"]
+        assert settings["color_name"] == "Green"
+        assert "background" not in css_to_dict(settings["stylesheet"])
 
     def test_color_group_unticked_still_omits_stylesheet(self, qtbot):
         """If the user hasn't ticked the colour or font groups, the
