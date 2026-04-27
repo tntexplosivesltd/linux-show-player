@@ -517,3 +517,116 @@ def test_mtime_check_noop_when_not_armed(manager):
     manager._cue_mtime = lambda c: 100.0
     manager.maybe_rearm_for_mtime(cue)  # not in _armed
     cue.media.disarm.assert_not_called()
+
+
+# T13 tests --------------------------------------------------------------
+
+def test_single_preload_failure_emits_per_cue_toast(manager, mock_app):
+    """A single preload failure during session_load emits a per-cue toast."""
+    cue = _make_cue("c1", preload=True)
+    cue.name = "Opening Music"
+    cue.media.prearm.return_value = False
+    mock_app.cue_model = MagicMock()
+    mock_app.cue_model.__iter__ = lambda self: iter([cue])
+    mock_app.layout = MagicMock()
+    mock_app.layout.standby_cue.return_value = None
+
+    manager.session_loaded()
+
+    assert mock_app.notify.emit.call_count == 1
+    args, _ = mock_app.notify.emit.call_args
+    assert "Opening Music" in args[0]
+
+
+def test_multiple_preload_failures_emit_summary(manager, mock_app):
+    """>=2 failures during session_load coalesce into one summary toast."""
+    cues = [_make_cue(f"c{i}", preload=True) for i in range(3)]
+    for c in cues:
+        c.name = f"Cue {c.id}"
+        c.media.prearm.return_value = False
+    mock_app.cue_model = MagicMock()
+    mock_app.cue_model.__iter__ = lambda self: iter(cues)
+    mock_app.layout = MagicMock()
+    mock_app.layout.standby_cue.return_value = None
+
+    manager.session_loaded()
+
+    assert mock_app.notify.emit.call_count == 1
+    args, _ = mock_app.notify.emit.call_args
+    assert "3" in args[0]
+    assert "preload" in args[0].lower()
+
+
+def test_auto_only_failure_emits_no_toast(manager, mock_app):
+    """A standby cue that fails to arm does NOT emit a toast."""
+    cue = _make_cue("c1", preload=False)
+    cue.media.prearm.return_value = False
+    mock_app.cue_model = MagicMock()
+    mock_app.cue_model.__iter__ = lambda self: iter([])
+    mock_app.layout = MagicMock()
+    mock_app.layout.standby_cue.return_value = cue
+
+    manager.session_loaded()
+
+    mock_app.notify.emit.assert_not_called()
+
+
+def test_midshow_preload_failure_emits_direct_toast(manager, mock_app):
+    """A failure outside session_load emits a per-cue toast immediately."""
+    cue = _make_cue("c1", preload=True)
+    cue.name = "Sting 3"
+    cue.media.prearm.return_value = False
+
+    # Direct mid-show arm attempt (NOT inside session_loaded)
+    manager._try_arm(cue, ArmReason.Preload)
+
+    assert mock_app.notify.emit.call_count == 1
+    args, _ = mock_app.notify.emit.call_args
+    assert "Sting 3" in args[0]
+
+
+def test_cap_refusal_silent_when_failOnCapHit_false(manager_factory, mock_app):
+    """Cap refusal with default failOnCapHit=False: no toast."""
+    manager = manager_factory({"preArm.maxArmed": 1})
+    cue1 = _make_cue("c1", preload=True)
+    cue1.name = "First"
+    cue2 = _make_cue("c2", preload=True)
+    cue2.name = "Second"
+
+    manager._try_arm(cue1, ArmReason.Preload)  # arms successfully
+    mock_app.notify.emit.reset_mock()
+    manager._try_arm(cue2, ArmReason.Preload)  # cap-refused
+
+    mock_app.notify.emit.assert_not_called()
+
+
+def test_cap_refusal_emits_toast_when_failOnCapHit_true(
+    manager_factory, mock_app
+):
+    """Cap refusal with failOnCapHit=True AND preload=True: toast fires."""
+    manager = manager_factory({
+        "preArm.maxArmed": 1, "preArm.failOnCapHit": True,
+    })
+    cue1 = _make_cue("c1", preload=True)
+    cue2 = _make_cue("c2", preload=True)
+    cue2.name = "Cap Hit Cue"
+
+    manager._try_arm(cue1, ArmReason.Preload)
+    mock_app.notify.emit.reset_mock()
+    manager._try_arm(cue2, ArmReason.Preload)
+
+    assert mock_app.notify.emit.call_count == 1
+    args, _ = mock_app.notify.emit.call_args
+    assert "Cap Hit Cue" in args[0]
+
+
+def test_no_failures_no_toast(manager, mock_app):
+    """Empty session_load with no failures: zero toasts."""
+    mock_app.cue_model = MagicMock()
+    mock_app.cue_model.__iter__ = lambda self: iter([])
+    mock_app.layout = MagicMock()
+    mock_app.layout.standby_cue.return_value = None
+
+    manager.session_loaded()
+
+    mock_app.notify.emit.assert_not_called()

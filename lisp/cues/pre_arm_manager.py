@@ -20,6 +20,7 @@ from enum import Flag, auto
 from pathlib import Path
 
 from lisp.core.signal import Signal
+from lisp.ui.widgets.notification import NotificationLevel
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,11 @@ class PreArmManager:
         self._fail_on_cap_hit = app.conf.get(
             "preArm.failOnCapHit", False
         )
+
+        # When non-None, _try_arm collects failed preload cues here instead
+        # of emitting per-cue toasts. session_loaded sets/clears this to
+        # coalesce a batch of failures into a single summary toast.
+        self._collecting_session_failures: list | None = None
 
         self.armed_set_changed = Signal()
 
@@ -95,6 +101,8 @@ class PreArmManager:
                 self._cap, cue.id,
             )
             self._record_failure(cue, "cap reached", from_cap=True)
+            if self._fail_on_cap_hit:
+                self._on_prearm_failed(cue)
             return False
         try:
             ok = cue.media.prearm()
@@ -108,6 +116,7 @@ class PreArmManager:
                 "PreArmManager: prearm failed for %s", cue.id
             )
             self._record_failure(cue, "preload failed")
+            self._on_prearm_failed(cue)
             return False
         self._armed[cue.id] = reason
         self._failed.pop(cue.id, None)
@@ -161,23 +170,82 @@ class PreArmManager:
     def session_loaded(self, *_args) -> None:
         """Called when a session finishes loading. Arms preload-marked
         cues first (priority), then attempts to arm the standby cue.
+
+        Failures during this batch are coalesced into a single toast
+        (per-cue if 1, summary if >=2).
         """
         if not self._enabled:
             return
-        # Phase 1: preload-marked cues (priority over auto)
-        for cue in self._app.cue_model:
-            if not getattr(cue, "preload", False):
-                continue
-            if not self._eligible(cue):
-                continue
-            self._try_arm(cue, ArmReason.Preload)
-        # Phase 2: standby cue (best-effort)
+
+        self._collecting_session_failures = []
         try:
-            standby = self._app.layout.standby_cue()
-        except Exception:
-            standby = None
-        if standby is not None and self._eligible(standby):
-            self._try_arm(standby, ArmReason.Auto)
+            # Phase 1: preload-marked cues (priority over auto)
+            for cue in self._app.cue_model:
+                if not getattr(cue, "preload", False):
+                    continue
+                if not self._eligible(cue):
+                    continue
+                self._try_arm(cue, ArmReason.Preload)
+            # Phase 2: standby cue (best-effort)
+            try:
+                standby = self._app.layout.standby_cue()
+            except Exception:
+                standby = None
+            if standby is not None and self._eligible(standby):
+                self._try_arm(standby, ArmReason.Auto)
+
+            failures = self._collecting_session_failures
+        finally:
+            self._collecting_session_failures = None
+
+        self._emit_batch_failure_notification(failures)
+
+    def _emit_batch_failure_notification(self, failures) -> None:
+        """Emit one toast summarising preload failures from session_load.
+
+        No-op if `failures` is empty. Per-cue toast for one failure;
+        summary toast for >=2.
+        """
+        if not failures:
+            return
+        if len(failures) == 1:
+            cue = failures[0]
+            category = self._failed.get(cue.id, "preload failed")
+            message = f'Failed to preload "{cue.name}": {category}'
+        else:
+            message = (
+                f"Failed to preload {len(failures)} cues — "
+                "see log for details"
+            )
+        self._app.notify.emit(message, NotificationLevel.Warning)
+
+    def _on_prearm_failed(self, cue) -> None:
+        """Route a prearm failure to the appropriate toast surface.
+
+        During session_load, the failure is buffered for batch coalescing.
+        Otherwise (mid-show), a per-cue toast is emitted directly.
+
+        Auto-arm failures (preload=False) never produce a toast — the spec
+        keeps best-effort optimisations silent.
+        """
+        if not getattr(cue, "preload", False):
+            return  # auto-only failures stay silent
+        if self._collecting_session_failures is not None:
+            self._collecting_session_failures.append(cue)
+            return
+        # Mid-show: emit immediately
+        self._emit_failure_toast(
+            cue, self._failed.get(cue.id, "preload failed")
+        )
+
+    def _emit_failure_toast(self, cue, category: str) -> None:
+        """Emit a per-cue WARNING toast for a preload failure.
+
+        Always direct, never batched. Caller decides when to use this vs
+        the batched session-load path.
+        """
+        message = f'Failed to preload "{cue.name}": {category}'
+        self._app.notify.emit(message, NotificationLevel.Warning)
 
     def standby_changed(self, new_cue) -> None:
         """Called when the active layout's standby cursor moves.
