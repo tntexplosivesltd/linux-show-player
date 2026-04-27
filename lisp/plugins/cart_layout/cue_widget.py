@@ -35,7 +35,9 @@ from lisp.cues.cue import CueState
 from lisp.cues.cue_time import CueTime
 from lisp.cues.media_cue import MediaCue
 from lisp.plugins.cart_layout.page_widget import CartPageWidget
+from lisp.ui import themes as themes_mod
 from lisp.ui.icons import IconTheme
+from lisp.ui.ui_utils import css_to_dict, dict_to_css
 from lisp.ui.widgets import QClickLabel, QClickSlider
 from lisp import ICON_THEMES_DIR
 
@@ -59,6 +61,20 @@ def _dim_icon(icon):
     painter.drawPixmap(0, 0, source)
     painter.end()
     return QIcon(result)
+
+
+def _resolve_cart_stylesheet(cue) -> str:
+    """Build the stylesheet string for a cart cue widget.
+
+    Themed cues (``color_name`` set) get the active theme's hex
+    injected as the ``background`` key. Legacy cues pass through.
+    Other CSS properties (color, font-size) are preserved verbatim.
+    """
+    if not getattr(cue, "color_name", ""):
+        return cue.stylesheet or ""
+    css = css_to_dict(cue.stylesheet or "")
+    css["background"] = themes_mod.cue_color_hex(cue.color_name)
+    return dict_to_css(css)
 
 
 class CueWidget(QWidget):
@@ -278,6 +294,9 @@ class CueWidget(QWidget):
         self._cue.changed("stylesheet").connect(
             self._updateStyle, Connection.QtQueued
         )
+        self._cue.changed("color_name").connect(
+            self._refreshStyle, Connection.QtQueued
+        )
         # Effective_disabled may flip via the cue's own `disabled`
         # or via any ancestor group's. Subscribe to the full chain:
         # own `disabled`, own `group_id` (to re-walk ancestors when
@@ -383,6 +402,12 @@ class CueWidget(QWidget):
 
     def _updateStyle(self, stylesheet):
         disabled = self._cue.effective_disabled
+        # Resolve themed color into an injected `background` rule
+        # before applying. Legacy stylesheets pass through unchanged.
+        # Note: the `stylesheet` argument is now ignored — we always
+        # resolve from the cue. The argument is kept for backward
+        # compatibility with the existing call sites.
+        stylesheet = _resolve_cart_stylesheet(self._cue)
         if disabled:
             # Append a dim overlay. Keep the original stylesheet so
             # colour/font selections survive re-enabling.
