@@ -73,29 +73,18 @@ optional arguments:
 
 ## 🧪 Testing
 
-### Unit Tests
-
-Unit tests use [pytest](https://docs.pytest.org/) with [pytest-qt](https://pytest-qt.readthedocs.io/) for QApplication support.
-
-```bash
-poetry run pytest tests/
-poetry run pytest tests/ -v          # verbose output
-poetry run pytest tests/core/        # run a specific package
-```
-
-Tests are in `tests/` and mirror the source layout (`tests/core/`, `tests/cues/`, `tests/command/`).
-
-### Test Harness Plugin (E2E Testing)
-
-The **Test Harness** plugin (`lisp/plugins/test_harness/`) exposes LiSP internals over a JSON-RPC 2.0 TCP socket, enabling automated end-to-end testing from external tools. It is disabled by default and must be explicitly enabled.
-
-Once enabled, start LiSP and use the standalone CLI client:
+LiSP has two test layers: **unit tests** (pytest, in-process, against a mocked
+`Application`) and **E2E tests** (standalone scripts that drive a real LiSP
+subprocess over JSON-RPC via the Test Harness plugin).
 
 ```bash
-python lisp/plugins/test_harness/client.py ping
-python lisp/plugins/test_harness/client.py cue.list
-python lisp/plugins/test_harness/client.py cue.add '{"type": "StopAll", "properties": {"name": "My Cue"}}'
-python lisp/plugins/test_harness/client.py commands.undo
+poetry run pytest tests/                              # unit tests
+poetry run python tests/e2e/test_seek_cue_e2e.py      # one E2E suite
 ```
 
-The harness provides methods for session management, cue CRUD and control, layout operations, undo/redo, and signal subscriptions with a blocking `wait_for` mechanism for testing asynchronous cue behavior. Binds to `127.0.0.1:8070` by default.
+E2E tests are **not** run via pytest — each file is an executable script that
+boots LiSP, runs its checks, and exits with a status code.
+
+See **[docs/testing.md](docs/testing.md)** for the full guide: fixtures,
+the canonical E2E template, signal-wait patterns, and how to extend the
+Test Harness with new JSON-RPC methods.
