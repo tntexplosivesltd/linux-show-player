@@ -63,3 +63,18 @@ class TestCartCueWidgetThemedColor:
         result = _resolve_cart_stylesheet(cue)
         css = css_to_dict(result)
         assert css.get("background") == DEFAULT_CUE_PALETTE["Blue"]
+
+    def test_unknown_color_name_injects_empty(self, mock_app):
+        """If color_name is set but not a canonical entry (e.g.,
+        hand-edited session, schema drift), cue_color_hex returns ""
+        and we inject an empty background. Defensive — the cue
+        renders without a background colour rather than crashing."""
+        cue = Cue(mock_app)
+        cue.color_name = "Magenta"  # not in CUE_COLOR_NAMES
+        cue.stylesheet = "color: #fff"
+        result = _resolve_cart_stylesheet(cue)
+        css = css_to_dict(result)
+        # Empty string injected (cue_color_hex returns "" for unknowns)
+        assert css.get("background") == ""
+        # Other CSS preserved
+        assert css.get("color") == "#fff"

@@ -35,7 +35,7 @@ from lisp.cues.cue import CueState
 from lisp.cues.cue_time import CueTime
 from lisp.cues.media_cue import MediaCue
 from lisp.plugins.cart_layout.page_widget import CartPageWidget
-from lisp.ui import themes as themes_mod
+from lisp.ui import themes
 from lisp.ui.icons import IconTheme
 from lisp.ui.ui_utils import css_to_dict, dict_to_css
 from lisp.ui.widgets import QClickLabel, QClickSlider
@@ -73,7 +73,7 @@ def _resolve_cart_stylesheet(cue) -> str:
     if not getattr(cue, "color_name", ""):
         return cue.stylesheet or ""
     css = css_to_dict(cue.stylesheet or "")
-    css["background"] = themes_mod.cue_color_hex(cue.color_name)
+    css["background"] = themes.cue_color_hex(cue.color_name)
     return dict_to_css(css)
 
 
@@ -295,7 +295,7 @@ class CueWidget(QWidget):
             self._updateStyle, Connection.QtQueued
         )
         self._cue.changed("color_name").connect(
-            self._refreshStyle, Connection.QtQueued
+            self._updateStyle, Connection.QtQueued
         )
         # Effective_disabled may flip via the cue's own `disabled`
         # or via any ancestor group's. Subscribe to the full chain:
@@ -303,7 +303,7 @@ class CueWidget(QWidget):
         # re-parented), and every ancestor group's `disabled`. The
         # ancestor subscriptions are (re)wired via `_wire_ancestor_disable`.
         self._cue.changed("disabled").connect(
-            self._refreshStyle, Connection.QtQueued
+            self._updateStyle, Connection.QtQueued
         )
         self._cue.changed("group_id").connect(
             self._onGroupIdChanged, Connection.QtQueued
@@ -364,7 +364,7 @@ class CueWidget(QWidget):
         self._cueTime.notify.connect(self._updateTime, Connection.QtQueued)
 
         self._updateName(cue.name)
-        self._updateStyle(cue.stylesheet)
+        self._updateStyle()
         self._updateDuration(self._cue.duration)
 
     def _mediaUpdated(self):
@@ -400,13 +400,13 @@ class CueWidget(QWidget):
                     self._cue.execute()
                     self.cueExecuted.emit(self._cue)
 
-    def _updateStyle(self, stylesheet):
+    def _updateStyle(self, *_args):
+        """Resolve and apply the cue widget's stylesheet.
+
+        Reads from ``self._cue`` directly (themed colour resolved via
+        ``_resolve_cart_stylesheet``); any positional arg is ignored,
+        present only so this method is callable as a signal slot."""
         disabled = self._cue.effective_disabled
-        # Resolve themed color into an injected `background` rule
-        # before applying. Legacy stylesheets pass through unchanged.
-        # Note: the `stylesheet` argument is now ignored — we always
-        # resolve from the cue. The argument is kept for backward
-        # compatibility with the existing call sites.
         stylesheet = _resolve_cart_stylesheet(self._cue)
         if disabled:
             # Append a dim overlay. Keep the original stylesheet so
@@ -425,15 +425,11 @@ class CueWidget(QWidget):
             icon = cached
         self.nameButton.setIcon(icon)
 
-    def _refreshStyle(self, _value=None):
-        """Re-apply styling when disabled/group_id changes."""
-        self._updateStyle(self._cue.stylesheet)
-
     def _onGroupIdChanged(self, _value=None):
         """Handle re-parenting: rewire ancestor subscriptions and
         refresh dim state."""
         self._wire_ancestor_disable()
-        self._refreshStyle()
+        self._updateStyle()
 
     def _wire_ancestor_disable(self):
         """Subscribe to `disabled` on every ancestor group so a
@@ -456,7 +452,7 @@ class CueWidget(QWidget):
             if parent is None:
                 break
             parent.changed("disabled").connect(
-                self._refreshStyle, Connection.QtQueued
+                self._updateStyle, Connection.QtQueued
             )
             gid = parent.group_id
 
