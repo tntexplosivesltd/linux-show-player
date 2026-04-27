@@ -46,7 +46,43 @@ from lisp.ui.widgets import (
     FadeComboBox,
     FadeEdit,
 )
+from lisp.ui import themes
+from lisp.ui.themes.base import CUE_COLOR_NAMES
 from lisp.ui.widgets.cue_color_palette import CueColorPalette
+
+
+def _hex_to_color_name(hex_color: str) -> str:
+    """Snap a stored background hex to the nearest canonical palette name.
+
+    Returns the canonical name (e.g. ``"Red"``) of the closest palette
+    entry by RGB-Euclidean distance, or ``""`` if ``hex_color`` is empty
+    or not a valid ``#RRGGBB`` string.
+
+    This replicates the old ``snap_to_palette`` behaviour at the load
+    path so legacy sessions migrate silently on the next save.  Task 15
+    will replace this bridge with the full ``color_name`` property path.
+    """
+    import re as _re
+    _hex_pat = _re.compile(r"^#[0-9A-Fa-f]{6}$")
+    if not hex_color or not _hex_pat.match(hex_color):
+        return ""
+
+    def _rgb(h):
+        return (int(h[1:3], 16), int(h[3:5], 16), int(h[5:7], 16))
+
+    tr, tg, tb = _rgb(hex_color)
+    best_name = ""
+    best_dist = None
+    for name in CUE_COLOR_NAMES:
+        entry_hex = themes.cue_color_hex(name)
+        if not entry_hex:
+            continue
+        er, eg, eb = _rgb(entry_hex)
+        dist = (tr - er) ** 2 + (tg - eg) ** 2 + (tb - eb) ** 2
+        if best_dist is None or dist < best_dist:
+            best_dist = dist
+            best_name = name
+    return best_name
 
 
 def make_flat_group():
@@ -470,11 +506,12 @@ class CueGeneralSettingsPage(CueSettingsPage):
             self.cueDescriptionEdit.setPlainText(settings["description"])
         if "stylesheet" in settings:
             style = css_to_dict(settings["stylesheet"])
-            # Palette snaps any non-palette hex on load so legacy
-            # sessions migrate silently on the very next save. The
-            # "color" (foreground) key is deliberately ignored — the
-            # palette doesn't own a foreground affordance any more.
-            self.colorPalette.setColor(style.get("background", ""))
+            # Convert the stored hex to the nearest canonical palette
+            # name (snaps legacy near-palette hex on load so sessions
+            # migrate silently on next save).  Task 15 will replace this
+            # bridge with the full color_name property path.
+            bg_hex = style.get("background", "")
+            self.colorPalette.setColor(_hex_to_color_name(bg_hex))
             if "font-size" in style:
                 # [:-2] strips the trailing "pt"
                 self.fontSizeSpin.setValue(int(style["font-size"][:-2]))
@@ -517,9 +554,17 @@ class CueGeneralSettingsPage(CueSettingsPage):
         color_enabled = self.isGroupEnabled(self.colorGroup)
         font_enabled = self.isGroupEnabled(self.fontSizeGroup)
         if color_enabled:
-            bg = self.colorPalette.color()
-            if bg:
-                style["background"] = bg
+            name = self.colorPalette.color()
+            if name:
+                # Resolve the canonical name to the active theme's hex
+                # for storage in the stylesheet.  Task 15 will migrate
+                # storage to color_name; for now we preserve the hex
+                # contract so existing session files round-trip cleanly.
+                style["background"] = themes.cue_color_hex(name)
+            elif self.colorPalette.customHex():
+                # Legacy custom hex that wasn't a canonical entry: pass
+                # it through unchanged so the session isn't corrupted.
+                style["background"] = self.colorPalette.customHex()
         if font_enabled:
             style["font-size"] = str(self.fontSizeSpin.value()) + "pt"
 

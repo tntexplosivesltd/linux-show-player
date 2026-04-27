@@ -266,7 +266,7 @@ class TestCueGeneralColorGroupEmission:
         page.enableCheck(True)
 
         page.colorGroup.setChecked(True)
-        page.colorPalette.setColor("#3E8A3B")
+        page.colorPalette.setColor("Green")
 
         settings = page.getSettings()
 
