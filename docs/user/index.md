@@ -13,6 +13,7 @@ getting_started
 menus
 list_layout
 cart_layout
+editing_cues
 cues/index
 plugins/index
 ```
