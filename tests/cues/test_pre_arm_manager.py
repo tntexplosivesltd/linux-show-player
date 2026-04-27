@@ -771,3 +771,41 @@ def test_cue_removed_clears_handler_refs(manager):
     assert "c1" in manager._cue_handlers
     manager.cue_removed(cue)
     assert "c1" not in manager._cue_handlers
+
+
+# T16 tests — _wire_layout idempotence ----------------------------------------
+
+def test_wire_layout_idempotent_for_same_instance(manager_factory, mock_app):
+    """Calling _wire_layout twice with the same instance does NOT
+    re-connect signals (used by Application.__wire_layout_for_pre_arm
+    which fires on every session_created)."""
+    manager = manager_factory()
+    layout = MagicMock()
+    layout.standby_changed = MagicMock()
+    layout.cue_executed = MagicMock()
+    manager._wire_layout(layout)
+    initial_calls = layout.standby_changed.connect.call_count
+    manager._wire_layout(layout)
+    assert layout.standby_changed.connect.call_count == initial_calls
+
+
+def test_wire_layout_two_distinct_layouts(manager_factory, mock_app):
+    """Two different layout instances both get wired."""
+    manager = manager_factory()
+    layout_a = MagicMock()
+    layout_a.standby_changed = MagicMock()
+    layout_a.cue_executed = MagicMock()
+    layout_b = MagicMock()
+    layout_b.standby_changed = MagicMock()
+    layout_b.cue_executed = MagicMock()
+    manager._wire_layout(layout_a)
+    manager._wire_layout(layout_b)
+    assert layout_a.standby_changed.connect.called
+    assert layout_b.standby_changed.connect.called
+
+
+def test_wire_layout_none_is_safe_noop(manager_factory):
+    """Application can construct the manager before a session
+    exists; _wire_layout(None) must be silent."""
+    manager = manager_factory()
+    manager._wire_layout(None)  # no exception, nothing wired

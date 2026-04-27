@@ -86,6 +86,11 @@ class PreArmManager:
         # alive here or they get GC'd before any signal can fire.
         self._cue_handlers: dict = {}
 
+        # Track which layout instances have already been wired so that
+        # _wire_layout is idempotent — Application.__wire_layout_for_pre_arm
+        # subscribes to session_created and may be called multiple times.
+        self._wired_layout_ids: set = set()
+
         self.armed_set_changed = Signal()
 
         # Wire to application-level signals so the public methods
@@ -116,10 +121,15 @@ class PreArmManager:
     def _wire_layout(self, layout) -> None:
         """Connect to a CueLayout's signals. Tolerant of None or
         layouts that lack one of the signals (e.g. cart_layout has
-        no standby_changed).
+        no standby_changed). Idempotent — calling twice with the
+        same layout instance is a no-op.
         """
         if layout is None:
             return
+        layout_id = id(layout)
+        if layout_id in self._wired_layout_ids:
+            return
+        self._wired_layout_ids.add(layout_id)
         if hasattr(layout, "standby_changed"):
             try:
                 layout.standby_changed.connect(self.standby_changed)

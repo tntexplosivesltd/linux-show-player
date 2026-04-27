@@ -34,6 +34,7 @@ from lisp.cues.cue_factory import CueFactory
 from lisp.cues.cue_model import CueModel
 from lisp.cues.cue_number import is_collision, next_cue_number
 from lisp.cues.media_cue import MediaCue
+from lisp.cues.pre_arm_manager import PreArmManager
 from lisp.layout.cue_layout import CueLayout
 from lisp.plugins import get_plugins
 from lisp.ui.layoutselect import LayoutSelect
@@ -67,6 +68,8 @@ class Application(metaclass=Singleton):
         self.__cue_model.item_added.connect(self.__assign_cue_number)
         self.__exclusive_manager = ExclusiveManager(self)
         self.__session = None
+        self.pre_arm_manager = PreArmManager(self)
+        self.session_created.connect(self.__wire_layout_for_pre_arm)
         self.__commands_stack = CommandsStack()
         self.__main_window = MainWindow(self)
 
@@ -294,3 +297,16 @@ class Application(metaclass=Singleton):
                 ).format(session_file)
             )
             self.__new_session_dialog()
+
+    def __wire_layout_for_pre_arm(self, *_args):
+        """Re-wire the active layout's signals to PreArmManager when
+        a session is created. The manager was constructed before any
+        session existed, so its initial _wire_layout(None) was a no-op.
+        Idempotent — safe to call multiple times in one app run.
+        """
+        try:
+            self.pre_arm_manager._wire_layout(self.layout)
+        except Exception:
+            logger.exception(
+                "Application: failed to wire layout for pre-arm"
+            )
