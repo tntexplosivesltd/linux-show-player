@@ -30,3 +30,17 @@ QAbstractItemView {
     selection-background-color: palette(highlight);
     selection-color: palette(highlighted-text);
 }
+
+/* Cart cell tiles need an explicit background and border on Light —
+ * Qt's default paint would use palette(window), which is identical
+ * to the cart panel's background, making cells invisible against it.
+ * Mirrors the equivalent rule in dark/theme.qss. */
+#ButtonCueWidget {
+    background-color: palette(light);
+    border: 1px solid palette(mid);
+    border-radius: 6px;
+}
+
+#ButtonCueWidget[selected="true"] {
+    border: 2px solid palette(highlight);
+}
