@@ -17,6 +17,7 @@
 
 import logging
 from enum import Flag, auto
+from pathlib import Path
 
 from lisp.core.signal import Signal
 
@@ -213,7 +214,6 @@ class PreArmManager:
         or None if not a local file, doesn't exist, or any error.
         """
         try:
-            from pathlib import Path
             uri = cue.media.input_uri()
             if uri is None or not getattr(uri, "is_local", False):
                 return None
