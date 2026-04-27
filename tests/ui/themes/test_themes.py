@@ -287,7 +287,7 @@ class TestLightTheme:
         qapp.setStyleSheet("")
         Light().apply(qapp)
         # Heuristic: dark/theme.qss is ~16KB; Light's should be tiny.
-        assert len(qapp.styleSheet()) < 2048, (
+        assert len(qapp.styleSheet()) < 4096, (
             f"Light QSS unexpectedly large ({len(qapp.styleSheet())} bytes)"
         )
 
