@@ -382,3 +382,138 @@ def test_cue_stopped_does_not_rearm_if_not_preload(manager):
     manager.cue_executed(cue)
     manager.on_cue_stopped(cue)
     assert "c1" not in manager._armed
+
+
+# T11 tests --------------------------------------------------------------
+
+def test_uri_change_rearms_when_armed(manager):
+    cue = _make_cue("c1", preload=True)
+    manager._try_arm(cue, ArmReason.Preload)
+    cue.media.disarm.reset_mock()
+    cue.media.prearm.reset_mock()
+    manager.on_uri_changed(cue)
+    cue.media.disarm.assert_called_once()
+    cue.media.prearm.assert_called_once()
+    assert "c1" in manager._armed
+
+
+def test_uri_change_noop_when_not_armed(manager):
+    cue = _make_cue("c1")
+    manager.on_uri_changed(cue)
+    cue.media.disarm.assert_not_called()
+    cue.media.prearm.assert_not_called()
+
+
+def test_start_time_change_reseeks_when_armed(manager):
+    cue = _make_cue("c1", preload=True)
+    cue.start_time = 1000
+    manager._try_arm(cue, ArmReason.Preload)
+    cue.start_time = 2000
+    manager.on_start_time_changed(cue)
+    cue.media.reseek.assert_called_with(2000)
+
+
+def test_start_time_change_noop_when_not_armed(manager):
+    cue = _make_cue("c1")
+    cue.start_time = 1000
+    manager.on_start_time_changed(cue)
+    cue.media.reseek.assert_not_called()
+
+
+def test_preload_toggled_true_arms(manager):
+    cue = _make_cue("c1", preload=False)
+    manager.on_preload_changed(cue, True)
+    assert "c1" in manager._armed
+    assert ArmReason.Preload in manager._armed["c1"]
+
+
+def test_preload_toggled_false_disarms_preload_only(manager):
+    cue = _make_cue("c1", preload=True)
+    manager._try_arm(cue, ArmReason.Preload)
+    manager.on_preload_changed(cue, False)
+    assert "c1" not in manager._armed
+
+
+def test_preload_toggled_false_downgrades_when_also_auto(manager):
+    cue = _make_cue("c1", preload=True)
+    manager._try_arm(cue, ArmReason.Preload)
+    manager._add_reason(cue, ArmReason.Auto)
+    manager.on_preload_changed(cue, False)
+    assert "c1" in manager._armed
+    assert manager._armed["c1"] == ArmReason.Auto
+
+
+# T12 tests --------------------------------------------------------------
+
+def test_cue_added_arms_if_preload(manager):
+    cue = _make_cue("c1", preload=True)
+    manager.cue_added(cue)
+    assert "c1" in manager._armed
+
+
+def test_cue_added_does_not_arm_if_not_preload(manager):
+    cue = _make_cue("c1", preload=False)
+    manager.cue_added(cue)
+    assert "c1" not in manager._armed
+
+
+def test_cue_added_skips_groupcue(manager):
+    group = _make_cue("g1", preload=True, is_group=True)
+    manager.cue_added(group)
+    assert "g1" not in manager._armed
+
+
+def test_cue_removed_disarms(manager):
+    cue = _make_cue("c1")
+    manager._try_arm(cue, ArmReason.Auto)
+    manager.cue_removed(cue)
+    assert "c1" not in manager._armed
+    cue.media.disarm.assert_called_once()
+
+
+def test_cue_removed_clears_failure_record(manager):
+    cue = _make_cue("c1", preload=True)
+    cue.media.prearm.return_value = False
+    manager._try_arm(cue, ArmReason.Preload)
+    assert "c1" in manager._failed
+    manager.cue_removed(cue)
+    assert "c1" not in manager._failed
+
+
+def test_mtime_change_triggers_rearm_on_visit(manager):
+    cue = _make_cue("c1", preload=True)
+    cue.media.input_uri.return_value = MagicMock(
+        is_local=True, absolute_path="/tmp/fake.wav",
+    )
+    # Stub _cue_mtime: arm captures 100.0, check sees 200.0 (triggers
+    # re-arm), re-arm captures 200.0.
+    times = iter([100.0, 200.0, 200.0])
+    manager._cue_mtime = lambda c: next(times)
+    manager._try_arm(cue, ArmReason.Preload)
+    cue.media.disarm.reset_mock()
+    cue.media.prearm.reset_mock()
+    manager.maybe_rearm_for_mtime(cue)
+    cue.media.disarm.assert_called_once()
+    cue.media.prearm.assert_called_once()
+
+
+def test_mtime_no_change_does_not_rearm(manager):
+    cue = _make_cue("c1", preload=True)
+    cue.media.input_uri.return_value = MagicMock(
+        is_local=True, absolute_path="/tmp/fake.wav",
+    )
+    # Same mtime every call
+    manager._cue_mtime = lambda c: 100.0
+    manager._try_arm(cue, ArmReason.Preload)
+    cue.media.disarm.reset_mock()
+    cue.media.prearm.reset_mock()
+    manager.maybe_rearm_for_mtime(cue)
+    cue.media.disarm.assert_not_called()
+    cue.media.prearm.assert_not_called()
+
+
+def test_mtime_check_noop_when_not_armed(manager):
+    cue = _make_cue("c1")
+    manager._cue_mtime = lambda c: 100.0
+    manager.maybe_rearm_for_mtime(cue)  # not in _armed
+    cue.media.disarm.assert_not_called()

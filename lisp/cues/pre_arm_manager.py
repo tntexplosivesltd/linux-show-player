@@ -110,6 +110,9 @@ class PreArmManager:
             return False
         self._armed[cue.id] = reason
         self._failed.pop(cue.id, None)
+        mtime = self._cue_mtime(cue)
+        if mtime is not None:
+            self._mtime_at_arm[cue.id] = mtime
         self.armed_set_changed.emit()
         return True
 
@@ -205,6 +208,22 @@ class PreArmManager:
             else:
                 self._try_arm(new_cue, ArmReason.Auto)
 
+    def _cue_mtime(self, cue):
+        """Return the mtime (float seconds) of the cue's source file,
+        or None if not a local file, doesn't exist, or any error.
+        """
+        try:
+            from pathlib import Path
+            uri = cue.media.input_uri()
+            if uri is None or not getattr(uri, "is_local", False):
+                return None
+            path = Path(uri.absolute_path)
+            if not path.exists():
+                return None
+            return path.stat().st_mtime
+        except Exception:
+            return None
+
     def _cue_by_id(self, cue_id: str):
         """Look up a cue by id. Returns None if not in the model.
 
@@ -237,6 +256,78 @@ class PreArmManager:
         """
         if getattr(cue, "preload", False) and self._eligible(cue):
             self._try_arm(cue, ArmReason.Preload)
+
+    # --- T11: Edit invalidation ---------------------------------------
+
+    def on_uri_changed(self, cue) -> None:
+        """Armed cue's URI changed — full re-arm.
+
+        Spec: targeted invalidation. Different file ⇒ different decoder
+        ⇒ teardown and rebuild. Reason mask is preserved.
+        """
+        if cue.id not in self._armed:
+            return
+        reason = self._armed[cue.id]
+        self._disarm(cue)
+        self._try_arm(cue, reason)
+
+    def on_start_time_changed(self, cue) -> None:
+        """Armed cue's start_time changed — re-seek (no teardown).
+
+        Spec: GstMedia.reseek() is cheap relative to a full pre-arm
+        cycle.
+        """
+        if cue.id not in self._armed:
+            return
+        try:
+            cue.media.reseek(cue.start_time)
+        except Exception as exc:
+            logger.warning(
+                "PreArmManager: reseek failed for %s: %s", cue.id, exc
+            )
+
+    def on_preload_changed(self, cue, new_value: bool) -> None:
+        """User toggled the preload checkbox.
+
+        True → add Preload reason (which arms the cue if not already).
+        False → remove Preload reason (downgrades to Auto if also Auto,
+        full-disarms if Preload-only).
+        """
+        if new_value:
+            if self._eligible(cue):
+                self._add_reason(cue, ArmReason.Preload)
+        else:
+            self._remove_reason(cue, ArmReason.Preload)
+
+    # --- T12: Add/remove + mtime --------------------------------------
+
+    def cue_added(self, cue) -> None:
+        """A new cue entered the model — arm if marked preload."""
+        if getattr(cue, "preload", False) and self._eligible(cue):
+            self._try_arm(cue, ArmReason.Preload)
+
+    def cue_removed(self, cue) -> None:
+        """A cue was removed from the model — disarm + clean up state."""
+        self._disarm(cue)
+        self._failed.pop(cue.id, None)
+
+    def maybe_rearm_for_mtime(self, cue) -> None:
+        """Check if the cue's source file has been modified since the
+        cue was armed. If so, re-arm.
+
+        No active polling — this is called only at "should I arm/keep-
+        armed?" decision points (standby visit, post-stop re-arm, etc.).
+        """
+        if cue.id not in self._armed:
+            return
+        old = self._mtime_at_arm.get(cue.id)
+        new = self._cue_mtime(cue)
+        if old is None or new is None:
+            return
+        if new > old:
+            reason = self._armed[cue.id]
+            self._disarm(cue)
+            self._try_arm(cue, reason)
 
     # --- Failure tracking ---------------------------------------------
 
