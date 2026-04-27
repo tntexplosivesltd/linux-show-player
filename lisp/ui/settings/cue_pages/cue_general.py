@@ -51,38 +51,22 @@ from lisp.ui.themes.base import CUE_COLOR_NAMES
 from lisp.ui.widgets.cue_color_palette import CueColorPalette
 
 
-def _hex_to_color_name(hex_color: str) -> str:
-    """Snap a stored background hex to the nearest canonical palette name.
+def _hex_to_canonical_name(bg_hex: str) -> str:
+    """Return the canonical color name if ``bg_hex`` is an exact match
+    for a palette entry, else ``""``.
 
-    Returns the canonical name (e.g. ``"Red"``) of the closest palette
-    entry by RGB-Euclidean distance, or ``""`` if ``hex_color`` is empty
-    or not a valid ``#RRGGBB`` string.
-
-    This replicates the old ``snap_to_palette`` behaviour at the load
-    path so legacy sessions migrate silently on the next save.  Task 15
-    will replace this bridge with the full ``color_name`` property path.
+    Exact matching is case-insensitive (``#C03A2A`` and ``#c03a2a`` both
+    map to ``"Red"``). Non-palette hexes return ``""`` to signal the
+    caller to use ``setCustomHex()`` — preserving the legacy hex
+    without snap-migration.
     """
-    import re as _re
-    _hex_pat = _re.compile(r"^#[0-9A-Fa-f]{6}$")
-    if not hex_color or not _hex_pat.match(hex_color):
+    if not bg_hex:
         return ""
-
-    def _rgb(h):
-        return (int(h[1:3], 16), int(h[3:5], 16), int(h[5:7], 16))
-
-    tr, tg, tb = _rgb(hex_color)
-    best_name = ""
-    best_dist = None
+    bg_hex_upper = bg_hex.upper()
     for name in CUE_COLOR_NAMES:
-        entry_hex = themes.cue_color_hex(name)
-        if not entry_hex:
-            continue
-        er, eg, eb = _rgb(entry_hex)
-        dist = (tr - er) ** 2 + (tg - eg) ** 2 + (tb - eb) ** 2
-        if best_dist is None or dist < best_dist:
-            best_dist = dist
-            best_name = name
-    return best_name
+        if themes.cue_color_hex(name).upper() == bg_hex_upper:
+            return name
+    return ""
 
 
 def make_flat_group():
@@ -506,12 +490,19 @@ class CueGeneralSettingsPage(CueSettingsPage):
             self.cueDescriptionEdit.setPlainText(settings["description"])
         if "stylesheet" in settings:
             style = css_to_dict(settings["stylesheet"])
-            # Convert the stored hex to the nearest canonical palette
-            # name (snaps legacy near-palette hex on load so sessions
-            # migrate silently on next save).  Task 15 will replace this
-            # bridge with the full color_name property path.
             bg_hex = style.get("background", "")
-            self.colorPalette.setColor(_hex_to_color_name(bg_hex))
+            canonical = _hex_to_canonical_name(bg_hex)
+            if canonical:
+                self.colorPalette.setColor(canonical)
+            elif bg_hex:
+                # Legacy custom hex (not in the canonical palette).
+                # Show "no swatch selected" annotated with the hex; the
+                # cue's color is preserved verbatim until the user
+                # explicitly picks a palette swatch (graduating it to
+                # themed mode).
+                self.colorPalette.setCustomHex(bg_hex)
+            else:
+                self.colorPalette.setColor("")
             if "font-size" in style:
                 # [:-2] strips the trailing "pt"
                 self.fontSizeSpin.setValue(int(style["font-size"][:-2]))

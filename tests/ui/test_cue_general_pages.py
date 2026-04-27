@@ -24,6 +24,7 @@ from lisp.ui.settings.cue_pages.cue_general import (
     CueGeneralSettingsPage,
     CueTimingPage,
 )
+from lisp.ui.ui_utils import css_to_dict
 
 
 @pytest.fixture(autouse=True)
@@ -114,23 +115,29 @@ class TestCueGeneralSettingsPageRoundTrip:
         assert "background:#C03A2A" in css
         assert "color:" not in css
 
-    def test_legacy_non_palette_background_snaps_on_save(self, qtbot):
-        # Sessions written before the palette existed may carry
-        # arbitrary hex. loadSettings must snap to the nearest palette
-        # entry so the very next save lands within the contract —
-        # without this, legacy sessions silently produce non-palette
-        # output that the inspector can't edit.
-        page = CueGeneralSettingsPage(MediaCue)
+    def test_legacy_non_palette_background_preserved_on_save(
+        self, qtbot
+    ):
+        """Legacy custom hex (not in canonical palette) must be
+        preserved verbatim on save — no silent migration. The picker
+        shows the hex as a custom annotation; the cue's color is
+        untouched until the user explicitly picks a swatch."""
+        page = CueGeneralSettingsPage(Cue)
         qtbot.addWidget(page)
 
-        # #C13B2B is one unit off red on each channel — must snap to
-        # the Red palette entry.
-        page.loadSettings(
-            {"stylesheet": "background:#C13B2B;font-size:12pt;"}
-        )
+        # Load a cue with a custom hex that's NOT in the palette.
+        page.loadSettings({
+            "stylesheet": "background: #A0413A",
+        })
 
-        css = page.getSettings()["stylesheet"]
-        assert "background:#C03A2A" in css
+        # The picker should show "no swatch selected" + the hex
+        assert page.colorPalette.color() == ""
+        assert page.colorPalette.customHex() == "#A0413A"
+
+        # Saving without any user edit must round-trip the same hex
+        saved = page.getSettings()
+        style = css_to_dict(saved["stylesheet"])
+        assert style.get("background") == "#A0413A"
 
     def test_empty_load_does_not_crash(self, qtbot):
         page = CueGeneralSettingsPage(MediaCue)
