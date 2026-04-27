@@ -38,3 +38,35 @@ class TestCueColorName:
         cue = Cue(mock_app)
         cue.update_properties({"color_name": "Green"})
         assert cue.color_name == "Green"
+
+
+class TestCueBackgroundHex:
+    """Integration: cue_background_hex resolves correctly on real Cue
+    objects (vs Task 4's tests which used MagicMock)."""
+
+    def test_themed_takes_precedence(self, mock_app):
+        from lisp.ui.themes import cue_background_hex
+        from lisp.ui.themes.base import DEFAULT_CUE_PALETTE
+        cue = Cue(mock_app)
+        cue.color_name = "Red"
+        cue.stylesheet = "background: #aabbcc"
+        # Without applying any theme, falls back to DEFAULT_CUE_PALETTE
+        assert cue_background_hex(cue) == DEFAULT_CUE_PALETTE["Red"]
+
+    def test_legacy_hex_when_no_color_name(self, mock_app):
+        from lisp.ui.themes import cue_background_hex
+        cue = Cue(mock_app)
+        cue.stylesheet = "background: #aabbcc"
+        assert cue_background_hex(cue) == "#aabbcc"
+
+    def test_empty_when_neither(self, mock_app):
+        from lisp.ui.themes import cue_background_hex
+        cue = Cue(mock_app)
+        assert cue_background_hex(cue) == ""
+
+    def test_legacy_hex_with_other_css(self, mock_app):
+        """Other CSS keys don't affect the lookup — they coexist."""
+        from lisp.ui.themes import cue_background_hex
+        cue = Cue(mock_app)
+        cue.stylesheet = "color: #fff; background: #aabbcc; font-size: 14px"
+        assert cue_background_hex(cue) == "#aabbcc"
