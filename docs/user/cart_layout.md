@@ -50,6 +50,10 @@ with `View > Show Inspector` or ``[F4]``.
 
 Cues can be selected/deselected for multi-cue editing with `Right-Click > Select` or `CTRL+Left-Click`.
 
+Cues with their *Enabled* checkbox unticked render their cell dimmed.
+Disabled cues are skipped by GO, *next-action* chains, and group
+playback. See [Enabled](cues/index.md#enabled) for the full behaviour.
+
 ### Move and Copy Cues
 
 Cues can be copied or moved (into free spaces) inside a page or between different pages:

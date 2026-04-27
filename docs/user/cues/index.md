@@ -30,6 +30,7 @@ A cue can be in different **states**:
 ![paused](../_static/icons/led-pause.svg){.align-middle} **Paused:** the cue has been paused (e.g. audio paused)<br>
   **Pre wait:** the pre-wait has been paused<br>
   **Post wait:** the post-wait has been paused<br>
+**Hibernating:** the cue is paused and tagged as *hibernating* — see [Fade & Stop](action_cues.md#fade--stop) for how this state is entered. Resuming or stopping the cue clears the hibernating tag automatically.<br>
 ![error](../_static/icons/led-error.svg){.align-middle} **Error:** some error has occurred on the cue (e.g. audio file missing)
 
 Some cue will run its task instantaneously, for those cues the "running" state will be imperceptible.
@@ -137,6 +138,22 @@ exclusive mode and can still run alongside an exclusive media cue.
 This is useful when overlapping playback would cause problems — for
 example, ensuring only one background music track plays at a time, or
 preventing sound effects from overlapping with announcements.
+
+### Enabled
+
+Cues can be temporarily disabled without removing them from the show.
+
+* **Cue is enabled:** When unchecked, the cue is skipped by `GO`,
+  by *next-action* / *trigger-after* chains, by standby advance, and
+  by group playback (Parallel and Playlist).
+* Disabling a **Group Cue** cascades to every child — disabled groups'
+  children are also skipped.
+* Disabling a cue mid-playback does not interrupt the cue that is
+  already running; the next attempt to start it will be skipped.
+* In the layout, disabled cues are rendered dimmed so the *enabled*
+  set of the show is visible at a glance.
+
+[screenshot: Enabled checkbox in the inspector, plus a list-layout view showing one disabled cue rendered dimmed]
 
 ## Editing multiple cues
 
