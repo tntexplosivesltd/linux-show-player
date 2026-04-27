@@ -38,11 +38,11 @@ class TestResumeCueDefaults:
             "action" not in type(cue).__dict__
 
     def test_default_icon(self, mock_app):
-        """Icon theme ships no "action-resume" glyph; "action-play"
-        matches the semantic (resume = play from paused) and keeps the
-        cue recognisable in the list."""
+        """ResumeCue performs a fade-in then resume, so the default
+        icon is "fade-play" (envelope wedge + play triangle) rather
+        than the plain "action-play" glyph."""
         cue = ResumeCue(app=mock_app)
-        assert cue.icon == "action-play"
+        assert cue.icon == "fade-play"
 
 
 class TestAutoName:

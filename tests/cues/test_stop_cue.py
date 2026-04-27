@@ -38,7 +38,7 @@ class TestStopCueDefaults:
 
     def test_default_icon(self, mock_app):
         cue = StopCue(app=mock_app)
-        assert cue.icon == "action-stop"
+        assert cue.icon == "fade-stop"
 
 
 class TestTargetResolution:

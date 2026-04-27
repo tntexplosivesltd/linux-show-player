@@ -43,10 +43,10 @@ class TestUriVideoCueFactory:
         cue = factory(mock_app)
         assert cue.media.element("VideoSink") is not None
 
-    def test_sets_film_icon(self, mock_app):
+    def test_sets_camera_icon(self, mock_app):
         factory = UriVideoCueFactory(BASE_VIDEO_PIPE)
         cue = factory(mock_app)
-        assert cue.icon == "film"
+        assert cue.icon == "camera"
 
     def test_sets_uri_when_given(self, mock_app):
         factory = UriVideoCueFactory(BASE_VIDEO_PIPE)
@@ -80,10 +80,10 @@ class TestUriImageCueFactory:
         factory = UriImageCueFactory(BASE_IMAGE_PIPE, duration=3000)
         assert factory._duration == 3000
 
-    def test_sets_camera_icon(self, mock_app):
+    def test_sets_image_icon(self, mock_app):
         factory = UriImageCueFactory(BASE_IMAGE_PIPE)
         cue = factory(mock_app)
-        assert cue.icon == "camera"
+        assert cue.icon == "image"
 
     def test_propagates_duration_to_element(self, mock_app):
         factory = UriImageCueFactory(BASE_IMAGE_PIPE, duration=2500)

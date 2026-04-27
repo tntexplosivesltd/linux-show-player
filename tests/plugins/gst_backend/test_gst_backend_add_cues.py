@@ -101,7 +101,7 @@ class TestAddVideoCueFromFiles:
         cmd = backend.app.commands_stack.do.call_args.args[0]
         cue = _first_cue_in_command(cmd)
         assert cue.media.elements.UriAvInput is not None
-        assert cue.icon == "film"
+        assert cue.icon == "camera"
 
     def test_uri_propagates_to_element(self):
         backend = _make_backend()
@@ -145,7 +145,7 @@ class TestAddImageCueFromFiles:
         cmd = backend.app.commands_stack.do.call_args.args[0]
         cue = _first_cue_in_command(cmd)
         assert cue.media.elements.ImageInput is not None
-        assert cue.icon == "camera"
+        assert cue.icon == "image"
 
     def test_cue_name_is_filename_without_extension(self):
         backend = _make_backend()
