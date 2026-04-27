@@ -20,6 +20,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from lisp.cues.pre_arm_manager import PreArmManager, ArmReason
+from lisp.ui.widgets.notification import NotificationLevel
 
 
 def _config_returner(overrides=None):
@@ -536,6 +537,7 @@ def test_single_preload_failure_emits_per_cue_toast(manager, mock_app):
     assert mock_app.notify.emit.call_count == 1
     args, _ = mock_app.notify.emit.call_args
     assert "Opening Music" in args[0]
+    assert args[1] == NotificationLevel.Warning
 
 
 def test_multiple_preload_failures_emit_summary(manager, mock_app):
@@ -555,6 +557,7 @@ def test_multiple_preload_failures_emit_summary(manager, mock_app):
     args, _ = mock_app.notify.emit.call_args
     assert "3" in args[0]
     assert "preload" in args[0].lower()
+    assert args[1] == NotificationLevel.Warning
 
 
 def test_auto_only_failure_emits_no_toast(manager, mock_app):
@@ -583,6 +586,7 @@ def test_midshow_preload_failure_emits_direct_toast(manager, mock_app):
     assert mock_app.notify.emit.call_count == 1
     args, _ = mock_app.notify.emit.call_args
     assert "Sting 3" in args[0]
+    assert args[1] == NotificationLevel.Warning
 
 
 def test_cap_refusal_silent_when_failOnCapHit_false(manager_factory, mock_app):
@@ -618,6 +622,44 @@ def test_cap_refusal_emits_toast_when_failOnCapHit_true(
     assert mock_app.notify.emit.call_count == 1
     args, _ = mock_app.notify.emit.call_args
     assert "Cap Hit Cue" in args[0]
+    assert args[1] == NotificationLevel.Warning
+
+
+def test_midshow_preload_failure_uses_id_when_name_missing(manager, mock_app):
+    """If a cue lacks a meaningful name (or has empty string),
+    the toast falls back to the cue id rather than producing
+    "Failed to preload \"\": ...".
+    """
+    cue = _make_cue("c1", preload=True)
+    cue.name = ""  # falsy
+    cue.media.prearm.return_value = False
+    manager._try_arm(cue, ArmReason.Preload)
+    assert mock_app.notify.emit.call_count == 1
+    args, _ = mock_app.notify.emit.call_args
+    assert '"c1"' in args[0]
+
+
+def test_safe_decorator_swallows_exceptions(manager, mock_app, caplog):
+    """Public method decorated with @_safe must not propagate
+    exceptions. Per spec design rule 4: 'No exception leaks out
+    of the manager.'
+    """
+    import logging
+
+    # Force standby_changed to raise by giving it a cue whose
+    # _eligible() check explodes (simulate a corrupted cue).
+    bad_cue = MagicMock()
+    bad_cue.id = "bad"
+    # Accessing .media raises
+    type(bad_cue).media = property(
+        lambda self: (_ for _ in ()).throw(RuntimeError("boom"))
+    )
+    with caplog.at_level(logging.ERROR, logger="lisp.cues.pre_arm_manager"):
+        # Should NOT raise
+        manager.standby_changed(bad_cue)
+    assert any(
+        "standby_changed" in r.message for r in caplog.records
+    )
 
 
 def test_no_failures_no_toast(manager, mock_app):

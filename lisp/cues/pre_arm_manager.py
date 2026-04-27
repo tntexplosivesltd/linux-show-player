@@ -15,6 +15,7 @@
 # You should have received a copy of the GNU General Public License
 # along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
+import functools
 import logging
 from enum import Flag, auto
 from pathlib import Path
@@ -23,6 +24,28 @@ from lisp.core.signal import Signal
 from lisp.ui.widgets.notification import NotificationLevel
 
 logger = logging.getLogger(__name__)
+
+
+def _safe(method):
+    """Decorator: catches and logs exceptions in PreArmManager public
+    methods. The manager is glue between subsystems; per spec design
+    rule 4 ('No exception leaks out of the manager'), it must never
+    crash the show. ERROR-log with the method name and traceback,
+    return None.
+    """
+
+    @functools.wraps(method)
+    def _wrapper(self, *args, **kwargs):
+        try:
+            return method(self, *args, **kwargs)
+        except Exception:
+            logger.error(
+                "PreArmManager.%s raised", method.__name__,
+                exc_info=True,
+            )
+            return None
+
+    return _wrapper
 
 
 class ArmReason(Flag):
@@ -167,6 +190,7 @@ class PreArmManager:
 
     # --- Lifecycle hooks ----------------------------------------------
 
+    @_safe
     def session_loaded(self, *_args) -> None:
         """Called when a session finishes loading. Arms preload-marked
         cues first (priority), then attempts to arm the standby cue.
@@ -211,7 +235,8 @@ class PreArmManager:
         if len(failures) == 1:
             cue = failures[0]
             category = self._failed.get(cue.id, "preload failed")
-            message = f'Failed to preload "{cue.name}": {category}'
+            name = self._cue_display_name(cue)
+            message = f'Failed to preload "{name}": {category}'
         else:
             message = (
                 f"Failed to preload {len(failures)} cues — "
@@ -244,9 +269,24 @@ class PreArmManager:
         Always direct, never batched. Caller decides when to use this vs
         the batched session-load path.
         """
-        message = f'Failed to preload "{cue.name}": {category}'
+        name = self._cue_display_name(cue)
+        message = f'Failed to preload "{name}": {category}'
         self._app.notify.emit(message, NotificationLevel.Warning)
 
+    @staticmethod
+    def _cue_display_name(cue) -> str:
+        """Return a non-empty display name for a cue, falling back to
+        the cue id if `name` is missing or empty. A cue is normally
+        born with a default name, but a freshly-created cue or a test
+        mock may lack one — defensive enough to not produce empty
+        quoted strings in toasts.
+        """
+        name = getattr(cue, "name", None)
+        if name:
+            return name
+        return getattr(cue, "id", "<unknown>")
+
+    @_safe
     def standby_changed(self, new_cue) -> None:
         """Called when the active layout's standby cursor moves.
 
@@ -309,6 +349,7 @@ class PreArmManager:
         except Exception:
             return None
 
+    @_safe
     def cue_executed(self, cue) -> None:
         """Called when a cue is fired. The cue is now Playing, so it
         leaves the armed set.
@@ -318,6 +359,7 @@ class PreArmManager:
             self._mtime_at_arm.pop(cue.id, None)
             self.armed_set_changed.emit()
 
+    @_safe
     def on_cue_stopped(self, cue) -> None:
         """Called when a cue stops/ends/is interrupted/errors. If marked
         preload, re-arm immediately. Otherwise no-op.
@@ -327,6 +369,7 @@ class PreArmManager:
 
     # --- T11: Edit invalidation ---------------------------------------
 
+    @_safe
     def on_uri_changed(self, cue) -> None:
         """Armed cue's URI changed — full re-arm.
 
@@ -339,6 +382,7 @@ class PreArmManager:
         self._disarm(cue)
         self._try_arm(cue, reason)
 
+    @_safe
     def on_start_time_changed(self, cue) -> None:
         """Armed cue's start_time changed — re-seek (no teardown).
 
@@ -354,6 +398,7 @@ class PreArmManager:
                 "PreArmManager: reseek failed for %s: %s", cue.id, exc
             )
 
+    @_safe
     def on_preload_changed(self, cue, new_value: bool) -> None:
         """User toggled the preload checkbox.
 
@@ -369,16 +414,19 @@ class PreArmManager:
 
     # --- T12: Add/remove + mtime --------------------------------------
 
+    @_safe
     def cue_added(self, cue) -> None:
         """A new cue entered the model — arm if marked preload."""
         if getattr(cue, "preload", False) and self._eligible(cue):
             self._try_arm(cue, ArmReason.Preload)
 
+    @_safe
     def cue_removed(self, cue) -> None:
         """A cue was removed from the model — disarm + clean up state."""
         self._disarm(cue)
         self._failed.pop(cue.id, None)
 
+    @_safe
     def maybe_rearm_for_mtime(self, cue) -> None:
         """Check if the cue's source file has been modified since the
         cue was armed. If so, re-arm.
