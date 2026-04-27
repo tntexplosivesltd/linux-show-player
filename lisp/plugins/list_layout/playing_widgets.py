@@ -39,6 +39,7 @@ from lisp.cues.cue import CueAction
 from lisp.cues.cue_time import CueTime
 from lisp.cues.media_cue import MediaCue
 from lisp.plugins.list_layout.control_buttons import CueControlButtons
+from lisp.ui.themes import cue_background_hex
 from lisp.ui.ui_utils import css_to_dict
 from lisp.ui.widgets import QClickSlider
 from lisp.ui.widgets.elidedlabel import ElidedLabel
@@ -282,7 +283,7 @@ class RunningCueWidget(QWidget):
         self._apply_stylesheet_color()
 
     def _apply_stylesheet_color(self):
-        background = css_to_dict(self.cue.stylesheet).get("background", "")
+        background = cue_background_hex(self.cue)
         self.colorStripe.setColor(background)
 
     def set_accurate_time(self, enable):
