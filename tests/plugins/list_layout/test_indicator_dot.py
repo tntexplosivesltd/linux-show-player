@@ -20,6 +20,10 @@
 import pytest
 from unittest.mock import MagicMock, patch
 
+from PyQt5 import QtGui
+from PyQt5.QtCore import QEvent, QPoint
+from PyQt5.QtGui import QHelpEvent
+
 from lisp.core.signal import Signal
 from lisp.cues.cue import Cue
 from lisp.cues.cue_model import CueModel
@@ -171,7 +175,7 @@ class TestPaintIndicators:
             failed={cue_id: "file not found"}
         )
         view = _build_view(mock_app, mgr=mgr)
-        cue = _add_cue(view, mock_app, cue_id=cue_id, preload=True)
+        _add_cue(view, mock_app, cue_id=cue_id, preload=True)
 
         view.resize(600, 400)
         qtbot.addWidget(view)
@@ -198,27 +202,22 @@ class TestPaintIndicators:
         view.show()
         qtbot.waitExposed(view)
 
+        orig_painter_cls = QtGui.QPainter
         draw_calls = []
+
+        class _SpyPainter(orig_painter_cls):
+            def drawEllipse(self, *args, **kwargs):
+                draw_calls.append(args)
+                return super().drawEllipse(*args, **kwargs)
+
         with patch(
             "lisp.plugins.list_layout.list_view.Application",
             return_value=view._fake_app,
+        ), patch(
+            "lisp.plugins.list_layout.list_view.QPainter",
+            _SpyPainter,
         ):
-            # Intercept drawEllipse to assert it is NOT called
-            from unittest.mock import patch as _patch
-            import PyQt5.QtGui as _QtGui
-
-            orig_painter_cls = _QtGui.QPainter
-
-            class _SpyPainter(orig_painter_cls):
-                def drawEllipse(self, *args, **kwargs):
-                    draw_calls.append(args)
-                    return super().drawEllipse(*args, **kwargs)
-
-            with _patch(
-                "lisp.plugins.list_layout.list_view.QPainter",
-                _SpyPainter,
-            ):
-                view.viewport().repaint()
+            view.viewport().repaint()
 
         assert not draw_calls, (
             "drawEllipse must NOT be called for a non-preload failed cue"
@@ -239,3 +238,102 @@ class TestPaintIndicators:
             return_value=view._fake_app,
         ):
             view.viewport().repaint()
+
+
+class TestTooltip:
+    """viewportEvent must show failure reason tooltip only inside the dot."""
+
+    def _make_help_event(self, view, item, offset_x=0, offset_y=0):
+        """Return a QHelpEvent positioned relative to the dot centre."""
+        row_rect = view.visualItemRect(item)
+        dot_cx = row_rect.left() + CueListView.INDICATOR_CX
+        dot_cy = row_rect.center().y()
+        local_pt = QPoint(dot_cx + offset_x, dot_cy + offset_y)
+        global_pt = view.viewport().mapToGlobal(local_pt)
+        return QHelpEvent(QEvent.ToolTip, local_pt, global_pt)
+
+    def test_hover_inside_dot_shows_tooltip(
+        self, qapp, qtbot, mock_app,
+    ):
+        """A QHelpEvent inside the dot circle triggers QToolTip.showText
+        with the failure reason."""
+        cue_id = "fail-cue-tt"
+        reason = "audio decoder error"
+        mgr = _make_fake_manager(failed={cue_id: reason})
+        view = _build_view(mock_app, mgr=mgr)
+        cue = _add_cue(view, mock_app, cue_id=cue_id, preload=True)
+        view.resize(600, 400)
+        qtbot.addWidget(view)
+        view.show()
+        qtbot.waitExposed(view)
+
+        item = view.cueItemAt(cue.index)
+        event = self._make_help_event(view, item, offset_x=0, offset_y=0)
+
+        with patch(
+            "lisp.plugins.list_layout.list_view.Application",
+            return_value=view._fake_app,
+        ), patch(
+            "lisp.plugins.list_layout.list_view.QToolTip.showText"
+        ) as mock_show:
+            view.viewportEvent(event)
+
+        mock_show.assert_called_once()
+        call_args = mock_show.call_args
+        assert call_args[0][1] == reason, (
+            "QToolTip.showText must be called with the failure reason"
+        )
+
+    def test_hover_outside_dot_does_not_show_tooltip(
+        self, qapp, qtbot, mock_app,
+    ):
+        """A QHelpEvent far from the dot must not trigger QToolTip.showText."""
+        cue_id = "fail-cue-outside"
+        mgr = _make_fake_manager(failed={cue_id: "some error"})
+        view = _build_view(mock_app, mgr=mgr)
+        cue = _add_cue(view, mock_app, cue_id=cue_id, preload=True)
+        view.resize(600, 400)
+        qtbot.addWidget(view)
+        view.show()
+        qtbot.waitExposed(view)
+
+        item = view.cueItemAt(cue.index)
+        # Use a large x offset to land well outside the dot radius
+        event = self._make_help_event(view, item, offset_x=200, offset_y=0)
+
+        with patch(
+            "lisp.plugins.list_layout.list_view.Application",
+            return_value=view._fake_app,
+        ), patch(
+            "lisp.plugins.list_layout.list_view.QToolTip.showText"
+        ) as mock_show:
+            view.viewportEvent(event)
+
+        mock_show.assert_not_called()
+
+    def test_hover_on_non_preload_failed_cue_does_not_show_tooltip(
+        self, qapp, qtbot, mock_app,
+    ):
+        """Failed cue with preload=False must not show tooltip even if cursor
+        is inside the dot position."""
+        cue_id = "non-preload-fail"
+        mgr = _make_fake_manager(failed={cue_id: "pipeline error"})
+        view = _build_view(mock_app, mgr=mgr)
+        cue = _add_cue(view, mock_app, cue_id=cue_id, preload=False)
+        view.resize(600, 400)
+        qtbot.addWidget(view)
+        view.show()
+        qtbot.waitExposed(view)
+
+        item = view.cueItemAt(cue.index)
+        event = self._make_help_event(view, item, offset_x=0, offset_y=0)
+
+        with patch(
+            "lisp.plugins.list_layout.list_view.Application",
+            return_value=view._fake_app,
+        ), patch(
+            "lisp.plugins.list_layout.list_view.QToolTip.showText"
+        ) as mock_show:
+            view.viewportEvent(event)
+
+        mock_show.assert_not_called()

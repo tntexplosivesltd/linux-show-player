@@ -125,6 +125,7 @@ class CueListView(QTreeWidget):
     INDICATOR_GREEN = QColor("#3E8A3B")
     INDICATOR_RED = QColor("#C03A2A")
     INDICATOR_RADIUS = 4
+    INDICATOR_CX = INDICATOR_RADIUS * 2  # x-offset of dot centre from row's left edge
 
     def __init__(self, listModel, parent=None):
         """
@@ -278,11 +279,13 @@ class CueListView(QTreeWidget):
                         and getattr(cue, "preload", False)
                     ):
                         row_rect = self.visualItemRect(item)
-                        dot_cx = row_rect.left() + 8
+                        dot_cx = row_rect.left() + self.INDICATOR_CX
                         dot_cy = row_rect.center().y()
+                        dx = pos.x() - dot_cx
+                        dy = pos.y() - dot_cy
                         if (
-                            abs(pos.x() - dot_cx) <= self.INDICATOR_RADIUS
-                            and abs(pos.y() - dot_cy) <= self.INDICATOR_RADIUS
+                            dx * dx + dy * dy
+                            <= self.INDICATOR_RADIUS * self.INDICATOR_RADIUS
                         ):
                             QToolTip.showText(
                                 event.globalPos(),
@@ -350,7 +353,7 @@ class CueListView(QTreeWidget):
                 if row_rect.isEmpty():
                     continue
 
-                cx = row_rect.left() + 8
+                cx = row_rect.left() + self.INDICATOR_CX
                 cy = row_rect.center().y()
                 painter.setBrush(QBrush(color))
                 painter.drawEllipse(
