@@ -15,6 +15,8 @@
 # You should have received a copy of the GNU General Public License
 # along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
+import logging
+
 from PyQt5.QtCore import (
     pyqtSignal,
     Qt,
@@ -54,6 +56,8 @@ from lisp.plugins.list_layout.list_widgets import (
     IndexWidget,
 )
 from lisp.ui.ui_utils import translate, css_to_dict, dict_to_css
+
+logger = logging.getLogger(__name__)
 
 
 class ListColumn:
@@ -150,6 +154,14 @@ class CueListView(QTreeWidget):
         mgr = getattr(Application(), "pre_arm_manager", None)
         if mgr is not None:
             mgr.armed_set_changed.connect(self._on_armed_set_changed)
+            logger.debug(
+                "CueListView: subscribed to pre_arm_manager.armed_set_changed"
+            )
+        else:
+            logger.debug(
+                "CueListView: no pre_arm_manager on Application — "
+                "indicator dots disabled"
+            )
 
         # Setup the columns headers
         self.setHeaderLabels((c.name for c in CueListView.COLUMNS))
@@ -263,6 +275,9 @@ class CueListView(QTreeWidget):
 
     def _on_armed_set_changed(self):
         """Repaint viewport when the pre-arm set changes."""
+        logger.debug(
+            "CueListView: armed_set_changed — repainting viewport"
+        )
         self.viewport().update()
 
     def viewportEvent(self, event):

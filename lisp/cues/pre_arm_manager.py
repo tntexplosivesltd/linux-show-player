@@ -218,11 +218,18 @@ class PreArmManager:
         If the cue is already armed, OR-merges the reason and returns
         True. If not eligible or cap-blocked, returns False.
         """
+        logger.debug(
+            "PreArmManager: _try_arm cue=%s reason=%s already_armed=%s",
+            cue.id, reason, cue.id in self._armed,
+        )
         if cue.id in self._armed:
             self._armed[cue.id] |= reason
             self.armed_set_changed.emit()
             return True
         if not self._eligible(cue):
+            logger.debug(
+                "PreArmManager: %s not eligible for arming", cue.id
+            )
             return False
         if len(self._armed) >= self._cap:
             logger.info(
@@ -254,6 +261,10 @@ class PreArmManager:
             self._mtime_at_arm[cue.id] = mtime
         self._wire_cue_signals(cue)
         self.armed_set_changed.emit()
+        logger.info(
+            "PreArmManager: armed %s (reason=%s, total armed=%d)",
+            cue.id, reason, len(self._armed),
+        )
         return True
 
     def _disarm(self, cue) -> None:
@@ -271,6 +282,7 @@ class PreArmManager:
         self._armed.pop(cue.id, None)
         self._mtime_at_arm.pop(cue.id, None)
         self.armed_set_changed.emit()
+        logger.info("PreArmManager: disarmed %s", cue.id)
 
     def _add_reason(self, cue, reason: ArmReason) -> None:
         """Add a reason to an already-armed cue. If not armed, attempt
@@ -306,7 +318,20 @@ class PreArmManager:
         (per-cue if 1, summary if >=2).
         """
         if not self._enabled:
+            logger.info(
+                "PreArmManager: session_loaded but pre-arm is disabled"
+            )
             return
+
+        preload_count = sum(
+            1 for c in self._app.cue_model
+            if getattr(c, "preload", False)
+        )
+        logger.info(
+            "PreArmManager: session_loaded — scanning %d cues "
+            "(%d preload-marked)",
+            len(list(self._app.cue_model)), preload_count,
+        )
 
         self._collecting_session_failures = []
         try:
@@ -513,6 +538,10 @@ class PreArmManager:
         False → remove Preload reason (downgrades to Auto if also Auto,
         full-disarms if Preload-only).
         """
+        logger.debug(
+            "PreArmManager: on_preload_changed cue=%s new=%s",
+            cue.id, new_value,
+        )
         if new_value:
             if self._eligible(cue):
                 self._add_reason(cue, ArmReason.Preload)
@@ -524,6 +553,12 @@ class PreArmManager:
     @_safe
     def cue_added(self, cue) -> None:
         """A new cue entered the model — arm if marked preload."""
+        logger.debug(
+            "PreArmManager: cue_added cue=%s preload=%s eligible=%s",
+            cue.id,
+            getattr(cue, "preload", False),
+            self._eligible(cue),
+        )
         if getattr(cue, "preload", False) and self._eligible(cue):
             self._try_arm(cue, ArmReason.Preload)
 
