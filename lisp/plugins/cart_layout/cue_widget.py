@@ -68,6 +68,7 @@ class CueWidget(QWidget):
     contextMenuRequested = pyqtSignal(QPoint)
     cueExecuted = pyqtSignal(object)
     selectedChanged = pyqtSignal()
+    exclusiveSelectRequested = pyqtSignal(object)
 
     def __init__(self, cue, **kwargs):
         super().__init__(**kwargs)
@@ -352,7 +353,13 @@ class CueWidget(QWidget):
             and self.seekSlider.isVisible()
         ):
             if event.button() != Qt.RightButton:
-                if event.modifiers() == Qt.ControlModifier:
+                if event.modifiers() == Qt.ShiftModifier:
+                    # Replaces the legacy "open settings dialog" path.
+                    # The inspector follows layout selection, so the
+                    # widget asks the layout to make this cue the sole
+                    # selection — Ctrl+click stays as additive toggle.
+                    self.exclusiveSelectRequested.emit(self)
+                elif event.modifiers() == Qt.ControlModifier:
                     self.selected = not self.selected
                 elif event.modifiers() == Qt.NoModifier:
                     self._cue.execute()

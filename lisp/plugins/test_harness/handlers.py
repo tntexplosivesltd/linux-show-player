@@ -636,6 +636,92 @@ def register_all(dispatcher, app, signal_manager):
         )
         return {"ok": True}
 
+    def _require_cart_layout():
+        from lisp.plugins.cart_layout.layout import CartLayout
+        if not isinstance(app.layout, CartLayout):
+            raise AppError(
+                "This operation requires CartLayout"
+            )
+
+    def handle_cart_click_cue(params):
+        """Synthesize a click on a cart cell with optional modifiers.
+
+        Drives the same code path the Qt mouse-release handler does
+        (`QClickLabel.clicked` → `CueWidget._clicked`), so this
+        exercises the modifier-dispatch logic end-to-end without
+        needing the window to be visible to the windowing system.
+
+        The synthetic event uses position ``(0, 0)`` — the cell's
+        top-left, which is always outside the seek slider's
+        geometry. That deliberately bypasses `_clicked`'s seek-slider
+        early-out so the modifier branches always run; this handler
+        is not the right tool for testing seek-slider gestures.
+
+        Params:
+          ``cue_id`` (str, optional): cell identified by the cue it holds.
+          ``index`` (int, optional): cell identified by its model index.
+            Either ``cue_id`` or ``index`` is required.
+          ``modifier`` (str, optional): one of ``"none"``, ``"shift"``,
+            ``"ctrl"``. Default ``"none"``.
+        """
+        _require_session()
+        _require_cart_layout()
+
+        cue_id = params.get("cue_id")
+        index = params.get("index")
+        if cue_id is None and index is None:
+            raise AppError("cue_id or index is required")
+
+        modifier_name = (params.get("modifier") or "none").lower()
+
+        from PyQt5.QtCore import QEvent, QPoint, Qt
+        from PyQt5.QtGui import QMouseEvent
+
+        modifier_map = {
+            "none": Qt.NoModifier,
+            "shift": Qt.ShiftModifier,
+            "ctrl": Qt.ControlModifier,
+            "control": Qt.ControlModifier,
+        }
+        if modifier_name not in modifier_map:
+            raise AppError(
+                f"Unknown modifier: {modifier_name}"
+            )
+        modifier = modifier_map[modifier_name]
+
+        def do_click():
+            if cue_id is not None:
+                target_cue = _get_cue(cue_id)
+            else:
+                target_cue = app.layout.cue_at(index)
+                if target_cue is None:
+                    raise AppError(f"No cue at index {index}")
+
+            target_widget = None
+            for page in app.layout.view.pages():
+                for widget in page.widgets():
+                    if widget.cue is target_cue:
+                        target_widget = widget
+                        break
+                if target_widget is not None:
+                    break
+            if target_widget is None:
+                raise AppError(
+                    "No cart widget hosts the requested cue"
+                )
+
+            event = QMouseEvent(
+                QEvent.MouseButtonRelease,
+                QPoint(0, 0),
+                Qt.LeftButton,
+                Qt.LeftButton,
+                modifier,
+            )
+            target_widget.nameButton.clicked.emit(event)
+
+        invoke_on_main_thread(do_click)
+        return {"ok": True}
+
     # --- Commands ---
 
     def handle_commands_undo(params):
@@ -1113,6 +1199,8 @@ def register_all(dispatcher, app, signal_manager):
         "layout.resume_all": handle_layout_resume_all,
         "layout.interrupt_all": handle_layout_interrupt_all,
         "layout.execute_all": handle_layout_execute_all,
+        # Cart layout
+        "cart.click_cue": handle_cart_click_cue,
         # Commands
         "commands.undo": handle_commands_undo,
         "commands.redo": handle_commands_redo,
