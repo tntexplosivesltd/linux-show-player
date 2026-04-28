@@ -48,7 +48,11 @@ def _make_cue(cue_id, preload=False, media_type="Audio", is_group=False):
     cue.id = cue_id
     cue.preload = preload
     cue.media = MagicMock()
-    cue.media.MediaType = media_type
+    # MediaType lives on the first pipeline element (UriInput etc.), not on
+    # the media object itself — mirror the real GstMedia attribute layout.
+    input_element = MagicMock()
+    input_element.MediaType = media_type
+    cue.media.elements = [input_element]
     cue.media.prearm.return_value = True
     cue.media.disarm = MagicMock()
     cue.media.reseek = MagicMock()
@@ -809,3 +813,56 @@ def test_wire_layout_none_is_safe_noop(manager_factory):
     exists; _wire_layout(None) must be silent."""
     manager = manager_factory()
     manager._wire_layout(None)  # no exception, nothing wired
+
+
+# Regression tests — _eligible reads MediaType from input element ----------
+
+
+class TestEligibleRealisticMedia:
+    """Regression: _eligible must read MediaType from the input element
+    (cue.media.elements[0].MediaType), not from cue.media.MediaType
+    directly. The latter does not exist on real GstMedia.
+    """
+
+    def test_eligible_reads_mediatype_from_input_element(self, manager):
+        """Real GstMedia has no MediaType attribute; it lives on the
+        first element of the pipeline (e.g. UriInput.MediaType = MediaType.Audio).
+        """
+        cue = MagicMock()
+        cue.id = "test-cue"
+        type(cue).__name__ = "MediaCue"  # not GroupCue
+
+        # CRITICAL: real GstMedia has no MediaType attribute. Configure
+        # the mock to mirror that — spec=["elements"] strips magic auto-attrs
+        # so getattr(media, "MediaType", None) returns None, just like on
+        # a real GstMedia instance.
+        media = MagicMock(spec=["elements"])
+        input_element = MagicMock()
+        input_element.MediaType = "Audio"
+        media.elements = [input_element]
+        cue.media = media
+
+        assert manager._eligible(cue) is True
+
+    def test_not_eligible_when_input_element_is_video(self, manager):
+        cue = MagicMock()
+        cue.id = "vid-cue"
+        type(cue).__name__ = "MediaCue"
+        media = MagicMock(spec=["elements"])
+        input_element = MagicMock()
+        input_element.MediaType = "Video"
+        media.elements = [input_element]
+        cue.media = media
+
+        assert manager._eligible(cue) is False
+
+    def test_not_eligible_when_pipeline_not_built(self, manager):
+        """A freshly-created cue with no input elements yet is not eligible."""
+        cue = MagicMock()
+        cue.id = "blank-cue"
+        type(cue).__name__ = "MediaCue"
+        media = MagicMock(spec=["elements"])
+        media.elements = []  # empty pipeline
+        cue.media = media
+
+        assert manager._eligible(cue) is False

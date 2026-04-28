@@ -197,9 +197,16 @@ class PreArmManager:
         # GroupCue is not pre-arm-eligible per spec
         if type(cue).__name__ == "GroupCue":
             return False
-        if not hasattr(cue, "media"):
+        media = getattr(cue, "media", None)
+        if media is None:
             return False
-        media_type = getattr(cue.media, "MediaType", None)
+        elements = getattr(media, "elements", None)
+        if not elements:
+            return False  # pipeline not yet built — not eligible
+        try:
+            media_type = getattr(elements[0], "MediaType", None)
+        except (IndexError, TypeError):
+            return False
         # Accept the enum value or the string "Audio" for tests
         try:
             from lisp.backend.media_element import MediaType
