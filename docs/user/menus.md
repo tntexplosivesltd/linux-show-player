@@ -58,6 +58,7 @@ This menu give access to layout functionality and display options for the curren
 ### List Layout
 
 * **Show dB-meters:** Show / hide the db-meters for running media-cues.
+* **Show volume indicators:** Show / hide the live dB level next to running media-cues.
 * **Show seek-bars:** Show / hide seek bars for running media-cues.
 * **Show accurate time:** Show / hide tens of seconds for running media-cues.
 * **Show index column:** Show / hide the cue numbers.

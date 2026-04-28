@@ -58,6 +58,64 @@ To edit a value (Cue, Action) `Double-Click` on it.
 This cue simply stops all the running cues. The "stop" action is
 configured on the **Stop Settings** page in the [inspector](../editing_cues.md).
 
+## Fade & Stop
+
+Stops a single target cue with an optional fade. Use this when a
+specific cue should ramp down rather than stop instantly.
+
+If the cue has no name set, its display name is derived automatically
+from its target and chosen action — e.g. *Stop "Music"*, *Pause "VO 1"*.
+
+### Options (Fade & Stop Settings)
+
+* **Target:** The cue to act on. Click *Click to select* to choose; the
+  current target is shown next to the button.
+* **Action:** What to do once the fade completes:
+    * *Stop* — stop the target.
+    * *Pause* — pause the target. The target can be resumed later.
+    * *Hibernate* — pause the target and tag it as *hibernating*. The
+      cue stays in the playing panel (rendered compactly and dimmed)
+      so it can be brought back later. Resuming or stopping the cue
+      clears the tag automatically. If the target is a Group Cue, the
+      hibernation cascades to its running children.
+    * *Interrupt* — stop the target "quietly" (no Stop fade).
+* **Fade:**
+    * **Duration:** Fade duration in seconds (0 to dispatch the action
+      instantly with no fade).
+    * **Curve:** Fade curve.
+
+[screenshot: Fade & Stop Settings page in the inspector showing Target, Action and Fade groups]
+
+## Fade & Resume
+
+Resumes a single target cue with an optional fade. Pairs with
+Fade & Stop for time-based pause/resume workflows.
+
+If the cue has no name set, its display name is derived automatically
+from its target — e.g. *Resume "Music"*.
+
+The cue dispatches different behaviours based on the target's state:
+
+* **Paused** — dispatches *Resume* and fades the volume up to its
+  previous level.
+* **Hibernating** — same as Paused, with the *hibernating* tag cleared
+  on resume.
+* **Running** — fades the volume up from its current level (no
+  *Resume* action is needed; the cue is already playing).
+* **Stopped / Error** — Fade & Resume reports an error and does
+  nothing.
+
+### Options (Fade & Resume Settings)
+
+* **Target:** The cue to resume. Click *Click to select* to choose;
+  the current target is shown next to the button.
+* **Fade:**
+    * **Duration:** Fade-in duration in seconds (0 to resume instantly
+      with no fade).
+    * **Curve:** Fade curve.
+
+[screenshot: Fade & Resume Settings page in the inspector showing Target and Fade groups]
+
 ## Seek Action
 
 This cue allow to seek a media-cue to a specific point in time.

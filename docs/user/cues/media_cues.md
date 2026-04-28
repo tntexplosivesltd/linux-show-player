@@ -35,8 +35,20 @@ provides fine-grained control on the multimedia source, output and applied effec
 * **Stop time:** End position of the media
 * **Loop:** Number of repetitions after first play (-1 is infinite)
 
-Start/End time allow you to trim the media file without modifications, keep in mind that the UI will keep showing the
-original file duration independently of these options.
+Start/Stop time trim the media file without modifying it.
+
+A **visual waveform trimmer** is shown alongside these fields,
+displaying the audio waveform with draggable handles for the start
+and stop positions. Dragging a handle updates the corresponding
+field, and editing a field repositions the handle. If LiSP cannot
+extract a waveform for the source (some video formats, remote URIs),
+the trimmer falls back to a plain timeline strip with the same
+draggable handles.
+
+[screenshot: Media Cue settings page in the inspector showing the waveform trimmer with start and stop handles]
+
+The trimmer is unavailable for image cues (still images have no
+duration to trim), and when editing multiple media cues at once.
 
 Loops allow to replay the same media multiple times, they _should_ be seamless if the media content is seamless 
 and depending on the media format, `.wav` are usually a safe option.<br>

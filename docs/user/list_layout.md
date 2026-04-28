@@ -58,6 +58,12 @@ details on creating groups and their playback modes.
 * **Auto-expand on play:** Groups automatically expand when they start playing (configurable)
 * Collapse state is saved with the session
 
+A coloured outline is drawn around each group's children to make the
+group boundary visible at a glance:
+
+* **Green** — Parallel group
+* **Orange** — Playlist group
+
 ### Move and Copy Cues
 
 * **Move:** cues can be moved with a simple `Drag&Drop`
@@ -98,6 +104,30 @@ A set of buttons is provided to stop, pause/restart, interrupt and fade each cue
 when the action is supported.<br>
 A seek-bar, showing the audio waveform, allow to change the current playing position.
 
+A **left-edge colour stripe** mirrors the cue's chosen colour (set on
+the Appearance section of the inspector), making it easy to spot
+which cue is playing at a glance.
+
+A **volume indicator** can be displayed next to each running cue,
+showing its current level in dB. Toggle it from
+`Layout > Show volume indicators` (per show), or set the default for
+new sessions in the layout preferences.
+
+### Hibernating cues
+
+Cues paused via Fade & Stop's *Hibernate* action stay in the right
+panel as a compact, dimmed widget — visually distinct from a normal
+paused cue. This makes hibernated cues easy to find when it's time to
+resume them with Fade & Resume. See [Fade & Stop](cues/action_cues.md#fade--stop)
+for details.
+
+### Disabled cues
+
+Cues with their *Enabled* checkbox unticked render dimmed in the cue
+list. They are skipped by `GO`, by *next-action* / *trigger-after*
+chains, by standby advance, and by group playback. See
+[Enabled](cues/index.md#enabled) for the full behaviour.
+
 ## Layout Options
 
 In the application settings (`File > Preferences`) various options are provided:
@@ -107,6 +137,7 @@ In the application settings (`File > Preferences`) various options are provided:
 This can be changed per-show via the `Layout` menu.
 
 * **Show dB-Meters:** show/hide the db-meters for running cues (right panel)
+* **Show volume indicators:** show/hide the live dB level next to running cues (right panel)
 * **Show accurate time:** show/hide tens of seconds for running cues (right panel)
 * **Show seek-bars:** show/hide seek bars for running cues (right panel)
 * **Auto-select next cue:** if enabled the next cue will be selected automatically
