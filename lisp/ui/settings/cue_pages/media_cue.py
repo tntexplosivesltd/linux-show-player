@@ -17,6 +17,7 @@
 
 from PyQt5.QtCore import QT_TRANSLATE_NOOP, QTime, Qt
 from PyQt5.QtWidgets import (
+    QCheckBox,
     QDateTimeEdit,
     QGridLayout,
     QHBoxLayout,
@@ -76,26 +77,31 @@ class MediaCueSettings(SettingsPage):
         self.loopGroup.layout().addWidget(self.spinLoop)
         grid.addWidget(self.loopGroup, 2, 0)
 
+        self.preloadCheckBox = QCheckBox(self)
+        self.preloadCheckBox.setChecked(False)
+        grid.addWidget(self.preloadCheckBox, 3, 0)
+        grid.setRowStretch(3, 0)  # checkbox row does not stretch
+
         # Column 1 reserved for the waveform trimmer. The trimmer is
         # mounted lazily in loadSettings() once the cue's media source
         # (or lack of one) is known. Two placeholder captions live in
         # the same grid cell — only one is ever visible at a time.
         self._waveformSlot = None
-        self._waveformRow = (0, 3)
+        self._waveformRow = (0, 4)
 
         self.placeholderLabel = QLabel("", self)
         self.placeholderLabel.setAlignment(Qt.AlignCenter)
         self.placeholderLabel.setStyleSheet("color: #888;")
         self.placeholderLabel.hide()
-        grid.addWidget(self.placeholderLabel, 0, 1, 3, 1)
+        grid.addWidget(self.placeholderLabel, 0, 1, 4, 1)
 
         self.imagePlaceholder = QLabel("", self)
         self.imagePlaceholder.setAlignment(Qt.AlignCenter)
         self.imagePlaceholder.setStyleSheet("color: #888;")
         self.imagePlaceholder.hide()
-        grid.addWidget(self.imagePlaceholder, 0, 1, 3, 1)
+        grid.addWidget(self.imagePlaceholder, 0, 1, 4, 1)
 
-        grid.setRowStretch(3, 1)
+        grid.setRowStretch(4, 1)
 
         self.trimmer = None
         self._cue = None
@@ -127,6 +133,16 @@ class MediaCueSettings(SettingsPage):
                 "Repetition after first play (-1 = infinite)",
             )
         )
+        self.preloadCheckBox.setText(
+            translate("MediaCueSettings", "Preload at session load")
+        )
+        self.preloadCheckBox.setToolTip(
+            translate(
+                "MediaCueSettings",
+                "Load this cue into memory at session open so it plays "
+                "with minimal latency on GO.",
+            )
+        )
 
     def getSettings(self):
         settings = {}
@@ -154,7 +170,7 @@ class MediaCueSettings(SettingsPage):
         if self.isGroupEnabled(self.loopGroup):
             settings["loop"] = self.spinLoop.value()
 
-        return {"media": settings}
+        return {"media": settings, "preload": self.preloadCheckBox.isChecked()}
 
     def enableCheck(self, enabled):
         self.setGroupEnabled(self.startGroup, enabled)
@@ -176,6 +192,10 @@ class MediaCueSettings(SettingsPage):
     def loadSettings(self, settings):
         media = settings.get("media", {})
         is_image = self._is_image_cue(media)
+        is_av = self._is_av_cue(media)
+        self.preloadCheckBox.setVisible(not is_image and not is_av)
+        self.preloadCheckBox.setChecked(settings.get("preload", False))
+
         duration = media.get("duration", 0)
         self._last_duration = duration
 
@@ -299,6 +319,14 @@ class MediaCueSettings(SettingsPage):
         if "ImageInput" in media_settings:
             return True
         return "ImageInput" in media_settings.get("_element_classes", [])
+
+    @staticmethod
+    def _is_av_cue(media_settings: dict) -> bool:
+        # UriAvInput handles audio+video (A/V) files. Preloading A/V
+        # cues is not supported; hide the checkbox for them.
+        if "UriAvInput" in media_settings:
+            return True
+        return "UriAvInput" in media_settings.get("_element_classes", [])
 
     @staticmethod
     def _display_stop(stored_ms: int, duration_ms: int) -> int:
