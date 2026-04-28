@@ -46,8 +46,12 @@ class CartLayout(CueLayout):
     )
     DETAILS = [
         QT_TRANSLATE_NOOP("LayoutDetails", "Click a cue to run it"),
-        QT_TRANSLATE_NOOP("LayoutDetails", "SHIFT + Click to edit a cue"),
-        QT_TRANSLATE_NOOP("LayoutDetails", "CTRL + Click to select a cue"),
+        QT_TRANSLATE_NOOP(
+            "LayoutDetails", "SHIFT + Click to edit a cue in the inspector"
+        ),
+        QT_TRANSLATE_NOOP(
+            "LayoutDetails", "CTRL + Click to add a cue to the selection"
+        ),
         QT_TRANSLATE_NOOP(
             "LayoutDetails", "To copy cues drag them while pressing CTRL"
         ),
@@ -230,6 +234,18 @@ class CartLayout(CueLayout):
         for widget in self._widgets():
             if isinstance(widget.cue, cue_type):
                 widget.selected = False
+
+    def select_exclusive(self, target):
+        """Select only ``target`` (a CueWidget or its cue), clear others.
+
+        Drives the Shift+click "show this in inspector" affordance:
+        the inspector follows ``selection_changed``, so promoting a
+        single cue to the sole selection is how the user opens it
+        for editing without touching multi-select state via Ctrl.
+        """
+        target_cue = getattr(target, "cue", target)
+        for widget in self._widgets():
+            widget.selected = widget.cue is target_cue
 
     def invert_selection(self):
         for widget in self._widgets():
@@ -446,6 +462,7 @@ class CartLayout(CueLayout):
         widget.contextMenuRequested.connect(self._cue_context_menu)
         widget.cueExecuted.connect(self.cue_executed.emit)
         widget.selectedChanged.connect(self._selection_emit_timer.start)
+        widget.exclusiveSelectRequested.connect(self.select_exclusive)
 
         widget.showAccurateTiming(self.accurate_time)
         widget.setCountdownMode(self.countdown_mode)
@@ -466,6 +483,13 @@ class CartLayout(CueLayout):
 
         widget.cueExecuted.disconnect()
         widget.contextMenuRequested.disconnect()
+        widget.exclusiveSelectRequested.disconnect()
+        # selectedChanged drives the layout-wide selection_changed
+        # debounce; without an explicit disconnect, the widget's
+        # signal could fire one last time during deleteLater into
+        # `self._selection_emit_timer.start` after the cue has been
+        # removed, bouncing a stale selection event.
+        widget.selectedChanged.disconnect()
 
         widget.deleteLater()
 
