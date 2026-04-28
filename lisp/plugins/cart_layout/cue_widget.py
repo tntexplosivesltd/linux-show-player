@@ -79,6 +79,15 @@ class CueWidget(QWidget):
         self._showDBMeter = False
         self._showVolume = False
 
+        # Dim-icon variants are constructed on demand by `_dim_icon`
+        # (it composites a fresh pixmap). Without caching, each
+        # `_updateStyle` rebuild for a disabled cue allocates a new
+        # `QIcon`, which (a) is wasted work, and (b) breaks identity
+        # comparison against `IconTheme.get(...)` for any tool that
+        # reads `nameButton._icon`. Keyed by the source icon's id —
+        # `IconTheme` caches its returns, so the key is stable.
+        self._dimIconCache: dict = {}
+
         self._dBMeterElement = None
         self._volumeElement = None
         self._fadeElement = None
@@ -280,6 +289,13 @@ class CueWidget(QWidget):
         self._cue.changed("group_id").connect(
             self._onGroupIdChanged, Connection.QtQueued
         )
+        # `_updateStyle` reads `self._cue.icon` to choose the cart
+        # button glyph; without an icon-change subscription, the
+        # cell stays frozen on its old icon until _setCue runs again
+        # (i.e., until the session reloads).
+        self._cue.changed("icon").connect(
+            self._refreshStyle, Connection.QtQueued
+        )
         self._wire_ancestor_disable()
         self._cue.changed("duration").connect(
             self._updateDuration, Connection.QtQueued
@@ -377,7 +393,11 @@ class CueWidget(QWidget):
         self.nameButton.setStyleSheet(stylesheet)
         icon = IconTheme.get(f"{self._cue.icon}-cart")
         if disabled:
-            icon = _dim_icon(icon)
+            cached = self._dimIconCache.get(id(icon))
+            if cached is None:
+                cached = _dim_icon(icon)
+                self._dimIconCache[id(icon)] = cached
+            icon = cached
         self.nameButton.setIcon(icon)
 
     def _refreshStyle(self, _value=None):
