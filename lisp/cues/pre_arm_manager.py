@@ -577,13 +577,20 @@ class PreArmManager:
 
     @_safe
     def cue_added(self, cue) -> None:
-        """A new cue entered the model — arm if marked preload."""
+        """A new cue entered the model.
+
+        Wire per-cue change listeners unconditionally so a later
+        preload-toggle reaches `on_preload_changed` even if the cue is
+        never armed at add time. If already preload-marked and eligible,
+        arm immediately.
+        """
         logger.debug(
             "PreArmManager: cue_added cue=%s preload=%s eligible=%s",
             cue.id,
             getattr(cue, "preload", False),
             self._eligible(cue),
         )
+        self._wire_cue_signals(cue)
         if getattr(cue, "preload", False) and self._eligible(cue):
             self._try_arm(cue, ArmReason.Preload)
 

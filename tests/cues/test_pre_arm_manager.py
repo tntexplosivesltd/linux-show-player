@@ -978,3 +978,35 @@ class TestWireCueSignalsRealisticShape:
 
         manager._wire_cue_signals(cue)
         preload_signal.connect.assert_called_once()
+
+
+# Regression — cue_added must wire per-cue listeners unconditionally --------
+
+
+def test_cue_added_wires_preload_listener_for_later_toggle(manager, mock_app):
+    """Regression: a never-armed cue must still react to a later
+    preload toggle. Previously _wire_cue_signals only ran inside
+    _try_arm after a successful arm, leaving freshly-added unarmed
+    cues without a preload-changed listener.
+    """
+    cue = _make_wired_cue("cue-late-toggle", preload=False)
+    cue.media.prearm.return_value = True
+
+    # Add via the cue_added handler. preload=False → not armed.
+    manager.cue_added(cue)
+    assert cue.id not in manager._armed
+    assert getattr(cue, "_pre_arm_wired", False) is True, (
+        "cue_added must wire per-cue signals even for non-preload cues"
+    )
+
+    # Grab the preload-changed callback that was registered by
+    # _wire_cue_signals and invoke it directly to simulate the
+    # Property change firing.
+    preload_signal = cue.changed("preload")
+    callback = preload_signal.connect.call_args[0][0]
+    callback(True)
+
+    # The callback should have invoked on_preload_changed which
+    # added Preload reason and triggered _try_arm.
+    assert cue.id in manager._armed
+    assert ArmReason.Preload in manager._armed[cue.id]
