@@ -36,7 +36,10 @@ Add/Edit cues (accessible right-clicking on empty areas of the layout)
 * **Select all media cues:** Select all and only the media-cues
 * **Deselect all:** ``[CTRL+SHIFT+A]`` Deselect all the cues
 * **Invert selection:** ``[CTRL+I]`` Invert the selection of all the cues.
-* **Edit selected cues:** ``[CTRL+SHIFT+E]`` Open a multi-edit dialog for the selected cues.
+
+## View menu
+
+* **Show Inspector:** ``[F4]`` Show or hide the [inspector](editing_cues.md) panel below the cue layout.
 
 ## Layout menu
 

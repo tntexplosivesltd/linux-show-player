@@ -55,8 +55,8 @@ To edit a value (Cue, Action) `Double-Click` on it.
 
 ## Stop All
 
-This cue simply stop all the running cues,
-the "stop" action can be configured via the **Stop Settings** tab in the cue edit dialog.
+This cue simply stops all the running cues. The "stop" action is
+configured on the **Stop Settings** page in the [inspector](../editing_cues.md).
 
 ## Seek Action
 

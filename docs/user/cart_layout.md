@@ -43,9 +43,12 @@ Via `Right-Click` on the cue is also possible play, stop, or pause the cues expl
 
 ### Cues Editing
 
-The setting dialog for a cue can be opened in two ways: `Right-Click > Edit cue` or `SHIFT+Right-Click`.
+Cue properties are edited in the [inspector](editing_cues.md), the
+panel docked below the layout. `SHIFT+Right-Click` a cell to select
+the cue and bring its settings up in the inspector; toggle the panel
+with `View > Show Inspector` or ``[F4]``.
 
-Cues can be selected/deselected for multi-editing with `Right-Click > Select` or `CTRL+Left-Click`.
+Cues can be selected/deselected for multi-cue editing with `Right-Click > Select` or `CTRL+Left-Click`.
 
 ### Move and Copy Cues
 

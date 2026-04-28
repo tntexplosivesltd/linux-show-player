@@ -38,8 +38,10 @@ alternatively you can click on the cue to make it the current one.
 
 ### Cues Editing
 
-The setting dialog for a cue can be opened in two ways: `Right-Click > Edit cue`
-or `Double-Click` the cue.
+Cue properties are edited in the [inspector](editing_cues.md), the
+panel docked below the cue layout. Selecting a cue binds the
+inspector to it; toggle the panel with `View > Show Inspector` or
+``[F4]``.
 
 Cues can be selected/deselected with `Right-Click > Select`, `CTRL+Space` or
 `CTRL+Click`

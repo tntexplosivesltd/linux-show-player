@@ -53,10 +53,10 @@ The Start, Resume, Stop, Paused and Interrupt action all have a "faded" variant 
 
 All cues share a set of options, here we'll cover the basic settings, more advanced ones will have their own sections.
 
-Options are organized within tabs:
+Options are edited in the [inspector](../editing_cues.md), grouped into pages such as **General**, **Pre/Post wait** and (for media cues) **Media**:
 
 ```{image} ../_static/cue_options_tabs.png
-:alt: Options tabs
+:alt: Inspector pages
 ```
 
 ### Appearance
@@ -81,7 +81,9 @@ line2
 
 * **Font size:** The font used to display the name
 * **Font color:** The color of the font used to display the name
-* **Background color:** The background color of the cue
+* **Background color:** The background color of the cue. Pick from a fixed palette of named colours (`Red`, `Orange`, `Yellow`, …) — the chosen colour adapts automatically to the active theme. A *No colour* swatch clears the cue's colour.
+
+[screenshot: Appearance section of the inspector with the fixed-palette colour picker open]
 
 ### Cue
 
@@ -120,25 +122,33 @@ Given its non-sequential nature, the _Cart Layout_ does not support the “Next 
 
 ### Exclusive
 
-Exclusive mode prevents multiple cues from playing simultaneously. When a cue with exclusive mode
-enabled is running, all other cues are blocked from starting until it stops.
+Exclusive mode prevents overlapping **media** playback. When a media
+cue with exclusive mode enabled is running, other media cues are
+blocked from starting until it stops.
 
-* **Exclusive:** When checked, this cue will block other cues from starting while it is running.
-  Other running cues are also prevented from starting when any exclusive cue is active.
+* **Exclusive:** When checked, this cue will block other media cues
+  from starting while it is running. Other running media cues are
+  also prevented from starting when any exclusive media cue is
+  active.
 
-This is useful for scenarios where overlapping playback would cause problems — for example, ensuring
-only one background music track plays at a time, or preventing sound effects from overlapping
-with announcements.
+Non-media cues — Action, Integration, Misc — are not affected by
+exclusive mode and can still run alongside an exclusive media cue.
 
-Exclusive mode is configured per-cue in the **Exclusive** tab of the cue settings dialog.
+This is useful when overlapping playback would cause problems — for
+example, ensuring only one background music track plays at a time, or
+preventing sound effects from overlapping with announcements.
 
 ## Editing multiple cues
 
-While multiple cues are selected, you can use the `Edit > Edit selected media`
-`[CTRL+SHIFT+E]` command, to edit multiple cues at once.
-
-Only the options shared by all selected cues will be displayed.
+Select a range of cues and edit them together in the
+[inspector](../editing_cues.md). Only the options shared by every
+selected cue are shown; fields whose values differ across the
+selection are flagged with a mixed-value indicator. Each settings
+group has its own *apply to all* checkbox so you can change one
+group of properties without disturbing the others.
 
 ```{note}
-You can select all cues at once using `Edit > Select All` `[CTRL+A]`
+You can select all cues at once using `Edit > Select All` `[CTRL+A]`,
+or toggle multi-selection from the layout menu with
+`Layout > Selection mode` `[CTRL+SHIFT+E]`.
 ```
