@@ -722,6 +722,89 @@ def register_all(dispatcher, app, signal_manager):
         invoke_on_main_thread(do_click)
         return {"ok": True}
 
+    def handle_cart_cell_icon_state(params):
+        """Return identity tokens for a cart cell's currently-rendered icon.
+
+        Used by E2E tests to verify that the cell's QClickLabel is
+        actually showing the icon that matches `cue.icon`. Both
+        identifiers are Python `id()` values; identity is stable
+        because:
+
+        * `IconTheme._GlobalCache` (``lisp/ui/icons/__init__.py``)
+          memoises QIcons by name, so two `IconTheme.get(name)`
+          calls return the same Python object.
+        * Disabled-cell dim variants are cached on the widget
+          (`_dimIconCache`), so `nameButton._icon` is also stable
+          for a given (cue.icon, effective_disabled) pair.
+
+        These ids are only valid for equality comparisons within a
+        single response or against another response from the same
+        LiSP process. They are NOT stable across LiSP restarts, and
+        a theme switch via `IconTheme.set_theme_name(...)` clears
+        `_GlobalCache`, after which prior ids no longer correspond
+        to any live icon.
+
+        Params:
+          ``cue_id`` (str): cell identified by the cue it holds.
+
+        Returns dict with:
+          ``current_id`` — id of the QIcon currently set on the cell.
+          ``expected_id`` — id of the QIcon the cell *should* be
+            showing for ``cue.icon`` (and disabled state, if any).
+          ``matches`` — ``current_id == expected_id``.
+          ``icon_property`` — the cue's current ``icon`` property.
+          ``effective_disabled`` — whether dim variants are in play;
+            useful for narrowing down test assertions.
+        """
+        _require_session()
+        _require_cart_layout()
+
+        cue_id = params.get("cue_id")
+        if cue_id is None:
+            raise AppError("cue_id is required")
+
+        def do_read():
+            target_cue = _get_cue(cue_id)
+            target_widget = None
+            for page in app.layout.view.pages():
+                for widget in page.widgets():
+                    if widget.cue is target_cue:
+                        target_widget = widget
+                        break
+                if target_widget is not None:
+                    break
+            if target_widget is None:
+                raise AppError(
+                    "No cart widget hosts the requested cue"
+                )
+
+            from lisp.ui.icons import IconTheme
+
+            current_icon = target_widget.nameButton._icon
+            base_icon = IconTheme.get(f"{target_cue.icon}-cart")
+            disabled = bool(target_cue.effective_disabled)
+            if disabled and base_icon is not None:
+                # Match the same dim-cache the widget consults, so
+                # the identity check is meaningful for disabled cues.
+                expected_icon = target_widget._dimIconCache.get(
+                    id(base_icon), base_icon
+                )
+            else:
+                expected_icon = base_icon
+            return {
+                "current_id": id(current_icon)
+                if current_icon is not None
+                else None,
+                "expected_id": id(expected_icon)
+                if expected_icon is not None
+                else None,
+                "matches": current_icon is expected_icon,
+                "icon_property": target_cue.icon,
+                "effective_disabled": disabled,
+            }
+
+        return invoke_on_main_thread(do_read)
+
     # --- Commands ---
 
     def handle_commands_undo(params):
@@ -1201,6 +1284,7 @@ def register_all(dispatcher, app, signal_manager):
         "layout.execute_all": handle_layout_execute_all,
         # Cart layout
         "cart.click_cue": handle_cart_click_cue,
+        "cart.cell_icon_state": handle_cart_cell_icon_state,
         # Commands
         "commands.undo": handle_commands_undo,
         "commands.redo": handle_commands_redo,
