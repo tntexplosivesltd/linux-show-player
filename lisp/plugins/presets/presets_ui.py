@@ -384,9 +384,7 @@ class PresetsDialog(QDialog):
 class NewPresetDialog(QDialog):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.resize(320, 105)
-        self.setMaximumSize(self.size())
-        self.setMinimumSize(self.size())
+        self.setMinimumWidth(360)
         self.setModal(True)
         self.setLayout(QGridLayout())
 
