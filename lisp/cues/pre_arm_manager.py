@@ -182,12 +182,30 @@ class PreArmManager:
                 except AttributeError:
                     pass
 
+        # preload lives on the cue itself (MediaCue.preload)
         try:
-            cue.changed("uri").connect(_on_uri)
-            cue.changed("start_time").connect(_on_start)
             cue.changed("preload").connect(_on_preload)
-        except (AttributeError, TypeError):
+        except (AttributeError, TypeError, ValueError):
             pass
+
+        # start_time and pipe-rebuild signals live on cue.media
+        # (Media.start_time and GstMedia.pipe respectively — neither
+        # exists as a top-level cue property).
+        media = getattr(cue, "media", None)
+        if media is not None:
+            try:
+                media.changed("start_time").connect(_on_start)
+            except (AttributeError, TypeError, ValueError):
+                pass
+            # URI / file changes drive a full pipe rebuild. Subscribing
+            # through `pipe` is the robust proxy: any element swap
+            # (including different URI in the same input element) will
+            # trigger it, whereas UriInput.uri is per-element and harder
+            # to reach cleanly from here.
+            try:
+                media.changed("pipe").connect(_on_uri)
+            except (AttributeError, TypeError, ValueError):
+                pass
 
     # --- Eligibility --------------------------------------------------
 

@@ -713,43 +713,65 @@ def test_init_tolerates_missing_layout(mock_app):
     PreArmManager(mock_app)  # should not raise
 
 
-def test_per_cue_signals_connected_on_arm(manager):
-    """First successful arm of a cue connects per-cue signals."""
-    cue = _make_cue("c1")
+def _make_wired_cue(cue_id, preload=False, media_type="Audio"):
+    """Like _make_cue but with per-property signal mocks on both the cue
+    and cue.media that match the real property layout after the fix:
+    - cue.changed("preload") → signal
+    - cue.media.changed("start_time") → signal
+    - cue.media.changed("pipe") → signal
+    The old cue.changed("uri") and cue.changed("start_time") are gone.
+    """
+    cue = _make_cue(cue_id, preload=preload, media_type=media_type)
     cue.stopped = MagicMock()
     cue.interrupted = MagicMock()
     cue.end = MagicMock()
     cue.error = MagicMock()
-    # Build per-property signal mocks
-    sig_map = {
-        "uri": MagicMock(),
-        "start_time": MagicMock(),
-        "preload": MagicMock(),
-    }
-    cue.changed = lambda prop: sig_map[prop]
+
+    preload_signal = MagicMock()
+    cue.changed = lambda prop: (
+        preload_signal if prop == "preload"
+        else (_ for _ in ()).throw(ValueError(f'no property "{prop}" found'))
+    )
+    cue._preload_signal = preload_signal
+
+    pipe_signal = MagicMock()
+    start_time_signal = MagicMock()
+
+    def _media_changed(name):
+        if name == "pipe":
+            return pipe_signal
+        if name == "start_time":
+            return start_time_signal
+        raise ValueError(f'no property "{name}" found')
+
+    cue.media.changed = _media_changed
+    cue.media._pipe_signal = pipe_signal
+    cue.media._start_time_signal = start_time_signal
+
+    return cue
+
+
+def test_per_cue_signals_connected_on_arm(manager):
+    """First successful arm of a cue connects per-cue signals.
+
+    After the fix: preload wires via cue.changed('preload'), start_time
+    and pipe (URI proxy) wire via cue.media.changed(). cue.changed('uri')
+    is no longer called — uri is not a cue property.
+    """
+    cue = _make_wired_cue("c1")
     manager._try_arm(cue, ArmReason.Auto)
     cue.stopped.connect.assert_called()
     cue.interrupted.connect.assert_called()
     cue.end.connect.assert_called()
     cue.error.connect.assert_called()
-    assert sig_map["uri"].connect.called
-    assert sig_map["start_time"].connect.called
-    assert sig_map["preload"].connect.called
+    assert cue._preload_signal.connect.called
+    assert cue.media._pipe_signal.connect.called
+    assert cue.media._start_time_signal.connect.called
 
 
 def test_per_cue_signals_idempotent_across_rearm(manager):
     """Re-arming the same cue does NOT re-connect its signals."""
-    cue = _make_cue("c1")
-    cue.stopped = MagicMock()
-    cue.interrupted = MagicMock()
-    cue.end = MagicMock()
-    cue.error = MagicMock()
-    sig_map = {
-        "uri": MagicMock(),
-        "start_time": MagicMock(),
-        "preload": MagicMock(),
-    }
-    cue.changed = lambda prop: sig_map[prop]
+    cue = _make_wired_cue("c1")
 
     manager._try_arm(cue, ArmReason.Auto)
     initial_count = cue.stopped.connect.call_count
@@ -760,17 +782,7 @@ def test_per_cue_signals_idempotent_across_rearm(manager):
 
 def test_cue_removed_clears_handler_refs(manager):
     """cue_removed drops the per-cue handler references."""
-    cue = _make_cue("c1")
-    cue.stopped = MagicMock()
-    cue.interrupted = MagicMock()
-    cue.end = MagicMock()
-    cue.error = MagicMock()
-    sig_map = {
-        "uri": MagicMock(),
-        "start_time": MagicMock(),
-        "preload": MagicMock(),
-    }
-    cue.changed = lambda prop: sig_map[prop]
+    cue = _make_wired_cue("c1")
     manager._try_arm(cue, ArmReason.Auto)
     assert "c1" in manager._cue_handlers
     manager.cue_removed(cue)
@@ -866,3 +878,103 @@ class TestEligibleRealisticMedia:
         cue.media = media
 
         assert manager._eligible(cue) is False
+
+
+# Regression tests — _wire_cue_signals uses cue.media for uri/start_time ----
+
+
+class TestWireCueSignalsRealisticShape:
+    """Regression: _wire_cue_signals tried cue.changed('uri') and
+    cue.changed('start_time'), but those properties live on cue.media,
+    not on the cue. ValueError from HasProperties.changed() also
+    wasn't caught. Exercising _wire_cue_signals on a realistic mock
+    must not raise.
+    """
+
+    def test_wire_cue_signals_does_not_crash_on_real_property_layout(
+        self, manager
+    ):
+        # Cue: spec strips magic auto-attrs so changed("uri") raises
+        # ValueError (matching real HasProperties behaviour) for properties
+        # that don't exist on the cue.
+        cue = MagicMock(
+            spec=["id", "preload", "media", "changed",
+                  "stopped", "interrupted", "end", "error"]
+        )
+        cue.id = "cue-1"
+        cue.preload = True
+
+        def _cue_changed(name):
+            if name == "preload":
+                return MagicMock()
+            raise ValueError(f'no property "{name}" found')
+
+        cue.changed.side_effect = _cue_changed
+
+        # Media holds start_time and pipe
+        media = MagicMock(spec=["changed", "elements"])
+
+        def _media_changed(name):
+            if name in ("start_time", "pipe"):
+                return MagicMock()
+            raise ValueError(f'no property "{name}" found')
+
+        media.changed.side_effect = _media_changed
+        cue.media = media
+
+        # Should not raise
+        manager._wire_cue_signals(cue)
+
+    def test_wire_cue_signals_connects_pipe_for_uri_change(self, manager):
+        """The URI-change handler is wired through cue.media.changed('pipe')
+        (URI lives on the input element; pipe rebuild is the proxy)."""
+        cue = MagicMock(
+            spec=["id", "preload", "media", "changed",
+                  "stopped", "interrupted", "end", "error"]
+        )
+        cue.id = "cue-2"
+
+        pipe_signal = MagicMock()
+        start_time_signal = MagicMock()
+        preload_signal = MagicMock()
+
+        def _media_changed(name):
+            if name == "pipe":
+                return pipe_signal
+            if name == "start_time":
+                return start_time_signal
+            raise ValueError(f'no property "{name}" found')
+
+        media = MagicMock(spec=["changed", "elements"])
+        media.changed.side_effect = _media_changed
+        cue.media = media
+
+        def _cue_changed(name):
+            if name == "preload":
+                return preload_signal
+            raise ValueError(f'no property "{name}" found')
+
+        cue.changed.side_effect = _cue_changed
+
+        manager._wire_cue_signals(cue)
+
+        pipe_signal.connect.assert_called_once()
+        start_time_signal.connect.assert_called_once()
+        preload_signal.connect.assert_called_once()
+
+    def test_wire_cue_signals_skips_missing_media(self, manager):
+        """A cue without media attribute should not crash wire (defensive)."""
+        cue = MagicMock(
+            spec=["id", "preload", "changed",
+                  "stopped", "interrupted", "end", "error"]
+        )
+        cue.id = "cue-3"
+
+        preload_signal = MagicMock()
+        cue.changed.side_effect = lambda name: (
+            preload_signal if name == "preload"
+            else (_ for _ in ()).throw(ValueError())
+        )
+
+        manager._wire_cue_signals(cue)
+        preload_signal.connect.assert_called_once()
