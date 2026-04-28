@@ -77,10 +77,13 @@ class MediaCueSettings(SettingsPage):
         self.loopGroup.layout().addWidget(self.spinLoop)
         grid.addWidget(self.loopGroup, 2, 0)
 
-        self.preloadCheckBox = QCheckBox(self)
-        self.preloadCheckBox.setChecked(False)
-        grid.addWidget(self.preloadCheckBox, 3, 0)
-        grid.setRowStretch(3, 0)  # checkbox row does not stretch
+        self.preloadGroup = make_flat_group()
+        self.preloadGroup.setLayout(QHBoxLayout())
+        self.preloadGroup.layout().setContentsMargins(0, 0, 0, 0)
+        self.preloadCheckBox = QCheckBox(self.preloadGroup)
+        self.preloadGroup.layout().addWidget(self.preloadCheckBox)
+        grid.addWidget(self.preloadGroup, 3, 0)
+        grid.setRowStretch(3, 0)  # preload row does not stretch
 
         # Column 1 reserved for the waveform trimmer. The trimmer is
         # mounted lazily in loadSettings() once the cue's media source
@@ -133,10 +136,10 @@ class MediaCueSettings(SettingsPage):
                 "Repetition after first play (-1 = infinite)",
             )
         )
-        self.preloadCheckBox.setText(
+        self.preloadGroup.setTitle(
             translate("MediaCueSettings", "Preload at session load")
         )
-        self.preloadCheckBox.setToolTip(
+        self.preloadGroup.setToolTip(
             translate(
                 "MediaCueSettings",
                 "Load this cue into memory at session open so it plays "
@@ -170,12 +173,16 @@ class MediaCueSettings(SettingsPage):
         if self.isGroupEnabled(self.loopGroup):
             settings["loop"] = self.spinLoop.value()
 
-        return {"media": settings, "preload": self.preloadCheckBox.isChecked()}
+        result = {"media": settings} if settings else {}
+        if self.isGroupEnabled(self.preloadGroup):
+            result["preload"] = self.preloadCheckBox.isChecked()
+        return result
 
     def enableCheck(self, enabled):
         self.setGroupEnabled(self.startGroup, enabled)
         self.setGroupEnabled(self.stopGroup, enabled)
         self.setGroupEnabled(self.loopGroup, enabled)
+        self.setGroupEnabled(self.preloadGroup, enabled)
         # Multi-select: waveforms don't compose across cues, so hide
         # the trimmer slot and show a placeholder caption.
         self.placeholderLabel.setText(
@@ -193,7 +200,7 @@ class MediaCueSettings(SettingsPage):
         media = settings.get("media", {})
         is_image = self._is_image_cue(media)
         is_av = self._is_av_cue(media)
-        self.preloadCheckBox.setVisible(not is_image and not is_av)
+        self.preloadGroup.setVisible(not is_image and not is_av)
         self.preloadCheckBox.setChecked(settings.get("preload", False))
 
         duration = media.get("duration", 0)

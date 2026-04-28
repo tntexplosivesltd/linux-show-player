@@ -128,23 +128,26 @@ class TestPreloadVisibility:
     Qt's isVisible() is always False for un-shown top-level widgets
     regardless of setVisible() calls. isHidden() reflects the explicit
     hide flag set by setVisible(False), which is what we care about here.
+
+    Visibility is now controlled on the preloadGroup (the flat-group
+    wrapper), not the inner preloadCheckBox directly.
     """
 
     def test_not_hidden_for_audio_cue(self, qtbot):
-        """UriInput (audio) cues must not hide the preload checkbox."""
+        """UriInput (audio) cues must not hide the preload group."""
         page = MediaCueSettings()
         qtbot.addWidget(page)
         page.loadSettings({"media": {"UriInput": {}}})
 
-        assert not page.preloadCheckBox.isHidden()
+        assert not page.preloadGroup.isHidden()
 
     def test_hidden_for_image_cue(self, qtbot):
-        """ImageInput cues must hide the preload checkbox."""
+        """ImageInput cues must hide the preload group."""
         page = MediaCueSettings()
         qtbot.addWidget(page)
         page.loadSettings({"media": {"ImageInput": {}}})
 
-        assert page.preloadCheckBox.isHidden()
+        assert page.preloadGroup.isHidden()
 
     def test_hidden_for_image_cue_via_element_classes(self, qtbot):
         """_element_classes fallback must also hide for ImageInput."""
@@ -154,15 +157,15 @@ class TestPreloadVisibility:
             {"media": {"_element_classes": ["ImageInput"]}}
         )
 
-        assert page.preloadCheckBox.isHidden()
+        assert page.preloadGroup.isHidden()
 
     def test_hidden_for_av_cue(self, qtbot):
-        """UriAvInput (A/V) cues must hide the preload checkbox."""
+        """UriAvInput (A/V) cues must hide the preload group."""
         page = MediaCueSettings()
         qtbot.addWidget(page)
         page.loadSettings({"media": {"UriAvInput": {}}})
 
-        assert page.preloadCheckBox.isHidden()
+        assert page.preloadGroup.isHidden()
 
     def test_hidden_for_av_cue_via_element_classes(self, qtbot):
         """_element_classes fallback must also hide for UriAvInput."""
@@ -172,15 +175,15 @@ class TestPreloadVisibility:
             {"media": {"_element_classes": ["UriAvInput"]}}
         )
 
-        assert page.preloadCheckBox.isHidden()
+        assert page.preloadGroup.isHidden()
 
     def test_not_hidden_when_no_input_type_specified(self, qtbot):
-        """Empty media dict (unknown type) must not hide the checkbox."""
+        """Empty media dict (unknown type) must not hide the group."""
         page = MediaCueSettings()
         qtbot.addWidget(page)
         page.loadSettings({"media": {}})
 
-        assert not page.preloadCheckBox.isHidden()
+        assert not page.preloadGroup.isHidden()
 
     def test_visibility_toggles_between_cue_types(self, qtbot):
         """Navigating audio→video→audio must update visibility correctly."""
@@ -188,10 +191,55 @@ class TestPreloadVisibility:
         qtbot.addWidget(page)
 
         page.loadSettings({"media": {"UriInput": {}}})
-        assert not page.preloadCheckBox.isHidden()
+        assert not page.preloadGroup.isHidden()
 
         page.loadSettings({"media": {"UriAvInput": {}}})
-        assert page.preloadCheckBox.isHidden()
+        assert page.preloadGroup.isHidden()
 
         page.loadSettings({"media": {"UriInput": {}}})
-        assert not page.preloadCheckBox.isHidden()
+        assert not page.preloadGroup.isHidden()
+
+
+class TestPreloadMultiSelect:
+    """Tests for multi-select (enableCheck=True) behaviour.
+
+    The core bug: without a flat-group gate, getSettings() would always
+    emit ``preload`` — zeroing it to False across every selected cue on
+    each inspector flush, even when the user never touched the field.
+    """
+
+    def test_get_settings_omits_preload_in_multi_select_mode(self, qtbot):
+        """In multi-select (enableCheck(True)), preload must not appear in
+        getSettings unless the user opts in by ticking the group title."""
+        page = MediaCueSettings()
+        qtbot.addWidget(page)
+        page.loadSettings({"media": {}, "preload": True})
+        page.enableCheck(True)
+        result = page.getSettings()
+        assert "preload" not in result, (
+            "preload leaked from multi-select getSettings — would zero out "
+            "the flag across the selection"
+        )
+
+    def test_get_settings_includes_preload_when_group_enabled_in_multi_select(
+        self, qtbot
+    ):
+        """When the user opts in (group's checkable title ticked), preload
+        is included in the output."""
+        page = MediaCueSettings()
+        qtbot.addWidget(page)
+        page.loadSettings({"media": {}, "preload": False})
+        page.enableCheck(True)
+        page.preloadGroup.setChecked(True)  # user opts in
+        page.preloadCheckBox.setChecked(True)
+        result = page.getSettings()
+        assert result.get("preload") is True
+
+    def test_get_settings_includes_preload_in_single_select(self, qtbot):
+        """Single-select mode: preload always included (no opt-in needed)."""
+        page = MediaCueSettings()
+        qtbot.addWidget(page)
+        page.loadSettings({"media": {}, "preload": True})
+        # No enableCheck call — single-select default
+        result = page.getSettings()
+        assert result.get("preload") is True
