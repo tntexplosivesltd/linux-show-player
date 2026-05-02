@@ -58,7 +58,7 @@
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/list_layout/layout.py" line="261" />
+      <location filename="../../../plugins/list_layout/layout.py" line="264" />
       <source>Show index column</source>
       <translation type="unfinished" />
     </message>
@@ -68,67 +68,67 @@
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/list_layout/layout.py" line="267" />
+      <location filename="../../../plugins/list_layout/layout.py" line="270" />
       <source>Selection mode</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/list_layout/layout.py" line="270" />
+      <location filename="../../../plugins/list_layout/layout.py" line="273" />
       <source>Show resize handles</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/list_layout/layout.py" line="273" />
+      <location filename="../../../plugins/list_layout/layout.py" line="276" />
       <source>Restore default size</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/list_layout/layout.py" line="276" />
+      <location filename="../../../plugins/list_layout/layout.py" line="279" />
       <source>Disable GO Key While Playing</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/list_layout/layout.py" line="279" />
+      <location filename="../../../plugins/list_layout/layout.py" line="282" />
       <source>Collapse all groups</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/list_layout/layout.py" line="282" />
+      <location filename="../../../plugins/list_layout/layout.py" line="285" />
       <source>Expand all groups</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/list_layout/layout.py" line="212" />
+      <location filename="../../../plugins/list_layout/layout.py" line="215" />
       <source>Clone cue</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/list_layout/layout.py" line="214" />
+      <location filename="../../../plugins/list_layout/layout.py" line="217" />
       <source>Clone selected</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/list_layout/layout.py" line="218" />
+      <location filename="../../../plugins/list_layout/layout.py" line="221" />
       <source>Remove cue</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/list_layout/layout.py" line="220" />
+      <location filename="../../../plugins/list_layout/layout.py" line="223" />
       <source>Remove selected</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/list_layout/layout.py" line="235" />
+      <location filename="../../../plugins/list_layout/layout.py" line="238" />
       <source>Ungroup</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/list_layout/layout.py" line="241" />
+      <location filename="../../../plugins/list_layout/layout.py" line="244" />
       <source>Group selected</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/list_layout/layout.py" line="541" />
+      <location filename="../../../plugins/list_layout/layout.py" line="559" />
       <source>Copy of {}</source>
       <translation type="unfinished" />
     </message>
@@ -246,22 +246,27 @@
   <context>
     <name>ListLayoutHeader</name>
     <message>
-      <location filename="../../../plugins/list_layout/list_view.py" line="88" />
+      <location filename="../../../plugins/list_layout/list_view.py" line="96" />
+      <source>Q#</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../plugins/list_layout/list_view.py" line="101" />
       <source>Cue</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/list_layout/list_view.py" line="93" />
+      <location filename="../../../plugins/list_layout/list_view.py" line="106" />
       <source>Pre wait</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/list_layout/list_view.py" line="96" />
+      <location filename="../../../plugins/list_layout/list_view.py" line="109" />
       <source>Action</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/list_layout/list_view.py" line="99" />
+      <location filename="../../../plugins/list_layout/list_view.py" line="112" />
       <source>Post wait</source>
       <translation type="unfinished" />
     </message>
@@ -279,6 +284,24 @@
     <message>
       <location filename="../../../plugins/list_layout/settings.py" line="39" />
       <source>List Layout</source>
+      <translation type="unfinished" />
+    </message>
+  </context>
+  <context>
+    <name>TargetingCue</name>
+    <message>
+      <location filename="../../../plugins/list_layout/list_widgets.py" line="186" />
+      <source>Target cue no longer exists</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../plugins/list_layout/list_widgets.py" line="179" />
+      <source>Collection has invalid target(s)</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../plugins/list_layout/list_widgets.py" line="185" />
+      <source>Target cue is not set</source>
       <translation type="unfinished" />
     </message>
   </context>
