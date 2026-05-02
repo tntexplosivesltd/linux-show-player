@@ -11,6 +11,18 @@
  * See: docs/superpowers/specs/2026-04-25-light-theme-design.md
  */
 
+/* QToolTip — without an explicit rule, tooltips inherit the local
+ * widget stylesheet of whatever they're shown over (cart cells set
+ * a per-cue stylesheet on `nameButton`, which cascades to its
+ * tooltip), producing dark/coloured tooltips on a light theme.
+ * Mirrors the dark theme's rule. */
+QToolTip {
+    border: 1px solid palette(midlight);
+    background-color: palette(base);
+    color: palette(text);
+    padding: 2px;
+}
+
 /* Selection: force palette(highlight) for any list/tree/menu item's
  * selected state. Mirrors the dark theme's equivalent rule. */
 QWidget::item:selected,
