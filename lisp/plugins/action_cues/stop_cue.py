@@ -40,6 +40,7 @@ from lisp.ui.settings.cue_settings import CueSettingsRegistry
 from lisp.ui.settings.pages import SettingsPage
 from lisp.ui.ui_utils import translate
 from lisp.ui.widgets import FadeEdit
+from lisp.ui.widgets.target_warning import TargetWarningRow
 
 logger = logging.getLogger(__name__)
 
@@ -356,6 +357,8 @@ class StopCueSettings(SettingsPage):
         self.cueButton.clicked.connect(self.select_cue)
         cueColumn.addWidget(self.cueLabel)
         cueColumn.addWidget(self.cueButton)
+        self.targetWarning = TargetWarningRow(self.targetGroup)
+        cueColumn.addWidget(self.targetWarning)
 
         cueColumnWidget = QWidget(self.targetGroup)
         cueColumnWidget.setLayout(cueColumn)
@@ -388,6 +391,7 @@ class StopCueSettings(SettingsPage):
         self.layout().addWidget(self.fadeGroup)
 
         self.retranslateUi()
+        self._refresh_target_warning()
 
     def retranslateUi(self):
         self.targetGroup.setTitle(translate("StopCue", "Target"))
@@ -403,6 +407,17 @@ class StopCueSettings(SettingsPage):
             if selected is not None:
                 self.cue_id = selected.id
                 self.cueLabel.setText(selected.name)
+                self._refresh_target_warning()
+
+    def _refresh_target_warning(self):
+        """Recompute warning state from current cue_id and the model."""
+        if not self.cue_id:
+            self.targetWarning.update_state(self.cueButton, "empty")
+            return
+        if Application().cue_model.get(self.cue_id) is None:
+            self.targetWarning.update_state(self.cueButton, "dangling")
+            return
+        self.targetWarning.update_state(self.cueButton, "ok")
 
     def enableCheck(self, enabled):
         self.setGroupEnabled(self.targetGroup, enabled)
@@ -433,6 +448,7 @@ class StopCueSettings(SettingsPage):
         self.fadeEdit.setFadeType(
             settings.get("fade_type", FadeOutType.Linear.name)
         )
+        self._refresh_target_warning()
 
 
 CueSettingsRegistry().add(StopCueSettings, StopCue)
