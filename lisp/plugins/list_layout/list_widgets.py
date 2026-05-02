@@ -31,7 +31,9 @@ from lisp.core.util import strtime
 from lisp.cues.cue import CueNextAction, CueState
 from lisp.cues.cue_time import CueTime, CueWaitTime
 from lisp.ui.icons import IconTheme
+from lisp.ui.ui_utils import translate
 from lisp.ui.widgets.cue_next_actions import tr_next_action
+from lisp.ui.widgets.target_warning import paint_invalid_target_badge
 
 
 class IndexWidget(QLabel):
@@ -156,9 +158,40 @@ class CueStatusIcons(QWidget):
         )
         self._wire_ancestor_disable()
 
+        # Repaint and refresh tooltip when target validity flips.
+        # Only cues that actually mix in TargetingCue have this property;
+        # guard with a property-name check so non-target cues are unaffected.
+        if "invalid_target" in self._item.cue.properties_names():
+            self._item.cue.changed("invalid_target").connect(
+                self._on_invalid_target_changed, Connection.QtQueued
+            )
+            self._on_invalid_target_changed(self._item.cue.invalid_target)
+
         self.updateIcon()
 
     def _repaint(self, _value=None):
+        self.update()
+
+    def _invalid_target_tooltip(self):
+        """Return the i18n string explaining the current invalid state."""
+        cue = self._item.cue
+        # CollectionCue uses list semantics; check the property name first.
+        if "targets" in cue.properties_names():
+            return translate(
+                "TargetingCue",
+                "Collection has invalid target(s)",
+            )
+        target_id = getattr(cue, "target_id", "")
+        if not target_id:
+            return translate("TargetingCue", "Target cue is not set")
+        return translate("TargetingCue", "Target cue is missing")
+
+    def _on_invalid_target_changed(self, invalid):
+        """Update tooltip and trigger repaint when target validity flips."""
+        if invalid:
+            self.setToolTip(self._invalid_target_tooltip())
+        else:
+            self.setToolTip("")
         self.update()
 
     def _onGroupIdChanged(self, _value=None):
@@ -241,15 +274,32 @@ class CueStatusIcons(QWidget):
             # disabled. Matches the row-text dim in list_view.
             if self._item.cue.effective_disabled:
                 qp.setOpacity(0.4)
-            qp.drawPixmap(
-                QRect(
-                    indicator_width + CueStatusIcons.MARGIN,
-                    CueStatusIcons.MARGIN,
-                    status_size,
-                    status_size,
-                ),
-                self._icon.pixmap(self._size()),
+            icon_rect = QRect(
+                indicator_width + CueStatusIcons.MARGIN,
+                CueStatusIcons.MARGIN,
+                status_size,
+                status_size,
             )
+            qp.drawPixmap(
+                icon_rect, self._icon.pixmap(self._size()),
+            )
+
+            # Invalid-target overlay badge in the bottom-right
+            # corner. Painted at full opacity even when the row is
+            # disabled — the user still needs to see it.
+            if getattr(self._item.cue, "invalid_target", False):
+                qp.setOpacity(1.0)
+                # Slightly larger badge than before (50% of icon
+                # vs 40%) — the previous size lost detail at typical
+                # row heights and read as a vague colored blob.
+                badge_size = max(10, status_size // 2)
+                badge_rect = QRect(
+                    icon_rect.right() - badge_size + 1,
+                    icon_rect.bottom() - badge_size + 1,
+                    badge_size,
+                    badge_size,
+                )
+                paint_invalid_target_badge(qp, badge_rect)
 
         qp.end()
 

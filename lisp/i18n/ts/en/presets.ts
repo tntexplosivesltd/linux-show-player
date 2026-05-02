@@ -42,7 +42,7 @@
       <translation>Cannot scan presets</translation>
     </message>
     <message>
-      <location filename="../../../plugins/presets/presets_ui.py" line="423" />
+      <location filename="../../../plugins/presets/presets_ui.py" line="421" />
       <source>Preset name</source>
       <translation>Preset name</translation>
     </message>
@@ -77,7 +77,7 @@
       <translation>Import</translation>
     </message>
     <message>
-      <location filename="../../../plugins/presets/presets_ui.py" line="424" />
+      <location filename="../../../plugins/presets/presets_ui.py" line="422" />
       <source>Cue type</source>
       <translation>Cue type</translation>
     </message>

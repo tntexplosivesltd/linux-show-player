@@ -37,8 +37,9 @@ from lisp.cues.media_cue import MediaCue
 from lisp.plugins.cart_layout.page_widget import CartPageWidget
 from lisp.ui import themes
 from lisp.ui.icons import IconTheme
-from lisp.ui.ui_utils import css_to_dict, dict_to_css
+from lisp.ui.ui_utils import css_to_dict, dict_to_css, translate
 from lisp.ui.widgets import QClickLabel, QClickSlider
+from lisp.ui.widgets.target_warning import paint_invalid_target_badge
 from lisp import ICON_THEMES_DIR
 
 
@@ -135,6 +136,13 @@ class CueWidget(QWidget):
         self.statusIcon.setPixmap(
             IconTheme.get("led-off").pixmap(CueWidget.ICON_SIZE)
         )
+
+        self.targetWarning = QLabel(self.nameButton)
+        self.targetWarning.setStyleSheet("background-color: transparent")
+        self.targetWarning.setPixmap(
+            self._make_target_badge_pixmap(CueWidget.ICON_SIZE)
+        )
+        self.targetWarning.setVisible(False)
 
         self.seekSlider = QClickSlider(self.nameButton)
         self.seekSlider.setOrientation(Qt.Horizontal)
@@ -316,6 +324,14 @@ class CueWidget(QWidget):
             self._updateStyle, Connection.QtQueued
         )
         self._wire_ancestor_disable()
+        # Repaint and refresh tooltip when target validity flips.
+        # Only cues that mix in TargetingCue have this property; guard
+        # with a property-name check so non-target cues are unaffected.
+        if "invalid_target" in self._cue.properties_names():
+            self._cue.changed("invalid_target").connect(
+                self._onInvalidTargetChanged, Connection.QtQueued
+            )
+            self._onInvalidTargetChanged(self._cue.invalid_target)
         self._cue.changed("duration").connect(
             self._updateDuration, Connection.QtQueued
         )
@@ -376,6 +392,41 @@ class CueWidget(QWidget):
 
     def _updateDescription(self, description):
         self.nameButton.setToolTip(description)
+
+    @staticmethod
+    def _make_target_badge_pixmap(size):
+        """Create a fixed-size pixmap of the warning badge."""
+        from PyQt5.QtCore import QRect
+        from PyQt5.QtGui import QPainter, QPixmap
+
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.transparent)
+        painter = QPainter(pixmap)
+        try:
+            paint_invalid_target_badge(painter, QRect(0, 0, size, size))
+        finally:
+            painter.end()
+        return pixmap
+
+    def _invalidTargetTooltip(self):
+        """Return the i18n string explaining the current invalid state."""
+        if "targets" in self._cue.properties_names():
+            return translate(
+                "TargetingCue",
+                "Collection has invalid target(s)",
+            )
+        target_id = getattr(self._cue, "target_id", "")
+        if not target_id:
+            return translate("TargetingCue", "Target cue is not set")
+        return translate("TargetingCue", "Target cue is missing")
+
+    def _onInvalidTargetChanged(self, invalid):
+        """Show/hide the warning badge and refresh tooltip."""
+        self.targetWarning.setVisible(bool(invalid))
+        if invalid:
+            self.targetWarning.setToolTip(self._invalidTargetTooltip())
+        else:
+            self.targetWarning.setToolTip("")
 
     def _changeVolume(self, new_volume):
         self._volumeElement.live_volume = slider_to_fader(
@@ -562,4 +613,10 @@ class CueWidget(QWidget):
         self.seekSlider.setGeometry(4, s_ypos, s_width, s_height)
         self.statusIcon.setGeometry(
             4, 4, CueWidget.ICON_SIZE, CueWidget.ICON_SIZE
+        )
+        self.targetWarning.setGeometry(
+            self.nameButton.width() - CueWidget.ICON_SIZE - 4,
+            self.nameButton.height() - CueWidget.ICON_SIZE - 4,
+            CueWidget.ICON_SIZE,
+            CueWidget.ICON_SIZE,
         )

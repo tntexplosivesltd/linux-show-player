@@ -40,17 +40,19 @@ from lisp.core.fade_functions import FadeInType, FadeOutType
 from lisp.core.fader import DummyFader
 from lisp.core.properties import Property
 from lisp.cues.cue import Cue, CueAction
+from lisp.cues.targeting import TargetingCue
 from lisp.cues.media_cue import MediaCue
 from lisp.ui.cuelistdialog import CueSelectDialog
 from lisp.ui.settings.cue_settings import CueSettingsRegistry
 from lisp.ui.settings.pages import SettingsPage
 from lisp.ui.ui_utils import translate
 from lisp.ui.widgets import FadeEdit
+from lisp.ui.widgets.target_warning import TargetWarningRow
 
 logger = logging.getLogger(__name__)
 
 
-class VolumeControl(Cue):
+class VolumeControl(TargetingCue, Cue):
     Name = QT_TRANSLATE_NOOP("CueName", "Volume Control")
     Category = QT_TRANSLATE_NOOP("CueCategory", "Action cues")
 
@@ -157,6 +159,9 @@ class VolumeSettings(SettingsPage):
         self.cueButton.clicked.connect(self.select_cue)
         self.cueGroup.layout().addWidget(self.cueButton)
 
+        self.targetWarning = TargetWarningRow(self.cueGroup)
+        self.cueGroup.layout().addWidget(self.targetWarning)
+
         self.volumeGroup = QGroupBox(self)
         self.volumeGroup.setLayout(QHBoxLayout())
         self.layout().addWidget(self.volumeGroup)
@@ -187,6 +192,7 @@ class VolumeSettings(SettingsPage):
         self.fadeGroup.layout().addWidget(self.fadeEdit)
 
         self.retranslateUi()
+        self._refresh_target_warning()
 
     def retranslateUi(self):
         self.cueGroup.setTitle(translate("VolumeControl", "Cue"))
@@ -202,6 +208,18 @@ class VolumeSettings(SettingsPage):
             if cue is not None:
                 self.cue_id = cue.id
                 self.cueLabel.setText(cue.name)
+                self._refresh_target_warning()
+
+    def _refresh_target_warning(self):
+        """Recompute warning state from current cue_id and the model."""
+        cue_id = self.cue_id
+        if not isinstance(cue_id, str) or not cue_id:
+            self.targetWarning.update_state(self.cueButton, "empty")
+            return
+        if Application().cue_model.get(cue_id) is None:
+            self.targetWarning.update_state(self.cueButton, "dangling")
+            return
+        self.targetWarning.update_state(self.cueButton, "ok")
 
     def enableCheck(self, enabled):
         self.setGroupEnabled(self.cueGroup, enabled)
@@ -230,6 +248,7 @@ class VolumeSettings(SettingsPage):
         self.volumePercentEdit.setValue(settings.get("volume", 0) * 100)
         self.fadeEdit.setDuration(settings.get("duration", 0) / 1000)
         self.fadeEdit.setFadeType(settings.get("fade_type", ""))
+        self._refresh_target_warning()
 
     def __volume_change(self, value):
         if not self.__v_edit_flag:

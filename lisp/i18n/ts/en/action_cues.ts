@@ -4,24 +4,34 @@
   <context>
     <name>CollectionCue</name>
     <message>
-      <location filename="../../../plugins/action_cues/collection_cue.py" line="122" />
+      <location filename="../../../plugins/action_cues/collection_cue.py" line="166" />
       <source>Add</source>
       <translation>Add</translation>
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/collection_cue.py" line="123" />
+      <location filename="../../../plugins/action_cues/collection_cue.py" line="167" />
       <source>Remove</source>
       <translation>Remove</translation>
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/collection_cue.py" line="206" />
+      <location filename="../../../plugins/action_cues/collection_cue.py" line="248" />
+      <source>Collection is empty.</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../plugins/action_cues/collection_cue.py" line="286" />
       <source>Cue</source>
       <translation>Cue</translation>
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/collection_cue.py" line="207" />
+      <location filename="../../../plugins/action_cues/collection_cue.py" line="287" />
       <source>Action</source>
       <translation>Action</translation>
+    </message>
+    <message>
+      <location filename="../../../plugins/action_cues/collection_cue.py" line="237" />
+      <source>{n} invalid target(s) — saved cue references cues that no longer exist; they'll be removed when you save.</source>
+      <translation type="unfinished" />
     </message>
   </context>
   <context>
@@ -65,7 +75,7 @@
   <context>
     <name>CueAction</name>
     <message>
-      <location filename="../../../plugins/action_cues/stop_cue.py" line="117" />
+      <location filename="../../../plugins/action_cues/stop_cue.py" line="119" />
       <source>Hibernate</source>
       <translation type="unfinished" />
     </message>
@@ -73,7 +83,7 @@
   <context>
     <name>CueCategory</name>
     <message>
-      <location filename="../../../plugins/action_cues/stop_cue.py" line="56" />
+      <location filename="../../../plugins/action_cues/stop_cue.py" line="58" />
       <source>Action cues</source>
       <translation type="unfinished" />
     </message>
@@ -81,7 +91,7 @@
   <context>
     <name>CueName</name>
     <message>
-      <location filename="../../../plugins/action_cues/resume_cue.py" line="47" />
+      <location filename="../../../plugins/action_cues/resume_cue.py" line="49" />
       <source>Fade &amp; Resume</source>
       <translation type="unfinished" />
     </message>
@@ -106,22 +116,22 @@
       <translation>Stop-All</translation>
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/seek_cue.py" line="41" />
+      <location filename="../../../plugins/action_cues/seek_cue.py" line="43" />
       <source>Seek Cue</source>
       <translation>Seek Cue</translation>
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/collection_cue.py" line="43" />
+      <location filename="../../../plugins/action_cues/collection_cue.py" line="48" />
       <source>Collection Cue</source>
       <translation>Collection Cue</translation>
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/volume_control.py" line="54" />
+      <location filename="../../../plugins/action_cues/volume_control.py" line="56" />
       <source>Volume Control</source>
       <translation>Volume Control</translation>
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/stop_cue.py" line="55" />
+      <location filename="../../../plugins/action_cues/stop_cue.py" line="57" />
       <source>Fade &amp; Stop</source>
       <translation type="unfinished" />
     </message>
@@ -129,37 +139,37 @@
   <context>
     <name>GroupCue</name>
     <message>
-      <location filename="../../../plugins/action_cues/group_cue.py" line="517" />
+      <location filename="../../../plugins/action_cues/group_cue.py" line="554" />
       <source>Parallel</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/group_cue.py" line="520" />
+      <location filename="../../../plugins/action_cues/group_cue.py" line="557" />
       <source>Playlist</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/group_cue.py" line="523" />
+      <location filename="../../../plugins/action_cues/group_cue.py" line="560" />
       <source>Mode</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/group_cue.py" line="532" />
+      <location filename="../../../plugins/action_cues/group_cue.py" line="569" />
       <source>Crossfade</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/group_cue.py" line="537" />
+      <location filename="../../../plugins/action_cues/group_cue.py" line="574" />
       <source>Loop</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/group_cue.py" line="542" />
+      <location filename="../../../plugins/action_cues/group_cue.py" line="579" />
       <source>Shuffle</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/group_cue.py" line="553" />
+      <location filename="../../../plugins/action_cues/group_cue.py" line="590" />
       <source>Group Settings</source>
       <translation type="unfinished" />
     </message>
@@ -200,22 +210,22 @@
   <context>
     <name>ResumeCue</name>
     <message>
-      <location filename="../../../plugins/action_cues/resume_cue.py" line="304" />
+      <location filename="../../../plugins/action_cues/resume_cue.py" line="305" />
       <source>Target</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/resume_cue.py" line="305" />
+      <location filename="../../../plugins/action_cues/resume_cue.py" line="306" />
       <source>Click to select</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/resume_cue.py" line="306" />
+      <location filename="../../../plugins/action_cues/resume_cue.py" line="307" />
       <source>Not selected</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/resume_cue.py" line="307" />
+      <location filename="../../../plugins/action_cues/resume_cue.py" line="308" />
       <source>Fade</source>
       <translation type="unfinished" />
     </message>
@@ -223,27 +233,27 @@
   <context>
     <name>SeekCue</name>
     <message>
-      <location filename="../../../plugins/action_cues/seek_cue.py" line="112" />
+      <location filename="../../../plugins/action_cues/seek_cue.py" line="118" />
       <source>Cue</source>
       <translation>Cue</translation>
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/seek_cue.py" line="113" />
+      <location filename="../../../plugins/action_cues/seek_cue.py" line="119" />
       <source>Click to select</source>
       <translation>Click to select</translation>
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/seek_cue.py" line="114" />
+      <location filename="../../../plugins/action_cues/seek_cue.py" line="120" />
       <source>Not selected</source>
       <translation>Not selected</translation>
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/seek_cue.py" line="115" />
+      <location filename="../../../plugins/action_cues/seek_cue.py" line="121" />
       <source>Seek</source>
       <translation>Seek</translation>
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/seek_cue.py" line="116" />
+      <location filename="../../../plugins/action_cues/seek_cue.py" line="122" />
       <source>Time to reach</source>
       <translation>Time to reach</translation>
     </message>
@@ -251,7 +261,7 @@
   <context>
     <name>SettingsPageName</name>
     <message>
-      <location filename="../../../plugins/action_cues/resume_cue.py" line="246" />
+      <location filename="../../../plugins/action_cues/resume_cue.py" line="244" />
       <source>Fade &amp; Resume Settings</source>
       <translation type="unfinished" />
     </message>
@@ -261,7 +271,7 @@
       <translation>Action Settings</translation>
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/group_cue.py" line="503" />
+      <location filename="../../../plugins/action_cues/group_cue.py" line="540" />
       <source>Group Settings</source>
       <translation type="unfinished" />
     </message>
@@ -276,22 +286,22 @@
       <translation>Stop Settings</translation>
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/seek_cue.py" line="70" />
+      <location filename="../../../plugins/action_cues/seek_cue.py" line="72" />
       <source>Seek Settings</source>
       <translation>Seek Settings</translation>
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/collection_cue.py" line="120" />
+      <location filename="../../../plugins/action_cues/collection_cue.py" line="164" />
       <source>Edit Collection</source>
       <translation>Edit Collection</translation>
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/volume_control.py" line="133" />
+      <location filename="../../../plugins/action_cues/volume_control.py" line="135" />
       <source>Volume Settings</source>
       <translation>Volume Settings</translation>
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/stop_cue.py" line="308" />
+      <location filename="../../../plugins/action_cues/stop_cue.py" line="310" />
       <source>Fade &amp; Stop Settings</source>
       <translation type="unfinished" />
     </message>
@@ -307,27 +317,27 @@
   <context>
     <name>StopCue</name>
     <message>
-      <location filename="../../../plugins/action_cues/stop_cue.py" line="392" />
+      <location filename="../../../plugins/action_cues/stop_cue.py" line="397" />
       <source>Target</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/stop_cue.py" line="393" />
+      <location filename="../../../plugins/action_cues/stop_cue.py" line="398" />
       <source>Click to select</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/stop_cue.py" line="394" />
+      <location filename="../../../plugins/action_cues/stop_cue.py" line="399" />
       <source>Not selected</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/stop_cue.py" line="395" />
+      <location filename="../../../plugins/action_cues/stop_cue.py" line="400" />
       <source>Action:</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/stop_cue.py" line="396" />
+      <location filename="../../../plugins/action_cues/stop_cue.py" line="401" />
       <source>Fade</source>
       <translation type="unfinished" />
     </message>
@@ -335,27 +345,27 @@
   <context>
     <name>VolumeControl</name>
     <message>
-      <location filename="../../../plugins/action_cues/volume_control.py" line="192" />
+      <location filename="../../../plugins/action_cues/volume_control.py" line="198" />
       <source>Cue</source>
       <translation>Cue</translation>
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/volume_control.py" line="193" />
+      <location filename="../../../plugins/action_cues/volume_control.py" line="199" />
       <source>Click to select</source>
       <translation>Click to select</translation>
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/volume_control.py" line="194" />
+      <location filename="../../../plugins/action_cues/volume_control.py" line="200" />
       <source>Not selected</source>
       <translation>Not selected</translation>
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/volume_control.py" line="195" />
+      <location filename="../../../plugins/action_cues/volume_control.py" line="201" />
       <source>Volume to reach</source>
       <translation>Volume to reach</translation>
     </message>
     <message>
-      <location filename="../../../plugins/action_cues/volume_control.py" line="196" />
+      <location filename="../../../plugins/action_cues/volume_control.py" line="202" />
       <source>Fade</source>
       <translation>Fade</translation>
     </message>
@@ -363,7 +373,7 @@
   <context>
     <name>VolumeControlError</name>
     <message>
-      <location filename="../../../plugins/action_cues/volume_control.py" line="124" />
+      <location filename="../../../plugins/action_cues/volume_control.py" line="126" />
       <source>Error during cue execution.</source>
       <translation type="unfinished" />
     </message>

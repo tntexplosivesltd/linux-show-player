@@ -165,7 +165,7 @@
   <context>
     <name>GstMediaError</name>
     <message>
-      <location filename="../../../plugins/gst_backend/gst_media.py" line="270" />
+      <location filename="../../../plugins/gst_backend/gst_media.py" line="356" />
       <source>Cannot create pipeline element: "{}"</source>
       <translation type="unfinished" />
     </message>
@@ -181,7 +181,7 @@
   <context>
     <name>GstMediaWarning</name>
     <message>
-      <location filename="../../../plugins/gst_backend/gst_media.py" line="264" />
+      <location filename="../../../plugins/gst_backend/gst_media.py" line="350" />
       <source>Invalid pipeline element: "{}"</source>
       <translation type="unfinished" />
     </message>
