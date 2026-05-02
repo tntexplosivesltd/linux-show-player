@@ -120,6 +120,11 @@ def test_dangling_target_after_re_add_becomes_valid():
     cue.target_id = target.id
     assert cue.invalid_target is False
 
+    fires = []
+    def on_change(value):
+        fires.append(value)
+    cue.changed("invalid_target").connect(on_change)
+
     app.cue_model.remove(target)
     assert cue.invalid_target is True
 
@@ -127,3 +132,7 @@ def test_dangling_target_after_re_add_becomes_valid():
     target2 = Cue(app=app, id=target.id)
     app.cue_model.add(target2)
     assert cue.invalid_target is False
+
+    # Signal must fire on both transitions: valid -> invalid (remove)
+    # and invalid -> valid (re-add).
+    assert fires == [True, False]
