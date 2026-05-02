@@ -36,7 +36,8 @@ class TargetingCue(metaclass=HasPropertiesMeta):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.changed("target_id").connect(self._recheck_target)
+        if "target_id" in self.properties_names():
+            self.changed("target_id").connect(self._recheck_target)
         self.app.cue_model.item_added.connect(self._on_model_change)
         self.app.cue_model.item_removed.connect(self._on_model_change)
         self._recheck_target()

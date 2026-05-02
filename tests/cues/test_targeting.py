@@ -136,3 +136,50 @@ def test_dangling_target_after_re_add_becomes_valid():
     # Signal must fire on both transitions: valid -> invalid (remove)
     # and invalid -> valid (re-add).
     assert fires == [True, False]
+
+
+def test_collection_cue_empty_list_is_invalid():
+    """A list-targeting cue with no rows is invalid."""
+
+    class _FakeCollection(TargetingCue, Cue):
+        targets = Property(default=[])
+
+        def _resolve_targets(self):
+            if not self.targets:
+                return False
+            return all(
+                tid and self.app.cue_model.get(tid) is not None
+                for tid, _ in self.targets
+            )
+
+    app = _make_app()
+    cue = _FakeCollection(app=app)
+    assert cue.invalid_target is True
+
+
+def test_collection_cue_one_dangling_row_is_invalid():
+    """A list-targeting cue is invalid if any row's target doesn't resolve."""
+
+    class _FakeCollection(TargetingCue, Cue):
+        targets = Property(default=[])
+
+        def _resolve_targets(self):
+            if not self.targets:
+                return False
+            return all(
+                tid and self.app.cue_model.get(tid) is not None
+                for tid, _ in self.targets
+            )
+
+    app = _make_app()
+    valid = Cue(app=app)
+    app.cue_model.add(valid)
+
+    cue = _FakeCollection(app=app)
+    cue.targets = [(valid.id, "Start"), ("does-not-exist", "Start")]
+    cue._recheck_target()
+    assert cue.invalid_target is True
+
+    cue.targets = [(valid.id, "Start")]
+    cue._recheck_target()
+    assert cue.invalid_target is False

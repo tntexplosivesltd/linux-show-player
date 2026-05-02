@@ -31,6 +31,7 @@ from PyQt5.QtWidgets import (
 from lisp.application import Application
 from lisp.core.properties import Property
 from lisp.cues.cue import Cue, CueAction
+from lisp.cues.targeting import TargetingCue
 from lisp.ui.cuelistdialog import CueSelectDialog
 from lisp.ui.qdelegates import CueActionDelegate, CueSelectionDelegate
 from lisp.ui.qmodels import CueClassRole, SimpleCueListModel
@@ -39,7 +40,7 @@ from lisp.ui.settings.pages import SettingsPage
 from lisp.ui.ui_utils import translate
 
 
-class CollectionCue(Cue):
+class CollectionCue(TargetingCue, Cue):
     Name = QT_TRANSLATE_NOOP("CueName", "Collection Cue")
     Category = QT_TRANSLATE_NOOP("CueCategory", "Action cues")
 
@@ -58,6 +59,18 @@ class CollectionCue(Cue):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.name = translate("CueName", self.Name)
+        self.changed("targets").connect(self._recheck_target)
+        self._recheck_target()
+
+    def _resolve_targets(self) -> bool:
+        targets = getattr(self, "targets", None)
+        if not targets:
+            return False
+        model = self.app.cue_model
+        return all(
+            tid and model.get(tid) is not None
+            for tid, _action in targets
+        )
 
     def __start__(self, fade=False):
         for target_id, action in self.targets:
