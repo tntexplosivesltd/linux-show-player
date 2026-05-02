@@ -133,3 +133,78 @@ class TestCueWidgetConstruction:
             f"icon change produced AttributeError warnings: "
             f"{[r.getMessage() for r in attr_warnings]}"
         )
+
+
+class TestCartCueWidgetLiveThemeSwitch:
+    """When the active theme changes mid-session, every cart widget
+    must re-resolve its stylesheet so the cell repaints with the new
+    palette's hex. The cell's ``setStyleSheet(...)`` cache is otherwise
+    frozen on the previous theme's hex."""
+
+    def setup_method(self):
+        from lisp.ui import themes
+        themes._active = None
+
+    def teardown_method(self):
+        # Apply leaks _active across tests; reset so the next file
+        # doesn't see this test's theme as the active one.
+        from lisp.ui import themes
+        themes._active = None
+
+    def _make_theme_with_red(self, red_hex):
+        from PyQt5.QtGui import QColor
+        from lisp.ui.themes.base import (
+            BaseTheme,
+            DEFAULT_CUE_PALETTE,
+            ThemeColors,
+        )
+
+        palette = dict(DEFAULT_CUE_PALETTE)
+        palette["Red"] = red_hex
+
+        class _T(BaseTheme):
+            Colors = ThemeColors(
+                background=QColor(30, 30, 30),
+                foreground=QColor(52, 52, 52),
+                text=QColor(230, 230, 230),
+                highlight=QColor(65, 155, 230),
+                cue_palette=palette,
+            )
+
+        return _T()
+
+    def test_widget_stylesheet_refreshes_after_theme_swap(
+        self, qapp, mock_app
+    ):
+        from lisp.plugins.cart_layout.cue_widget import CueWidget
+        from lisp.ui.icons import IconTheme
+
+        if IconTheme._GlobalTheme is None:
+            IconTheme.set_theme_name("lisp")
+
+        theme_a = self._make_theme_with_red("#aa0000")
+        theme_b = self._make_theme_with_red("#00aa00")
+
+        theme_a.apply(qapp)
+
+        cue = Cue(mock_app)
+        cue.color_name = "Red"
+        widget = CueWidget(cue)
+        qapp.processEvents()
+
+        before = css_to_dict(widget.nameButton.styleSheet()).get(
+            "background", ""
+        )
+        assert before == "#aa0000", (
+            f"Pre-swap background should be theme A red, got {before!r}"
+        )
+
+        theme_b.apply(qapp)
+        qapp.processEvents()
+
+        after = css_to_dict(widget.nameButton.styleSheet()).get(
+            "background", ""
+        )
+        assert after == "#00aa00", (
+            f"Post-swap background should be theme B red, got {after!r}"
+        )

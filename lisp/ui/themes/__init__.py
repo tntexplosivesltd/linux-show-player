@@ -4,8 +4,17 @@ from typing import Mapping
 from PyQt5.QtGui import QColor
 
 from lisp.core.loading import load_classes
+from lisp.core.signal import Signal
 from lisp.ui.themes.base import DEFAULT_CUE_PALETTE
 from lisp.ui.ui_utils import css_to_dict
+
+# Emitted after ``BaseTheme.apply()`` finishes installing the new
+# palette and stylesheet on the QApplication. Subscribers should
+# re-derive any cached theme-dependent state (cue brushes, cell
+# stylesheets, palette swatches). Carries no payload — slots
+# re-read the active theme directly. Connect named methods only:
+# ``Signal`` stores slots via ``WeakMethod`` so lambdas get GC'd.
+theme_changed = Signal()
 
 # Default standby cue band — warm yellow at α 100. Yellow's natural
 # luminance carries the band even at low alpha, so Dark/Light don't

@@ -153,3 +153,5 @@ class BaseTheme:
         if self.QssPath:
             with open(self.QssPath, mode="r", encoding="utf-8") as f:
                 qt_app.setStyleSheet(f.read())
+
+        themes.theme_changed.emit()

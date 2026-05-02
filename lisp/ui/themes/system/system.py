@@ -25,3 +25,4 @@ class System:
     def apply(self, qt_app):
         from lisp.ui import themes
         themes._active = self
+        themes.theme_changed.emit()

@@ -329,6 +329,11 @@ class CueWidget(QWidget):
         self._cue.changed("group_id").connect(
             self._onGroupIdChanged, Connection.QtQueued
         )
+        # Refresh injected hex when the active theme changes so
+        # cells repaint with the new palette without restart.
+        themes.theme_changed.connect(
+            self._updateStyle, Connection.QtQueued
+        )
         # `_updateStyle` reads `self._cue.icon` to choose the cart
         # button glyph; without an icon-change subscription, the
         # cell stays frozen on its old icon until _setCue runs again
