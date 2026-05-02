@@ -21,11 +21,14 @@ from PyQt5.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QGroupBox,
+    QHBoxLayout,
     QHeaderView,
+    QLabel,
     QPushButton,
     QSizePolicy,
     QTableView,
     QVBoxLayout,
+    QWidget,
 )
 
 from lisp.application import Application
@@ -33,6 +36,7 @@ from lisp.core.properties import Property
 from lisp.cues.cue import Cue, CueAction
 from lisp.cues.targeting import TargetingCue
 from lisp.ui.cuelistdialog import CueSelectDialog
+from lisp.ui.icons import IconTheme
 from lisp.ui.qdelegates import CueActionDelegate, CueSelectionDelegate
 from lisp.ui.qmodels import CueClassRole, SimpleCueListModel
 from lisp.ui.settings.cue_settings import CueSettingsRegistry
@@ -87,6 +91,7 @@ class CollectionCueSettings(SettingsPage):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self._dropped_target_count = 0
         self.setLayout(QVBoxLayout(self))
 
         self.cueDialog = CueSelectDialog(
@@ -113,6 +118,23 @@ class CollectionCueSettings(SettingsPage):
         )
         self.collectionGroup.layout().addWidget(self.dialogButtons)
 
+        # Invalid-target summary row. Visible iff the table is empty
+        # OR the most recent loadSettings dropped any rows because their
+        # targets no longer exist.
+        self.targetWarning = QWidget(self.collectionGroup)
+        warningLayout = QHBoxLayout(self.targetWarning)
+        warningLayout.setContentsMargins(0, 2, 0, 0)
+        warningLayout.setSpacing(6)
+        self._targetWarningIcon = QLabel(self.targetWarning)
+        self._targetWarningIcon.setPixmap(
+            IconTheme.get("dialog-warning").pixmap(16, 16)
+        )
+        self._targetWarningText = QLabel(self.targetWarning)
+        warningLayout.addWidget(self._targetWarningIcon)
+        warningLayout.addWidget(self._targetWarningText, stretch=1)
+        self.targetWarning.setVisible(False)
+        self.collectionGroup.layout().addWidget(self.targetWarning)
+
         self.addButton = QPushButton(self.dialogButtons)
         self.dialogButtons.addButton(
             self.addButton, QDialogButtonBox.ActionRole
@@ -127,6 +149,7 @@ class CollectionCueSettings(SettingsPage):
         self.delButton.clicked.connect(self._removeCurrentCue)
 
         self.retranslateUi()
+        self._refresh_target_warning()
 
     def retranslateUi(self):
         self.collectionGroup.setTitle(
@@ -147,11 +170,16 @@ class CollectionCueSettings(SettingsPage):
         self.cueDialog.reset()
         self.cueDialog.add_cues(Application().cue_model)
         self.delButton.setEnabled(False)
+        self._dropped_target_count = 0
 
         for target_id, action in settings.get("targets", []):
             target = Application().cue_model.get(target_id)
             if target is not None:
                 self._addCue(target, CueAction(action))
+            else:
+                self._dropped_target_count += 1
+
+        self._refresh_target_warning()
 
     def getSettings(self):
         if self.isGroupEnabled(self.collectionGroup):
@@ -167,6 +195,7 @@ class CollectionCueSettings(SettingsPage):
         self.collectionModel.appendRow(cue.__class__, cue.id, action)
         self.cueDialog.remove_cue(cue)
         self.delButton.setEnabled(True)
+        self._refresh_target_warning()
 
     def _showAddCueDialog(self):
         if self.cueDialog.exec() == QDialog.Accepted:
@@ -183,6 +212,36 @@ class CollectionCueSettings(SettingsPage):
             self.cueDialog.add_cue(Application().cue_model.get(cueId))
 
         self.delButton.setEnabled(self.collectionModel.rowCount() > 0)
+        self._refresh_target_warning()
+
+    def _refresh_target_warning(self):
+        """Refresh the summary warning under the table.
+
+        Two distinct conditions are surfaced (priority: dropped > empty):
+        - dropped: loadSettings silently removed N rows because their
+          targets no longer exist. Show "N invalid target(s) — saved
+          cue references cues that no longer exist; they'll be removed
+          when you save."
+        - empty: the table has zero rows. Show "Collection is empty."
+        """
+        if self._dropped_target_count > 0:
+            self._targetWarningText.setText(
+                translate(
+                    "CollectionCue",
+                    "{n} invalid target(s) — saved cue references "
+                    "cues that no longer exist; they'll be removed "
+                    "when you save.",
+                ).format(n=self._dropped_target_count)
+            )
+            self.targetWarning.setVisible(True)
+            return
+        if self.collectionModel.rowCount() == 0:
+            self._targetWarningText.setText(
+                translate("CollectionCue", "Collection is empty.")
+            )
+            self.targetWarning.setVisible(True)
+            return
+        self.targetWarning.setVisible(False)
 
 
 class CollectionView(QTableView):
