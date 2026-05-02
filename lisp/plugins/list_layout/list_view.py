@@ -55,6 +55,7 @@ from lisp.plugins.list_layout.list_widgets import (
     PostWaitWidget,
     IndexWidget,
 )
+from lisp.ui import themes
 from lisp.ui.themes import cue_background_hex, cue_color_alpha
 from lisp.ui.ui_utils import translate, css_to_dict, dict_to_css
 
@@ -116,7 +117,6 @@ class CueListView(QTreeWidget):
     ]
 
     ITEM_DEFAULT_BG = QBrush(Qt.transparent)
-    ITEM_CURRENT_BG = QBrush(QColor(250, 220, 0, 100))
 
     GROUP_OUTLINE_WIDTH = 2
     GROUP_OUTLINE_RADIUS = 4
@@ -505,7 +505,7 @@ class CueListView(QTreeWidget):
 
             if item.current:
                 widget_css = subdict(css, ("font-size",))
-                brush = CueListView.ITEM_CURRENT_BG
+                brush = QBrush(themes.standby_indicator())
             else:
                 widget_css = subdict(css, ("color", "font-size"))
                 hex_bg = cue_background_hex(item.cue)

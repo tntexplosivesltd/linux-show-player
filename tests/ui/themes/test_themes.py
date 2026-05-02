@@ -377,22 +377,26 @@ class TestSystemTheme:
 
 
 class TestCueAlpha:
-    """The cue color alpha is theme-controlled — Dark uses the legacy
-    150 default, Light overrides to 220 for less blending against the
-    light background."""
+    """The cue color alpha is theme-controlled. Dark and Light each
+    pick subtle alphas that read as a category tint over their
+    respective base background, rather than a saturated block."""
 
     def setup_method(self):
         from lisp.ui import themes
         themes._active = None  # reset between tests
 
-    def test_default_is_150(self):
+    def test_themecolors_api_default_is_100(self):
+        """The API-level default on ``ThemeColors`` is 100 — LiSP's
+        preferred subtle-tint alpha. Third-party themes that don't
+        pick a value get the same calibration as the in-house
+        Dark theme rather than the historically saturated 150."""
         c = ThemeColors(
             background=QColor(30, 30, 30),
             foreground=QColor(52, 52, 52),
             text=QColor(230, 230, 230),
             highlight=QColor(65, 155, 230),
         )
-        assert c.cue_alpha == 150
+        assert c.cue_alpha == 100
 
     def test_explicit_override_wins(self):
         c = ThemeColors(
@@ -424,18 +428,310 @@ class TestCueAlpha:
                 cue_alpha=300,
             )
 
-    def test_helper_no_active_theme_returns_150(self):
+    def test_helper_no_active_theme_returns_default(self):
+        """Helper falls back to the API default (100) when there's
+        no active theme."""
         from lisp.ui.themes import cue_color_alpha
-        assert cue_color_alpha() == 150
+        assert cue_color_alpha() == 100
 
-    def test_helper_uses_active_theme(self, qapp):
+    def test_light_theme_alpha(self, qapp):
         from lisp.ui.themes import cue_color_alpha
         from lisp.ui.themes.light.light import Light
         Light().apply(qapp)
-        assert cue_color_alpha() == 220
+        assert cue_color_alpha() == 130
 
-    def test_dark_theme_uses_default_150(self, qapp):
+    def test_dark_theme_alpha(self, qapp):
         from lisp.ui.themes import cue_color_alpha
         from lisp.ui.themes.dark.dark import Dark
         Dark().apply(qapp)
-        assert cue_color_alpha() == 150
+        assert cue_color_alpha() == 80
+
+
+class TestStandbyIndicator:
+    """The list-layout standby cue band colour is theme-controlled.
+
+    Dark and Light inherit ``DEFAULT_STANDBY_INDICATOR`` (warm yellow
+    α 100 — yellow's luminance carries the band even at low alpha);
+    Solarized themes override to a palette-faithful magenta at higher
+    alpha, since magenta is darker than yellow and needs more α to
+    read at the same perceptual intensity. Themes that don't set the
+    field fall through to the default — never raising or returning
+    ``None``.
+    """
+
+    def setup_method(self):
+        from lisp.ui import themes
+        themes._active = None  # reset between tests
+
+    def test_default_is_none_on_themecolors(self):
+        c = ThemeColors(
+            background=QColor(30, 30, 30),
+            foreground=QColor(52, 52, 52),
+            text=QColor(230, 230, 230),
+            highlight=QColor(65, 155, 230),
+        )
+        assert c.standby_indicator is None
+
+    def test_explicit_override_stored(self):
+        c = ThemeColors(
+            background=QColor(30, 30, 30),
+            foreground=QColor(52, 52, 52),
+            text=QColor(230, 230, 230),
+            highlight=QColor(65, 155, 230),
+            standby_indicator=QColor(211, 54, 130, 100),
+        )
+        assert c.standby_indicator == QColor(211, 54, 130, 100)
+
+    def test_default_value(self):
+        """``DEFAULT_STANDBY_INDICATOR`` is warm yellow at α 100. The
+        legacy ``CueListView.ITEM_CURRENT_BG`` shipped this exact
+        value; preserving it keeps Dark/Light visually unchanged
+        while still allowing Solarized themes to override."""
+        from lisp.ui.themes import DEFAULT_STANDBY_INDICATOR
+        assert DEFAULT_STANDBY_INDICATOR == QColor(250, 220, 0, 100)
+
+    def test_helper_no_active_theme_returns_default(self):
+        from lisp.ui.themes import (
+            DEFAULT_STANDBY_INDICATOR,
+            standby_indicator,
+        )
+        assert standby_indicator() == DEFAULT_STANDBY_INDICATOR
+
+    def test_helper_active_theme_without_field_returns_default(self, qapp):
+        from lisp.ui.themes import (
+            DEFAULT_STANDBY_INDICATOR,
+            standby_indicator,
+        )
+        from lisp.ui.themes.dark.dark import Dark
+        Dark().apply(qapp)
+        assert standby_indicator() == DEFAULT_STANDBY_INDICATOR
+
+    def test_helper_uses_active_theme_value(self, qapp):
+        from lisp.ui.themes import standby_indicator
+        from lisp.ui.themes.base import BaseTheme
+
+        class _CustomTheme(BaseTheme):
+            Colors = ThemeColors(
+                background=QColor(0, 43, 54),
+                foreground=QColor(7, 54, 66),
+                text=QColor(131, 148, 150),
+                highlight=QColor(42, 161, 152),
+                standby_indicator=QColor(211, 54, 130, 100),
+            )
+
+        _CustomTheme().apply(qapp)
+        assert standby_indicator() == QColor(211, 54, 130, 100)
+
+    def test_light_theme_inherits_default(self, qapp):
+        """Light deliberately does not override standby_indicator; it
+        falls through to the warm-yellow α 100 default."""
+        from lisp.ui.themes import (
+            DEFAULT_STANDBY_INDICATOR,
+            standby_indicator,
+        )
+        from lisp.ui.themes.light.light import Light
+        Light().apply(qapp)
+        assert standby_indicator() == DEFAULT_STANDBY_INDICATOR
+
+
+class _SolarizedExpectations:
+    """Shared expected hex values for both Solarized themes.
+
+    Cue accents are identical across Solarized Light and Dark — the
+    only differences are chrome (bg/fg/text/alternate_base) and the
+    Grey cue colour (base01 vs base1).
+    """
+
+    CUE_ACCENTS = {
+        "Red":    "#dc322f",
+        "Orange": "#cb4b16",
+        "Yellow": "#b58900",
+        "Green":  "#859900",
+        "Blue":   "#268bd2",
+        "Purple": "#6c71c4",
+    }
+    HIGHLIGHT_CYAN = QColor("#2aa198")
+    STANDBY_MAGENTA = QColor(211, 54, 130, 180)
+
+
+class TestSolarizedDarkTheme(_SolarizedExpectations):
+    """Solarized Dark — base03/base02 chrome, Solarized accent cues,
+    cyan selection, magenta standby indicator. Reuses dark/theme.qss."""
+
+    def setup_method(self):
+        from lisp.ui import themes
+        themes._active = None
+
+    def test_applies_without_error(self, qapp):
+        from lisp.ui.themes.solarized_dark.solarized_dark import (
+            SolarizedDark,
+        )
+        SolarizedDark().apply(qapp)
+
+    def test_palette_uses_solarized_base_tones(self, qapp):
+        from lisp.ui.themes.solarized_dark.solarized_dark import (
+            SolarizedDark,
+        )
+        SolarizedDark().apply(qapp)
+        p = qapp.palette()
+        assert p.color(QPalette.Base) == QColor("#002b36")        # base03
+        assert p.color(QPalette.Window) == QColor("#073642")      # base02
+        # Text uses base2 (cream) for high-contrast readability over
+        # saturated cue-colour washes; Solarized's official base0 text
+        # tier is calibrated for plain backgrounds and reads poorly on
+        # the cue-list rows.
+        assert p.color(QPalette.Text) == QColor("#eee8d5")        # base2
+        assert p.color(QPalette.AlternateBase) == QColor("#073642")
+        assert p.color(QPalette.Highlight) == self.HIGHLIGHT_CYAN
+        # HighlightedText and BrightText are explicit overrides on
+        # ``ThemeColors``; if they were accidentally dropped the
+        # Qt fallbacks (black / pure red) would silently take effect.
+        assert p.color(QPalette.HighlightedText) == QColor("#fdf6e3")
+        assert p.color(QPalette.BrightText) == QColor("#dc322f")
+
+    def test_cue_palette_uses_solarized_accents(self, qapp):
+        from lisp.ui.themes import cue_color_hex
+        from lisp.ui.themes.solarized_dark.solarized_dark import (
+            SolarizedDark,
+        )
+        SolarizedDark().apply(qapp)
+        for name, expected in self.CUE_ACCENTS.items():
+            assert cue_color_hex(name) == expected, (
+                f"{name} expected {expected}, got {cue_color_hex(name)}"
+            )
+        assert cue_color_hex("Grey") == "#586e75"  # base01
+
+    def test_cue_alpha_is_subtle(self, qapp):
+        """Solarized Dark uses cue_alpha=80 (same calibration as the
+        Dark theme) — cue colours read as a gentle tint rather than
+        a saturated block over base03."""
+        from lisp.ui.themes import cue_color_alpha
+        from lisp.ui.themes.solarized_dark.solarized_dark import (
+            SolarizedDark,
+        )
+        SolarizedDark().apply(qapp)
+        assert cue_color_alpha() == 80
+
+    def test_standby_indicator_is_magenta(self, qapp):
+        from lisp.ui.themes import standby_indicator
+        from lisp.ui.themes.solarized_dark.solarized_dark import (
+            SolarizedDark,
+        )
+        SolarizedDark().apply(qapp)
+        assert standby_indicator() == self.STANDBY_MAGENTA
+
+    def test_reuses_dark_theme_qss(self, qapp):
+        """Phase 1 ships palette-only fidelity. The Solarized Dark
+        theme reuses the existing dark/theme.qss."""
+        from lisp.ui.themes.solarized_dark.solarized_dark import (
+            SolarizedDark,
+        )
+        qapp.setStyleSheet("")
+        SolarizedDark().apply(qapp)
+        # Dark's QSS is the heavy ~16KB chrome stylesheet
+        assert len(qapp.styleSheet()) > 8192, (
+            f"SolarizedDark QSS unexpectedly small "
+            f"({len(qapp.styleSheet())} bytes); expected dark/theme.qss"
+        )
+
+    def test_discoverable(self):
+        from lisp.ui import themes
+        themes._THEMES.clear()
+        from lisp.ui.themes import themes_names
+        assert "SolarizedDark" in themes_names()
+
+
+class TestSolarizedLightTheme(_SolarizedExpectations):
+    """Solarized Light — base3/base2 chrome, Solarized accent cues,
+    cyan selection, magenta standby indicator. Reuses light/theme.qss."""
+
+    def setup_method(self):
+        from lisp.ui import themes
+        themes._active = None
+
+    def test_applies_without_error(self, qapp):
+        from lisp.ui.themes.solarized_light.solarized_light import (
+            SolarizedLight,
+        )
+        SolarizedLight().apply(qapp)
+
+    def test_palette_uses_solarized_base_tones(self, qapp):
+        from lisp.ui.themes.solarized_light.solarized_light import (
+            SolarizedLight,
+        )
+        SolarizedLight().apply(qapp)
+        p = qapp.palette()
+        assert p.color(QPalette.Base) == QColor("#fdf6e3")        # base3
+        assert p.color(QPalette.Window) == QColor("#eee8d5")      # base2
+        # Text uses base02 (deep teal) for high-contrast readability
+        # over saturated cue-colour washes — same rationale as the
+        # Dark theme's base2 text choice (see TestSolarizedDarkTheme).
+        assert p.color(QPalette.Text) == QColor("#073642")        # base02
+        assert p.color(QPalette.AlternateBase) == QColor("#eee8d5")
+        assert p.color(QPalette.Highlight) == self.HIGHLIGHT_CYAN
+        assert p.color(QPalette.HighlightedText) == QColor("#fdf6e3")
+        assert p.color(QPalette.BrightText) == QColor("#dc322f")
+
+    def test_cue_palette_uses_solarized_accents(self, qapp):
+        from lisp.ui.themes import cue_color_hex
+        from lisp.ui.themes.solarized_light.solarized_light import (
+            SolarizedLight,
+        )
+        SolarizedLight().apply(qapp)
+        for name, expected in self.CUE_ACCENTS.items():
+            assert cue_color_hex(name) == expected
+        assert cue_color_hex("Grey") == "#93a1a1"  # base1
+
+    def test_cue_alpha_is_subtle(self, qapp):
+        """Solarized Light uses cue_alpha=130 (same calibration as
+        the Light theme) — cue colours read as a gentle tint over
+        the warm base3 cream rather than dominating the row."""
+        from lisp.ui.themes import cue_color_alpha
+        from lisp.ui.themes.solarized_light.solarized_light import (
+            SolarizedLight,
+        )
+        SolarizedLight().apply(qapp)
+        assert cue_color_alpha() == 130
+
+    def test_standby_indicator_is_magenta(self, qapp):
+        from lisp.ui.themes import standby_indicator
+        from lisp.ui.themes.solarized_light.solarized_light import (
+            SolarizedLight,
+        )
+        SolarizedLight().apply(qapp)
+        assert standby_indicator() == self.STANDBY_MAGENTA
+
+    def test_reuses_light_theme_qss(self, qapp):
+        """Phase 1 ships palette-only fidelity. The Solarized Light
+        theme reuses the existing light/theme.qss (small, just the
+        item:selected force-styling)."""
+        from lisp.ui.themes.solarized_light.solarized_light import (
+            SolarizedLight,
+        )
+        qapp.setStyleSheet("")
+        SolarizedLight().apply(qapp)
+        # Light's QSS is small but non-empty
+        assert qapp.styleSheet() != ""
+        assert "item:selected" in qapp.styleSheet()
+
+    def test_discoverable(self):
+        from lisp.ui import themes
+        themes._THEMES.clear()
+        from lisp.ui.themes import themes_names
+        assert "SolarizedLight" in themes_names()
+
+
+class TestThemeDiscoveryAggregate:
+    """Lock the full theme roster in one test so a merge accident
+    that drops one of the existing themes can't slip past the
+    per-theme discovery checks (each of which only asserts its own
+    presence)."""
+
+    def test_all_known_themes_discoverable(self):
+        from lisp.ui import themes
+        themes._THEMES.clear()
+        from lisp.ui.themes import themes_names
+        assert set(themes_names()) >= {
+            "Dark", "Light", "System",
+            "SolarizedDark", "SolarizedLight",
+        }
