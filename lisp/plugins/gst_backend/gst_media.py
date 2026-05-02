@@ -75,6 +75,14 @@ class GstMedia(Media):
         # different Gst.Pipeline instances, leaving a hybrid state
         # that GStreamer then spins on while trying to link
         # elements across pipelines.
+        #
+        # Deliberately a non-reentrant Lock — __init_pipeline must
+        # NEVER be re-entered from within itself (a slot fired
+        # during the rebuild that mutates `pipe`, `start_time`, or
+        # otherwise loops back here is always a logic bug). RLock
+        # would silently allow that recursion and corrupt state
+        # the same way the original race did. A deadlock is the
+        # right failure mode: it surfaces the bug immediately.
         self.__init_lock = Lock()
 
         self.changed("loop").connect(self.__on_loops_changed)
@@ -337,6 +345,31 @@ class GstMedia(Media):
             self.__init_pipeline_locked()
 
     def __init_pipeline_locked(self):
+        # Skip-if-coherent fast path. When two threads race into
+        # __init_pipeline (e.g. PreArmManager.prearm + cue.start →
+        # media.play, the original symptom), the second thread
+        # waits at __init_lock and arrives here AFTER the first
+        # finished a full build. Re-running the build would tear
+        # down a perfectly good pipeline (and, in the prearm-then-
+        # play sequence, throw away the prearm latency benefit the
+        # user paid for). Bail out if the live pipeline already
+        # matches `pipe` and is in a usable state.
+        if (
+            self.__pipeline is not None
+            and self.__current_pipe == tuple(self.pipe)
+            and len(self.elements) == len(self.pipe)
+        ):
+            try:
+                gst_state = self.__pipeline.get_state(0)[1]
+            except Exception:
+                gst_state = Gst.State.NULL
+            if gst_state in (
+                Gst.State.READY,
+                Gst.State.PAUSED,
+                Gst.State.PLAYING,
+            ):
+                return
+
         # Make a copy of the current elements properties
         elements_properties = self.elements.properties()
 
