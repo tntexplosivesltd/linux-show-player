@@ -39,6 +39,7 @@ from lisp.ui import themes
 from lisp.ui.icons import IconTheme
 from lisp.ui.ui_utils import css_to_dict, dict_to_css, translate
 from lisp.ui.widgets import QClickLabel, QClickSlider
+from lisp.ui.widgets.target_warning import paint_invalid_target_badge
 from lisp import ICON_THEMES_DIR
 
 
@@ -139,7 +140,7 @@ class CueWidget(QWidget):
         self.targetWarning = QLabel(self.nameButton)
         self.targetWarning.setStyleSheet("background-color: transparent")
         self.targetWarning.setPixmap(
-            IconTheme.get("dialog-warning").pixmap(CueWidget.ICON_SIZE)
+            self._make_target_badge_pixmap(CueWidget.ICON_SIZE)
         )
         self.targetWarning.setVisible(False)
 
@@ -392,6 +393,21 @@ class CueWidget(QWidget):
     def _updateDescription(self, description):
         self.nameButton.setToolTip(description)
 
+    @staticmethod
+    def _make_target_badge_pixmap(size):
+        """Create a fixed-size pixmap of the warning badge."""
+        from PyQt5.QtCore import QRect
+        from PyQt5.QtGui import QPainter, QPixmap
+
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.transparent)
+        painter = QPainter(pixmap)
+        try:
+            paint_invalid_target_badge(painter, QRect(0, 0, size, size))
+        finally:
+            painter.end()
+        return pixmap
+
     def _invalidTargetTooltip(self):
         """Return the i18n string explaining the current invalid state."""
         if "targets" in self._cue.properties_names():
@@ -402,7 +418,7 @@ class CueWidget(QWidget):
         target_id = getattr(self._cue, "target_id", "")
         if not target_id:
             return translate("TargetingCue", "Target cue is not set")
-        return translate("TargetingCue", "Target cue no longer exists")
+        return translate("TargetingCue", "Target cue is missing")
 
     def _onInvalidTargetChanged(self, invalid):
         """Show/hide the warning badge and refresh tooltip."""

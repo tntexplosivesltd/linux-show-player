@@ -36,12 +36,12 @@ from lisp.core.properties import Property
 from lisp.cues.cue import Cue, CueAction
 from lisp.cues.targeting import TargetingCue
 from lisp.ui.cuelistdialog import CueSelectDialog
-from lisp.ui.icons import IconTheme
 from lisp.ui.qdelegates import CueActionDelegate, CueSelectionDelegate
 from lisp.ui.qmodels import CueClassRole, SimpleCueListModel
 from lisp.ui.settings.cue_settings import CueSettingsRegistry
 from lisp.ui.settings.pages import SettingsPage
 from lisp.ui.ui_utils import translate
+from lisp.ui.widgets.target_warning import TargetWarningRow
 
 
 class CollectionCue(TargetingCue, Cue):
@@ -135,7 +135,7 @@ class CollectionCueSettings(SettingsPage):
         warningLayout.setSpacing(6)
         self._targetWarningIcon = QLabel(self.targetWarning)
         self._targetWarningIcon.setPixmap(
-            IconTheme.get("dialog-warning").pixmap(16, 16)
+            TargetWarningRow._make_pixmap(16)
         )
         self._targetWarningText = QLabel(self.targetWarning)
         warningLayout.addWidget(self._targetWarningIcon)

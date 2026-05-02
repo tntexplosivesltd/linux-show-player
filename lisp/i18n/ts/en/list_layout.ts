@@ -290,19 +290,24 @@
   <context>
     <name>TargetingCue</name>
     <message>
-      <location filename="../../../plugins/list_layout/list_widgets.py" line="186" />
-      <source>Target cue no longer exists</source>
+      <location filename="../../../plugins/list_layout/list_widgets.py" line="187" />
+      <source>Target cue is missing</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/list_layout/list_widgets.py" line="179" />
+      <location filename="../../../plugins/list_layout/list_widgets.py" line="180" />
       <source>Collection has invalid target(s)</source>
       <translation type="unfinished" />
     </message>
     <message>
-      <location filename="../../../plugins/list_layout/list_widgets.py" line="185" />
+      <location filename="../../../plugins/list_layout/list_widgets.py" line="186" />
       <source>Target cue is not set</source>
       <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../plugins/list_layout/list_widgets.py" line="186" />
+      <source>Target cue no longer exists</source>
+      <translation type="obsolete" />
     </message>
   </context>
 </TS>

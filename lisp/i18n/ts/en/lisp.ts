@@ -1131,14 +1131,19 @@ This is likely because of corrupted data from a plugin. Try to revert recent cha
   <context>
     <name>TargetingCue</name>
     <message>
-      <location filename="../../../ui/widgets/target_warning.py" line="75" />
+      <location filename="../../../ui/widgets/target_warning.py" line="84" />
       <source>Target cue is not set</source>
+      <translation type="unfinished" />
+    </message>
+    <message>
+      <location filename="../../../ui/widgets/target_warning.py" line="88" />
+      <source>Target cue is missing</source>
       <translation type="unfinished" />
     </message>
     <message>
       <location filename="../../../ui/widgets/target_warning.py" line="79" />
       <source>Target cue no longer exists</source>
-      <translation type="unfinished" />
+      <translation type="obsolete" />
     </message>
   </context>
 </TS>

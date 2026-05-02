@@ -33,6 +33,7 @@ from lisp.cues.cue_time import CueTime, CueWaitTime
 from lisp.ui.icons import IconTheme
 from lisp.ui.ui_utils import translate
 from lisp.ui.widgets.cue_next_actions import tr_next_action
+from lisp.ui.widgets.target_warning import paint_invalid_target_badge
 
 
 class IndexWidget(QLabel):
@@ -183,7 +184,7 @@ class CueStatusIcons(QWidget):
         target_id = getattr(cue, "target_id", "")
         if not target_id:
             return translate("TargetingCue", "Target cue is not set")
-        return translate("TargetingCue", "Target cue no longer exists")
+        return translate("TargetingCue", "Target cue is missing")
 
     def _on_invalid_target_changed(self, invalid):
         """Update tooltip and trigger repaint when target validity flips."""
@@ -288,17 +289,17 @@ class CueStatusIcons(QWidget):
             # disabled — the user still needs to see it.
             if getattr(self._item.cue, "invalid_target", False):
                 qp.setOpacity(1.0)
-                badge_size = max(8, status_size * 2 // 5)
+                # Slightly larger badge than before (50% of icon
+                # vs 40%) — the previous size lost detail at typical
+                # row heights and read as a vague colored blob.
+                badge_size = max(10, status_size // 2)
                 badge_rect = QRect(
                     icon_rect.right() - badge_size + 1,
                     icon_rect.bottom() - badge_size + 1,
                     badge_size,
                     badge_size,
                 )
-                qp.drawPixmap(
-                    badge_rect,
-                    IconTheme.get("dialog-warning").pixmap(badge_size),
-                )
+                paint_invalid_target_badge(qp, badge_rect)
 
         qp.end()
 

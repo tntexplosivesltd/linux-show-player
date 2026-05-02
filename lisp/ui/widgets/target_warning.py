@@ -25,10 +25,10 @@ when the target is valid; otherwise it shows an amber warning icon
 and an explanatory line, and applies a red outline to the picker.
 """
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QRect, Qt
+from PyQt5.QtGui import QPainter, QPixmap
 from PyQt5.QtWidgets import QHBoxLayout, QLabel, QWidget
 
-from lisp.ui.icons import IconTheme
 from lisp.ui.ui_utils import translate
 
 # QSS targeting QPushButton (the typical picker control). The selector
@@ -54,15 +54,24 @@ class TargetWarningRow(QWidget):
         layout.setSpacing(6)
 
         self._icon = QLabel(self)
-        self._icon.setPixmap(
-            IconTheme.get("dialog-warning").pixmap(16, 16)
-        )
+        self._icon.setPixmap(self._make_pixmap(16))
         self._text = QLabel(self)
         self._text.setAlignment(Qt.AlignVCenter)
 
         layout.addWidget(self._icon)
         layout.addWidget(self._text, stretch=1)
         self.setVisible(False)
+
+    @staticmethod
+    def _make_pixmap(size):
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.transparent)
+        painter = QPainter(pixmap)
+        try:
+            paint_invalid_target_badge(painter, QRect(0, 0, size, size))
+        finally:
+            painter.end()
+        return pixmap
 
     def update_state(self, picker_widget, kind):
         if kind == "ok":
@@ -76,8 +85,48 @@ class TargetWarningRow(QWidget):
             )
         else:  # "dangling"
             self._text.setText(
-                translate("TargetingCue", "Target cue no longer exists")
+                translate("TargetingCue", "Target cue is missing")
             )
         self.setVisible(True)
         if picker_widget is not None:
             picker_widget.setStyleSheet(_OUTLINE_QSS)
+
+
+# Saturated amber, matches the existing list-layout "current row"
+# flag's high-contrast palette (yellow with black outline).
+_BADGE_FILL = "#f39c12"     # amber
+_BADGE_OUTLINE = "#000000"  # thin dark outline for contrast on
+                            # both light and dark backgrounds
+_BADGE_GLYPH = "#ffffff"    # white "!"
+
+
+def paint_invalid_target_badge(painter, rect):
+    """Paint a warning badge into rect.
+
+    A filled amber circle with a thin dark outline and a centered
+    white "!". The exclamation mark is dropped for sizes below
+    12 px since it doesn't render legibly.
+
+    The painter's state is saved/restored, so callers don't need
+    to manage QPen/QBrush themselves.
+    """
+    from PyQt5.QtGui import QBrush, QColor, QFont, QPen
+
+    painter.save()
+    painter.setRenderHint(painter.Antialiasing, True)
+
+    pen = QPen(QColor(_BADGE_OUTLINE))
+    pen.setWidthF(max(1.0, rect.width() / 16.0))
+    painter.setPen(pen)
+    painter.setBrush(QBrush(QColor(_BADGE_FILL)))
+    painter.drawEllipse(rect)
+
+    if rect.width() >= 12:
+        painter.setPen(QColor(_BADGE_GLYPH))
+        font = QFont(painter.font())
+        font.setBold(True)
+        font.setPixelSize(max(8, rect.width() - 4))
+        painter.setFont(font)
+        painter.drawText(rect, Qt.AlignCenter, "!")
+
+    painter.restore()
