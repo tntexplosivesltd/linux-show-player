@@ -127,6 +127,34 @@ class TestAppGeneralLiveThemeApply:
         # And _active remains the SAME instance (not a fresh Dark()).
         assert themes._active is dark
 
+    def test_get_settings_unknown_theme_does_not_crash(self, qapp):
+        """A typo'd or stale theme name in ``themeCombo`` (e.g. from
+        an old session, a removed theme plugin, or hand-edited config)
+        must not crash the settings dialog. ``get_theme(...)`` raises
+        ``KeyError`` on unknown names; the apply hook must degrade
+        gracefully and still return a usable settings dict so the
+        config write path succeeds."""
+        from lisp.ui import themes
+        from lisp.ui.themes.dark.dark import Dark
+
+        Dark().apply(qapp)
+        before_active = themes._active
+
+        page = self._build_page(qapp)
+        # Inject a name not in the registry. setCurrentText silently
+        # adds the text if not in the combo's items, simulating a
+        # stale config value sneaking through.
+        page.themeCombo.addItem("DefinitelyNotARealTheme")
+        page.themeCombo.setCurrentText("DefinitelyNotARealTheme")
+
+        # Must not raise.
+        result = page.getSettings()
+
+        # Active theme is unchanged — the bad name is rejected silently.
+        assert themes._active is before_active
+        # Dict still serves the config write path.
+        assert result["theme"]["theme"] == "DefinitelyNotARealTheme"
+
     def test_get_settings_returns_dict_unchanged(self, qapp):
         """The returned dict's contents must be unaffected by the
         apply hook — getSettings still serves the dialog's config

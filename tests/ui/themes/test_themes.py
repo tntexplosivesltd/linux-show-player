@@ -746,6 +746,12 @@ class TestThemeChangedSignal:
         from lisp.ui import themes
         themes._active = None
 
+    def teardown_method(self):
+        # Apply leaks _active across tests; reset so the next class
+        # doesn't see this test's theme as the active one.
+        from lisp.ui import themes
+        themes._active = None
+
     def test_signal_exists(self):
         from lisp.ui import themes
         from lisp.core.signal import Signal
@@ -779,6 +785,23 @@ class TestThemeChangedSignal:
             themes.theme_changed.disconnect(counter.on_theme_changed)
 
         assert counter.fires == 3
+
+    def test_system_apply_emits_signal(self, qapp):
+        """``System`` overrides ``apply`` directly (does not call
+        ``super().apply``), so it must emit ``theme_changed`` itself —
+        otherwise switching from Dark to System leaves cue rows /
+        cart cells frozen on Dark's brushes."""
+        from lisp.ui import themes
+        from lisp.ui.themes.system.system import System
+
+        counter = self._Counter()
+        themes.theme_changed.connect(counter.on_theme_changed)
+        try:
+            System().apply(qapp)
+        finally:
+            themes.theme_changed.disconnect(counter.on_theme_changed)
+
+        assert counter.fires == 1
 
     def test_signal_fires_after_active_is_set(self, qapp):
         """The signal must emit *after* ``themes._active`` is updated,

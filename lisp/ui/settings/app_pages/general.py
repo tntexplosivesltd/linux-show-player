@@ -15,18 +15,19 @@
 # You should have received a copy of the GNU General Public License
 # along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
+import logging
+
 from PyQt5.QtCore import Qt, QT_TRANSLATE_NOOP
 from PyQt5.QtWidgets import (
-    QGroupBox,
-    QVBoxLayout,
+    QApplication,
     QCheckBox,
     QComboBox,
     QGridLayout,
-    QLabel,
+    QGroupBox,
     QHBoxLayout,
+    QLabel,
+    QVBoxLayout,
 )
-
-from PyQt5.QtWidgets import QApplication
 
 from lisp.layout import get_layouts
 from lisp.ui import themes
@@ -35,6 +36,8 @@ from lisp.ui.settings.pages import SettingsPage
 from lisp.ui.themes import get_theme, themes_names
 from lisp.ui.ui_utils import translate
 from lisp.ui.widgets import LocaleComboBox
+
+logger = logging.getLogger(__name__)
 
 
 class AppGeneral(SettingsPage):
@@ -144,9 +147,21 @@ class AppGeneral(SettingsPage):
         # restart. Idempotent: skip if the chosen theme is already
         # the active instance (avoids a redundant emit when the user
         # opens settings, doesn't change theme, and clicks OK).
-        chosen = get_theme(settings["theme"]["theme"])
-        if themes._active is not chosen:
-            chosen.apply(QApplication.instance())
+        # Defensive against stale/typo'd names in user config: a
+        # KeyError here would crash the dialog mid-apply and leave
+        # the config half-written. Log and continue — the bad name
+        # still gets persisted, matching today's boot-time behaviour
+        # (lisp/main.py:135-139 logs the failure and proceeds).
+        try:
+            chosen = get_theme(settings["theme"]["theme"])
+        except KeyError:
+            logger.warning(
+                'Unknown theme "%s" — skipping live apply.',
+                settings["theme"]["theme"],
+            )
+        else:
+            if themes._active is not chosen:
+                chosen.apply(QApplication.instance())
 
         return settings
 
