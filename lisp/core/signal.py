@@ -210,12 +210,21 @@ class Signal:
 
     def emit(self, *args, **kwargs):
         """Emit the signal within the given arguments"""
+        # Snapshot under the lock, then iterate without holding it.
+        # Why: __lock is reentrant (RLock), so weakref-finalizer
+        # callbacks fired during garbage collection on the SAME
+        # thread can re-enter __remove_slot and mutate __slots
+        # mid-iteration — RuntimeError: dictionary changed size
+        # during iteration. Iterating a snapshot is safe and also
+        # avoids holding the lock across slot calls (which can
+        # reach back into connect/disconnect).
         with self.__lock:
-            for slot in self.__slots.values():
-                try:
-                    slot.call(*args, **kwargs)
-                except Exception:
-                    traceback.print_exc()
+            slots = list(self.__slots.values())
+        for slot in slots:
+            try:
+                slot.call(*args, **kwargs)
+            except Exception:
+                traceback.print_exc()
 
     def __remove_slot(self, id_):
         with self.__lock:
