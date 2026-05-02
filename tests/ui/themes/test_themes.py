@@ -569,6 +569,11 @@ class TestSolarizedDarkTheme(_SolarizedExpectations):
         assert p.color(QPalette.Text) == QColor("#839496")        # base0
         assert p.color(QPalette.AlternateBase) == QColor("#073642")
         assert p.color(QPalette.Highlight) == self.HIGHLIGHT_CYAN
+        # HighlightedText and BrightText are explicit overrides on
+        # ``ThemeColors``; if they were accidentally dropped the
+        # Qt fallbacks (black / pure red) would silently take effect.
+        assert p.color(QPalette.HighlightedText) == QColor("#fdf6e3")
+        assert p.color(QPalette.BrightText) == QColor("#dc322f")
 
     def test_cue_palette_uses_solarized_accents(self, qapp):
         from lisp.ui.themes import cue_color_hex
@@ -691,3 +696,19 @@ class TestSolarizedLightTheme(_SolarizedExpectations):
         themes._THEMES.clear()
         from lisp.ui.themes import themes_names
         assert "SolarizedLight" in themes_names()
+
+
+class TestThemeDiscoveryAggregate:
+    """Lock the full theme roster in one test so a merge accident
+    that drops one of the existing themes can't slip past the
+    per-theme discovery checks (each of which only asserts its own
+    presence)."""
+
+    def test_all_known_themes_discoverable(self):
+        from lisp.ui import themes
+        themes._THEMES.clear()
+        from lisp.ui.themes import themes_names
+        assert set(themes_names()) >= {
+            "Dark", "Light", "System",
+            "SolarizedDark", "SolarizedLight",
+        }
