@@ -74,16 +74,11 @@ QPushButton:pressed {
     background: palette(mid);
 }
 
-/* QProgressBar — the cue list's inline TimeWidget is a QProgressBar
- * subclass. Its height drives the row height (CueStatusIcons computes
- * the cue-status icon size as row_height - 10). Fusion's default
- * QProgressBar is thicker than Dark's slim variant, which makes rows
- * — and cue icons — visibly larger on Light without these rules. The
- * `max-height` constraint pins the bar to a fixed size so Fusion's
- * preferred-size growth doesn't push rows up. */
+/* QProgressBar — generic styling for non-cue-list bars (e.g.,
+ * notification toast progress). The cue list's inline TimeWidget
+ * has its own #ListTimeWidget rules below. */
 QProgressBar {
     border-radius: 2px;
-    max-height: 18px;
 }
 QProgressBar:horizontal {
     text-align: center;
@@ -93,4 +88,52 @@ QProgressBar:horizontal {
 QProgressBar::chunk:horizontal {
     border-radius: 2px;
     background-color: palette(highlight);
+}
+
+/* #ListTimeWidget — the cue list's inline time/progress bar. Mirror
+ * Dark's rules: fixed 25px height (drives cue list row height; status
+ * icons size to row_height - 10), transparent default background, and
+ * state-driven chromatic colours (running=green, pause=orange,
+ * error=red) that read on both light and dark backgrounds. */
+#ListTimeWidget {
+    height: 25px;
+    border-radius: 0px;
+    margin: 0px;
+    padding: 0px;
+    background-color: transparent;
+}
+
+#ListTimeWidget:horizontal {
+    text-align: center;
+    border: 1px solid transparent; /* same widget size as state variants */
+    background: transparent;
+}
+
+#ListTimeWidget::chunk:horizontal {
+    border-radius: 0px;
+    background-color: transparent;
+}
+
+/* running */
+#ListTimeWidget[state="running"]:horizontal {
+    border: 1px solid #00FF00;
+}
+#ListTimeWidget[state="running"]::chunk:horizontal {
+    background-color: #00A222;
+}
+
+/* pause */
+#ListTimeWidget[state="pause"]:horizontal {
+    border: 1px solid #FFAA00;
+}
+#ListTimeWidget[state="pause"]::chunk:horizontal {
+    background-color: #FF8800;
+}
+
+/* error */
+#ListTimeWidget[state="error"]:horizontal {
+    border: 1px solid #FF0000;
+}
+#ListTimeWidget[state="error"]::chunk:horizontal {
+    background-color: #CC0000;
 }
