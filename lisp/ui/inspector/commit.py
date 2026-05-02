@@ -247,7 +247,7 @@ class InspectorCommitEngine:
                 # QAbstractButtons, so the generic ``toggled`` hookup
                 # above never sees them. Hook the palette's own
                 # ``colorPicked`` signal instead — it fires once per
-                # user pick with the new hex attached.
+                # user pick with the canonical color name attached.
                 child.colorPicked.connect(self._flush_slot)
                 self._widget_connections.append(
                     (child.colorPicked, self._flush_slot)

@@ -46,7 +46,27 @@ from lisp.ui.widgets import (
     FadeComboBox,
     FadeEdit,
 )
+from lisp.ui import themes
+from lisp.ui.themes.base import CUE_COLOR_NAMES
 from lisp.ui.widgets.cue_color_palette import CueColorPalette
+
+
+def _hex_to_canonical_name(bg_hex: str) -> str:
+    """Return the canonical color name if ``bg_hex`` is an exact match
+    for a palette entry, else ``""``.
+
+    Exact matching is case-insensitive (``#C03A2A`` and ``#c03a2a`` both
+    map to ``"Red"``). Non-palette hexes return ``""`` to signal the
+    caller to use ``setCustomHex()`` — preserving the legacy hex
+    without snap-migration.
+    """
+    if not bg_hex:
+        return ""
+    bg_hex_upper = bg_hex.upper()
+    for name in CUE_COLOR_NAMES:
+        if themes.cue_color_hex(name).upper() == bg_hex_upper:
+            return name
+    return ""
 
 
 def make_flat_group():
@@ -468,13 +488,31 @@ class CueGeneralSettingsPage(CueSettingsPage):
             self.updateIconPreview()
         if "description" in settings:
             self.cueDescriptionEdit.setPlainText(settings["description"])
+        # Color picker — themed name takes precedence over legacy
+        # stylesheet hex. See task plan for the precedence rules.
+        color_name = settings.get("color_name", "")
+        style = css_to_dict(settings.get("stylesheet", ""))
+        bg_hex = style.get("background", "")
+
+        if color_name:
+            # Themed cue — picker shows the canonical swatch
+            self.colorPalette.setColor(color_name)
+        elif bg_hex:
+            canonical = _hex_to_canonical_name(bg_hex)
+            if canonical:
+                # Legacy session whose hex happens to match a canonical
+                # palette entry. Treat as themed — but DON'T mutate the
+                # cue here; the user will see the swatch selected, and
+                # if they re-save, getSettings will commit color_name.
+                self.colorPalette.setColor(canonical)
+            else:
+                # Legacy custom hex (not in canonical palette).
+                # Show "no swatch selected" annotated with the hex.
+                self.colorPalette.setCustomHex(bg_hex)
+        else:
+            self.colorPalette.setColor("")
+
         if "stylesheet" in settings:
-            style = css_to_dict(settings["stylesheet"])
-            # Palette snaps any non-palette hex on load so legacy
-            # sessions migrate silently on the very next save. The
-            # "color" (foreground) key is deliberately ignored — the
-            # palette doesn't own a foreground affordance any more.
-            self.colorPalette.setColor(style.get("background", ""))
             if "font-size" in style:
                 # [:-2] strips the trailing "pt"
                 self.fontSizeSpin.setValue(int(style["font-size"][:-2]))
@@ -517,9 +555,21 @@ class CueGeneralSettingsPage(CueSettingsPage):
         color_enabled = self.isGroupEnabled(self.colorGroup)
         font_enabled = self.isGroupEnabled(self.fontSizeGroup)
         if color_enabled:
-            bg = self.colorPalette.color()
-            if bg:
-                style["background"] = bg
+            name = self.colorPalette.color()
+            custom_hex = self.colorPalette.customHex()
+            settings["color_name"] = name
+
+            if name:
+                # Themed mode owns the background — strip any legacy hex
+                # so the cue commits fully to themed.
+                style.pop("background", None)
+            elif custom_hex:
+                # Legacy custom hex preserved — picker showed "no swatch
+                # selected" because the hex isn't a canonical entry.
+                style["background"] = custom_hex
+            else:
+                # "No color" — drop the background key entirely.
+                style.pop("background", None)
         if font_enabled:
             style["font-size"] = str(self.fontSizeSpin.value()) + "pt"
 

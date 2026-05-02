@@ -17,130 +17,79 @@
 
 """QLab-style fixed-palette colour picker for cue backgrounds.
 
-Sessions store colours as hex strings inside ``cue.stylesheet``. This
-module owns the palette of acceptable hex values and the migration
-function that snaps arbitrary legacy hex to the nearest palette entry.
+Swatches are keyed by canonical name (one of :data:`CUE_COLOR_NAMES`
+from :mod:`lisp.ui.themes.base`, or ``""`` for the "no colour" slot).
+Hex values are resolved from the active theme at paint time so that
+switching themes re-colours swatches without rebuilding the widget.
 
-Palette hues are deliberately deeper than a saturated set would be:
-the list layout composites cue backgrounds at ``alpha=150`` over the
-dark theme's ``#1E1E1E`` base, which lightens every colour. Picking
-deeper raws compensates so the rendered row is both legible and
-distinguishable from its neighbours.
-
-The "no colour" slot is represented by an empty string, not a palette
-entry, so that ``cue.stylesheet`` retains its existing semantics
-(``""`` means "no background set") and sessions without a background
-round-trip unchanged.
+Legacy cues that carry a ``stylesheet["background"]`` hex rather than a
+``color_name`` can be surfaced via :meth:`CueColorPalette.setCustomHex`;
+the widget shows "no swatch selected" until the user picks a palette
+entry, at which point the cue graduates to the themed name system.
 """
 
 import re
-from typing import Optional
 
-from PyQt5.QtCore import pyqtSignal, QSize, Qt
-from PyQt5.QtGui import QColor, QPainter, QPen
+from PyQt5.QtCore import pyqtSignal, Qt
+from PyQt5.QtGui import QColor, QPainter, QPalette, QPen
 from PyQt5.QtWidgets import (
     QAbstractButton,
+    QApplication,
     QHBoxLayout,
     QWidget,
 )
 
+from lisp.ui import themes
+from lisp.ui.themes.base import CUE_COLOR_NAMES
 from lisp.ui.ui_utils import translate
 
 
-# Ordered for the inspector row. Consumers assume list ordering.
-PALETTE = (
-    ("Red",    "#C03A2A"),
-    ("Orange", "#D6761E"),
-    ("Yellow", "#C09A20"),
-    ("Green",  "#3E8A3B"),
-    ("Blue",   "#3535B8"),
-    ("Purple", "#7848A6"),
-    ("Grey",   "#6E6E6E"),
-)
-
-
 _HEX_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
-
-
-def _parse_rgb(hex_color: str) -> Optional[tuple]:
-    """Return (r, g, b) ints for a ``#RRGGBB`` string, or None if invalid."""
-    if not isinstance(hex_color, str) or not _HEX_RE.match(hex_color):
-        return None
-    return (
-        int(hex_color[1:3], 16),
-        int(hex_color[3:5], 16),
-        int(hex_color[5:7], 16),
-    )
-
-
-def snap_to_palette(color) -> str:
-    """Return the palette hex closest to ``color`` by RGB-Euclidean distance.
-
-    ``""``, ``None``, or any string that doesn't parse as ``#RRGGBB``
-    returns ``""`` — the "no colour" slot. An exact palette hit is
-    preserved; anything else snaps to the nearest entry.
-
-    Case is normalised to uppercase so downstream equality comparisons
-    against ``PALETTE`` are direct. Simple Euclidean distance is
-    sufficient for a 7-entry palette — CIE-Lab would be more perceptually
-    faithful but adds a dependency for a negligible quality gain here.
-    """
-    rgb = _parse_rgb(color) if isinstance(color, str) else None
-    if rgb is None:
-        return ""
-
-    best_hex = PALETTE[0][1]
-    best_dist2 = None
-    for _, entry_hex in PALETTE:
-        er, eg, eb = _parse_rgb(entry_hex)
-        dr, dg, db = rgb[0] - er, rgb[1] - eg, rgb[2] - eb
-        dist2 = dr * dr + dg * dg + db * db
-        if best_dist2 is None or dist2 < best_dist2:
-            best_dist2 = dist2
-            best_hex = entry_hex
-
-    return best_hex
-
-
 _SWATCH_DIAMETER = 20
-_SELECTION_RING_COLOR = "#E6E6E6"   # matches QPalette.WindowText in dark theme
-_UNSELECTED_RING_COLOR = "#3C3C3C"  # ~QPalette.Mid; subtle idle outline
 _NONE_SLASH_COLOR = "#888888"
 _NONE_FILL_COLOR = "transparent"
 
 
 class _Swatch(QAbstractButton):
-    """A single circular palette entry.
+    """A single circular palette entry, keyed by canonical name.
 
-    The parent `CueColorPalette` manages selection exclusively, so the
-    swatch itself isn't checkable — it just reports clicks and renders
-    whatever `setSelected(bool)` dictates. Rendering is hand-painted
+    The "no color" swatch uses ``name=""``. All other swatches use one
+    of ``CUE_COLOR_NAMES``. The hex is resolved from the active theme
+    at paint time so that switching themes re-colours swatches.
+
+    The parent ``CueColorPalette`` manages selection exclusively;
+    the swatch just reports clicks and renders whatever
+    :meth:`setSelectedSwatch` dictates. Rendering is hand-painted
     rather than stylesheet-driven so the "None" slot's diagonal slash
     can be drawn cleanly alongside the circular fill.
     """
 
-    def __init__(self, color_hex: str, label: str, parent=None):
+    clicked = pyqtSignal(str)  # emits the swatch's canonical name
+
+    def __init__(self, name: str, label: str, parent=None):
         super().__init__(parent)
-        self._color_hex = color_hex   # "" = None slot
+        self._name = name
         self._selected = False
-        self.setFixedSize(QSize(_SWATCH_DIAMETER + 4, _SWATCH_DIAMETER + 4))
+        self.setFixedSize(_SWATCH_DIAMETER + 4, _SWATCH_DIAMETER + 4)
         self.setCursor(Qt.PointingHandCursor)
         self.setToolTip(label)
+        # Wire QAbstractButton's internal clicked to our str-emitting one.
+        super().clicked.connect(self._on_clicked)
 
-    def colorHex(self) -> str:
-        return self._color_hex
+    def name(self) -> str:
+        """Canonical colour name, or ``""`` for the "no colour" slot."""
+        return self._name
 
-    def isSelected(self) -> bool:
+    def isSelectedSwatch(self) -> bool:
         return self._selected
 
-    def setSelected(self, selected: bool) -> None:
-        if self._selected == selected:
-            return
-        self._selected = selected
-        self.update()
+    def setSelectedSwatch(self, value: bool) -> None:
+        if self._selected != value:
+            self._selected = value
+            self.update()
 
-    def sizeHint(self) -> QSize:
-        return QSize(_SWATCH_DIAMETER + 4, _SWATCH_DIAMETER + 4)
+    def _on_clicked(self):
+        self.clicked.emit(self._name)
 
     def paintEvent(self, _event) -> None:
         painter = QPainter(self)
@@ -150,16 +99,8 @@ class _Swatch(QAbstractButton):
         cy = self.height() / 2
         r = _SWATCH_DIAMETER / 2
 
-        # Fill.
-        if self._color_hex:
-            painter.setBrush(QColor(self._color_hex))
-            painter.setPen(Qt.NoPen)
-            painter.drawEllipse(
-                int(cx - r), int(cy - r),
-                _SWATCH_DIAMETER, _SWATCH_DIAMETER,
-            )
-        # None: transparent circle with diagonal slash.
-        else:
+        if self._name == "":
+            # "No color": transparent circle with a diagonal slash.
             painter.setBrush(QColor(_NONE_FILL_COLOR))
             painter.setPen(QPen(QColor(_NONE_SLASH_COLOR), 1, Qt.DashLine))
             painter.drawEllipse(
@@ -172,14 +113,25 @@ class _Swatch(QAbstractButton):
                 int(cx - offset), int(cy + offset),
                 int(cx + offset), int(cy - offset),
             )
+        else:
+            hex_color = themes.cue_color_hex(self._name)
+            painter.setBrush(QColor(hex_color))
+            painter.setPen(Qt.NoPen)
+            painter.drawEllipse(
+                int(cx - r), int(cy - r),
+                _SWATCH_DIAMETER, _SWATCH_DIAMETER,
+            )
 
-        # Selection ring.
-        ring_color = (
-            _SELECTION_RING_COLOR if self._selected else _UNSELECTED_RING_COLOR
-        )
-        ring_width = 2 if self._selected else 1
+        # Selection ring derived from the active QPalette so it reads
+        # on both light and dark themes.
+        app_palette = QApplication.palette()
+        if self._selected:
+            ring = app_palette.color(QPalette.WindowText)
+            painter.setPen(QPen(ring, 2))
+        else:
+            ring = app_palette.color(QPalette.Mid)
+            painter.setPen(QPen(ring, 1))
         painter.setBrush(Qt.NoBrush)
-        painter.setPen(QPen(QColor(ring_color), ring_width))
         ring_r = r + 1
         painter.drawEllipse(
             int(cx - ring_r), int(cy - ring_r),
@@ -188,29 +140,35 @@ class _Swatch(QAbstractButton):
 
 
 class CueColorPalette(QWidget):
-    """QLab-style fixed-palette background-colour picker for the inspector.
+    """Theme-aware fixed-palette cue colour picker.
 
     Exposes a single-row strip of 8 swatches — "None" plus the 7
-    chromatic entries in :data:`PALETTE`. Holds the currently selected
-    hex (``""`` for "no colour") and emits :attr:`colorPicked` only on
-    user clicks. Programmatic calls to :meth:`setColor` are silent so
-    the InspectorCommitEngine doesn't mistake a settings reload for
-    a user edit.
+    chromatic entries in :data:`CUE_COLOR_NAMES`. Holds the currently
+    selected canonical name (``""`` for "no colour") and emits
+    :attr:`colorPicked` only on user clicks. Programmatic calls to
+    :meth:`setColor` are silent so the InspectorCommitEngine doesn't
+    mistake a settings reload for a user edit.
 
     :meth:`setMixed` is the multi-selection escape hatch — when the
-    inspector shows several cues with divergent colours, flipping
-    mixed mode hides the selection ring entirely so no single swatch
-    lies about "the" colour. User interaction or a definite
-    :meth:`setColor` resolves divergence and clears the flag.
+    inspector shows several cues with divergent colours, flipping mixed
+    mode hides the selection ring entirely so no single swatch lies
+    about "the" colour. User interaction or a definite :meth:`setColor`
+    resolves divergence and clears the flag.
+
+    :meth:`setCustomHex` handles cues that carry a legacy
+    ``stylesheet["background"]`` hex rather than a ``color_name``. No
+    swatch is highlighted; the first user pick graduates the cue to the
+    themed name system.
     """
 
-    colorPicked = pyqtSignal(str)
+    colorPicked = pyqtSignal(str)  # canonical name or ""
 
     def __init__(self, parent=None):
         super().__init__(parent)
 
         self._color: str = ""
         self._mixed: bool = False
+        self._custom_hex: str = ""
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -227,9 +185,9 @@ class CueColorPalette(QWidget):
         layout.addWidget(none_swatch)
         self._swatches.append(none_swatch)
 
-        for name, hex_val in PALETTE:
+        for name in CUE_COLOR_NAMES:
             swatch = _Swatch(
-                hex_val, translate("CueColorPalette", name), self
+                name, translate("CueColorPalette", name), self
             )
             swatch.clicked.connect(self._on_swatch_clicked)
             layout.addWidget(swatch)
@@ -244,54 +202,79 @@ class CueColorPalette(QWidget):
     # ------------------------------------------------------------------
 
     def color(self) -> str:
-        """Currently selected hex, or ``""`` for the "No color" slot."""
+        """Currently selected canonical name, or ``""`` for no colour."""
         return self._color
 
-    def setColor(self, hex_color) -> None:
-        """Set the selected colour, snapping non-palette hex to the nearest.
-
-        Silent: does not emit :attr:`colorPicked`. Clears mixed state —
-        a definite value has been provided.
-        """
-        snapped = snap_to_palette(hex_color) if hex_color else ""
-        self._color = snapped
-        self._mixed = False
-        self._refresh_selection()
+    def customHex(self) -> str:
+        """Legacy custom hex, if the cue's colour isn't a canonical name."""
+        return self._custom_hex
 
     def isMixed(self) -> bool:
         return self._mixed
+
+    def swatches(self) -> list:
+        """Ordered swatch buttons: None slot first, then CUE_COLOR_NAMES."""
+        return list(self._swatches)
+
+    def setColor(self, name: str) -> None:
+        """Programmatic set — silent (no signal emission).
+
+        ``name`` must be a canonical name from ``CUE_COLOR_NAMES`` or
+        ``""``. Unknown names are coerced to ``""``. Clears mixed state
+        and any custom-hex annotation — a definite value has been
+        provided.
+        """
+        if name and name not in CUE_COLOR_NAMES:
+            name = ""
+        self._color = name
+        self._custom_hex = ""
+        self._mixed = False
+        self._refresh_selection()
+
+    def setCustomHex(self, hex_color: str) -> None:
+        """Show "no swatch selected" with a custom-hex annotation.
+
+        For cues that have a legacy ``stylesheet["background"]`` hex
+        but no ``color_name`` — they're not a canonical entry, so no
+        swatch lights up. Picking any swatch graduates them to themed
+        mode (signals ``colorPicked`` with the canonical name, and
+        clears the custom hex).
+
+        Invalid hex (non-``#RRGGBB`` strings) clears the annotation.
+        """
+        if isinstance(hex_color, str) and _HEX_RE.match(hex_color):
+            self._custom_hex = hex_color.upper()
+        else:
+            self._custom_hex = ""
+        self._color = ""
+        self._mixed = False
+        self._refresh_selection()
 
     def setMixed(self, mixed: bool) -> None:
         """Toggle divergent-values display mode. Silent."""
         self._mixed = bool(mixed)
         self._refresh_selection()
 
-    def swatches(self) -> list:
-        """Ordered swatch buttons: None slot first, then PALETTE order."""
-        return list(self._swatches)
-
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
 
-    def _on_swatch_clicked(self) -> None:
-        swatch = self.sender()
-        if not isinstance(swatch, _Swatch):
-            return
-        new_color = swatch.colorHex()
-        self._color = new_color
+    def _on_swatch_clicked(self, name: str) -> None:
+        self._color = name
+        self._custom_hex = ""
         self._mixed = False
         self._refresh_selection()
-        self.colorPicked.emit(new_color)
+        self.colorPicked.emit(name)
 
     def _refresh_selection(self) -> None:
         """Apply the current colour state to every swatch.
 
-        In mixed mode no swatch is shown as selected — a blank row
-        signals divergence without lying about any single value.
+        In mixed mode, or when a custom hex is active, no swatch is
+        shown as selected — a blank row signals divergence or a legacy
+        value without lying about any single canonical entry.
         """
         for swatch in self._swatches:
-            selected = (
-                not self._mixed and swatch.colorHex() == self._color
-            )
-            swatch.setSelected(selected)
+            if self._mixed or self._custom_hex:
+                swatch.setSelectedSwatch(False)
+            else:
+                swatch.setSelectedSwatch(swatch.name() == self._color)

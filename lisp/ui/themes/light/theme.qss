@@ -1,0 +1,139 @@
+/* Light theme — minimal QSS.
+ *
+ * The Light theme is intentionally palette-only: it does not restyle
+ * widgets the way Dark theme's theme.qss does. However, a small number
+ * of selection-related rules are required to force Qt's default styles
+ * to actually use QPalette.Highlight for selection backgrounds —
+ * without them, Qt's system style rendering sometimes substitutes a
+ * darker default that's hard to distinguish from theme-tinted (black)
+ * icon foregrounds.
+ *
+ * See: docs/superpowers/specs/2026-04-25-light-theme-design.md
+ */
+
+/* Selection: force palette(highlight) for any list/tree/menu item's
+ * selected state. Mirrors the dark theme's equivalent rule. */
+QWidget::item:selected,
+QWidget::item:selected:hover {
+    background-color: palette(highlight);
+    color: palette(highlighted-text);
+}
+
+QTreeView::branch:selected,
+QTreeView::branch:selected:hover {
+    background-color: palette(highlight);
+}
+
+/* QAbstractItemView selections — covers QListView IconMode used by
+ * the icon picker dialog. */
+QAbstractItemView {
+    selection-background-color: palette(highlight);
+    selection-color: palette(highlighted-text);
+}
+
+/* Cart cell tiles need an explicit background and border on Light —
+ * Qt's default paint would use palette(window), which is identical
+ * to the cart panel's background, making cells invisible against it.
+ * Mirrors the equivalent rule in dark/theme.qss. */
+#ButtonCueWidget {
+    background-color: palette(light);
+    border: 1px solid palette(mid);
+    border-radius: 6px;
+}
+
+#ButtonCueWidget[selected="true"] {
+    border: 2px solid palette(highlight);
+}
+
+/* Toolbar control buttons (Go / Pause / Stop / Interrupt etc.) use
+ * QPushButton, which dynamically sizes its icon to fit the button
+ * minus 8px. Padding alone isn't enough to override Fusion's chrome —
+ * we need to fully replace the button's background and border so the
+ * effective content rect matches Dark's flat styling. Targeting
+ * QPushButton (Python subclass) keeps Fusion's native styling for
+ * dialog buttons; only the toolbar control buttons get this look. */
+QPushButton {
+    background-color: qlineargradient(
+        x1: 0,
+        y1: 1,
+        x2: 0,
+        y2: 0,
+        stop: 0 palette(button),
+        stop: 1 palette(midlight)
+    );
+    border: 1px solid palette(mid);
+    border-radius: 4px;
+    padding: 4px;
+}
+
+QPushButton:focus {
+    border: 1px solid palette(highlight);
+}
+
+QPushButton:pressed {
+    background: palette(mid);
+}
+
+/* QProgressBar — generic styling for non-cue-list bars (e.g.,
+ * notification toast progress). The cue list's inline TimeWidget
+ * has its own #ListTimeWidget rules below. */
+QProgressBar {
+    border-radius: 2px;
+}
+QProgressBar:horizontal {
+    text-align: center;
+    border: 1px solid palette(mid);
+    background: palette(base);
+}
+QProgressBar::chunk:horizontal {
+    border-radius: 2px;
+    background-color: palette(highlight);
+}
+
+/* #ListTimeWidget — the cue list's inline time/progress bar. Mirror
+ * Dark's rules: fixed 25px height (drives cue list row height; status
+ * icons size to row_height - 10), transparent default background, and
+ * state-driven chromatic colours (running=green, pause=orange,
+ * error=red) that read on both light and dark backgrounds. */
+#ListTimeWidget {
+    height: 25px;
+    border-radius: 0px;
+    margin: 0px;
+    padding: 0px;
+    background-color: transparent;
+}
+
+#ListTimeWidget:horizontal {
+    text-align: center;
+    border: 1px solid transparent; /* same widget size as state variants */
+    background: transparent;
+}
+
+#ListTimeWidget::chunk:horizontal {
+    border-radius: 0px;
+    background-color: transparent;
+}
+
+/* running */
+#ListTimeWidget[state="running"]:horizontal {
+    border: 1px solid #00FF00;
+}
+#ListTimeWidget[state="running"]::chunk:horizontal {
+    background-color: #00A222;
+}
+
+/* pause */
+#ListTimeWidget[state="pause"]:horizontal {
+    border: 1px solid #FFAA00;
+}
+#ListTimeWidget[state="pause"]::chunk:horizontal {
+    background-color: #FF8800;
+}
+
+/* error */
+#ListTimeWidget[state="error"]:horizontal {
+    border: 1px solid #FF0000;
+}
+#ListTimeWidget[state="error"]::chunk:horizontal {
+    background-color: #CC0000;
+}

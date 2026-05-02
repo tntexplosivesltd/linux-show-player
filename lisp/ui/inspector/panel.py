@@ -502,9 +502,9 @@ class InspectorPanel(QWidget):
 
     def _write_widget_value(self, widget: QWidget, value) -> bool:
         if isinstance(widget, CueColorPalette):
-            # Delegating to setColor runs the hex through
-            # snap_to_palette, so harness callers can pass legacy or
-            # near-palette hex and still land on a valid entry.
+            # setColor accepts a canonical name or ""; unknown values
+            # (including raw hex strings from legacy callers) coerce to
+            # "".  Task 15 will migrate callers to pass canonical names.
             widget.setColor(value if value is not None else "")
             return True
         if isinstance(widget, QLineEdit):

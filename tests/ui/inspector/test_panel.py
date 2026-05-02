@@ -398,9 +398,9 @@ class TestColorPaletteAdapters:
 
         w = CueColorPalette()
         qtbot.addWidget(w)
-        w.setColor("#3535B8")
+        w.setColor("Blue")
 
-        assert _widget_value(w) == "#3535B8"
+        assert _widget_value(w) == "Blue"
 
     def test_widget_value_reads_empty_for_none_slot(self, qtbot):
         from lisp.ui.inspector.panel import _widget_value
@@ -417,16 +417,17 @@ class TestColorPaletteAdapters:
         w = CueColorPalette()
         qtbot.addWidget(w)
 
-        assert panel._write_widget_value(w, "#C03A2A") is True
-        assert w.color() == "#C03A2A"
+        assert panel._write_widget_value(w, "Red") is True
+        assert w.color() == "Red"
 
-    def test_write_widget_value_snaps_non_palette_hex(self, qtbot, panel):
-        # Harness callers may hand over legacy hex; delegating through
-        # setColor ensures snap-to-palette applies.
+    def test_write_widget_value_unknown_name_clears(self, qtbot, panel):
+        # setColor coerces unknown values (including raw hex) to "".
+        # Task 15 will migrate callers to pass canonical names instead.
         from lisp.ui.widgets.cue_color_palette import CueColorPalette
 
         w = CueColorPalette()
         qtbot.addWidget(w)
+        w.setColor("Red")  # start with something selected
 
-        panel._write_widget_value(w, "#C13B2B")
-        assert w.color() == "#C03A2A"
+        panel._write_widget_value(w, "NotAColor")
+        assert w.color() == ""

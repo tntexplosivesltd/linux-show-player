@@ -17,6 +17,7 @@
 
 import glob
 import os
+import re
 from typing import Union
 from xml.etree import ElementTree as ET
 
@@ -25,6 +26,82 @@ from PyQt5.QtSvg import QSvgRenderer
 from PyQt5.QtCore import Qt, QByteArray
 
 from lisp import ICON_THEMES_DIR, ICON_THEME_COMMON
+
+# Match any 6-digit hex; the substitution function verifies grayscale
+# equality (case-insensitively) and inverts only matching values.
+_HEX_6_RE = re.compile(rb"#([0-9A-Fa-f]{2})([0-9A-Fa-f]{2})([0-9A-Fa-f]{2})\b")
+_HEX_3_RE = re.compile(rb"#([0-9A-Fa-f])([0-9A-Fa-f])([0-9A-Fa-f])\b")
+
+# Named grayscale CSS color values appearing as SVG attribute or CSS
+# property values for fill / stroke / stop-color. Constrained to those
+# properties to avoid touching text content elsewhere (titles, descs,
+# ids). Captures the prefix so we can reattach it on the swap.
+_NAMED_GRAYSCALE_RE = re.compile(
+    rb"(?P<prefix>(?:fill|stroke|stop-color)\s*[:=]\s*['\"]?\s*)"
+    rb"(?P<color>white|black)\b"
+)
+
+
+def _invert_grayscale_fills(svg_bytes: bytes) -> bytes:
+    """Invert grayscale color values (hex and CSS named) in an SVG byte
+    string; preserve chromatic colors unchanged.
+
+    Used to adapt dark-tuned SVG assets for light themes. The inversion
+    is symmetric:
+    - Hex: ``#969696`` <-> ``#696969``, ``#000000`` <-> ``#ffffff``
+    - Named: ``white`` <-> ``black`` (when used as fill/stroke/stop-color)
+
+    Named-color swaps are constrained to known SVG color attributes /
+    CSS color properties (fill, stroke, stop-color) to avoid mangling
+    text content (titles, ids, descriptions).
+    """
+
+    def _invert_byte(value: int) -> bytes:
+        inv = 255 - value
+        return f"{inv:02x}{inv:02x}{inv:02x}".encode("ascii")
+
+    def _repl_6(match):
+        a, b, c = match.group(1), match.group(2), match.group(3)
+        if a.lower() != b.lower() or a.lower() != c.lower():
+            return match.group(0)  # not grayscale; preserve verbatim
+        v = int(a, 16)
+        return b"#" + _invert_byte(v)
+
+    def _repl_3(match):
+        # Expand short form (#fff = #ffffff) before inverting so the
+        # output is consistently 6-digit.
+        a, b, c = match.group(1), match.group(2), match.group(3)
+        if a.lower() != b.lower() or a.lower() != c.lower():
+            return match.group(0)  # not grayscale; preserve verbatim
+        nibble = int(a, 16)
+        v = nibble * 17  # 0xF -> 0xFF
+        return b"#" + _invert_byte(v)
+
+    def _repl_named(match):
+        prefix = match.group("prefix")
+        color = match.group("color")
+        swapped = b"black" if color == b"white" else b"white"
+        return prefix + swapped
+
+    svg_bytes = _HEX_6_RE.sub(_repl_6, svg_bytes)
+    svg_bytes = _HEX_3_RE.sub(_repl_3, svg_bytes)
+    svg_bytes = _NAMED_GRAYSCALE_RE.sub(_repl_named, svg_bytes)
+    return svg_bytes
+
+
+def _active_theme_is_light() -> bool:
+    """True if the currently-applied theme has dark text on a light
+    background — the signal to invert dark-tuned grayscale icon fills.
+
+    Returns False when no theme is active, when the active theme has no
+    ``Colors`` (e.g., ``System``), or when text is light. Conservative
+    default: don't tint."""
+    from lisp.ui import themes
+
+    active = themes._active
+    if active is None or not hasattr(active, "Colors"):
+        return False
+    return active.Colors.text.lightness() < 128
 
 
 def icon_themes_names():
@@ -74,7 +151,7 @@ class IconTheme:
                         break
                 pattern = IconTheme._SEARCH_PATTERN.format(dir_, icon_name)
                 for icon in glob.iglob(pattern, recursive=True):
-                    icon = QIcon(icon)
+                    icon = IconTheme._load_themed_icon(icon)
                     break
 
             IconTheme._GlobalCache[icon_name] = icon
@@ -102,6 +179,14 @@ class IconTheme:
             with open(svg_path, "rb") as f:
                 xml_bytes = f.read()
 
+            # Invert grayscale fills BEFORE applying the variation's root
+            # attrs, so the variation's deliberate named colors (e.g.,
+            # "black" for the -cart overlay) aren't accidentally swapped to
+            # "white" on light theme. Per-path grayscales in the SVG (e.g.,
+            # legacy #969696) still get inverted as intended.
+            if _active_theme_is_light():
+                xml_bytes = _invert_grayscale_fills(xml_bytes)
+
             root = ET.fromstring(xml_bytes)
             variations = IconTheme._CUE_TYPE_VARIATIONS[suffix]
             for attr, val in variations.items():
@@ -122,3 +207,45 @@ class IconTheme:
             return QIcon(pixmap)
         except Exception:
             return IconTheme._BLANK_ICON
+
+    @staticmethod
+    def _load_themed_icon(svg_path: str) -> QIcon:
+        """Load an icon from disk, applying theme-aware grayscale tinting
+        if the active theme is light. Non-SVG files (PNG etc.) are loaded
+        directly; only SVG paths are processed.
+
+        Renders the inverted SVG at multiple pixmap sizes and adds them
+        all to a single QIcon — necessary because a single QPixmap-backed
+        QIcon can only downscale, not upscale. Qt's icon engine picks the
+        closest size for any request and downscales sharply."""
+        if not _active_theme_is_light() or not svg_path.endswith(".svg"):
+            return QIcon(svg_path)
+
+        try:
+            with open(svg_path, "rb") as f:
+                xml_bytes = f.read()
+            xml_bytes = _invert_grayscale_fills(xml_bytes)
+
+            renderer = QSvgRenderer(QByteArray(xml_bytes))
+            if not renderer.defaultSize().isValid():
+                # Empty or malformed SVG; return raw QIcon as fallback
+                return QIcon(svg_path)
+
+            icon = QIcon()
+            # Multiple sizes covering the range LiSP actually requests:
+            # 16/24 for cue list status, 32 for inspector swatches,
+            # 48 for icon picker dialog, 128/256 for toolbar buttons
+            # (which use QIconPushButton's dynamic sizing up to ~200px).
+            for size in (16, 32, 64, 128, 256):
+                pixmap = QPixmap(size, size)
+                pixmap.fill(Qt.transparent)
+                painter = QPainter(pixmap)
+                renderer.render(painter)
+                painter.end()
+                icon.addPixmap(pixmap)
+            return icon
+        except Exception:
+            # Any IO/parse/render failure: fall back to the un-tinted
+            # SVG file. Better to render the icon dark-tinted on light
+            # background (still legible) than not at all.
+            return QIcon(svg_path)

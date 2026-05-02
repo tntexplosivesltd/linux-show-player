@@ -24,6 +24,7 @@ from lisp.ui.settings.cue_pages.cue_general import (
     CueGeneralSettingsPage,
     CueTimingPage,
 )
+from lisp.ui.ui_utils import css_to_dict
 
 
 @pytest.fixture(autouse=True)
@@ -105,32 +106,111 @@ class TestCueGeneralSettingsPageRoundTrip:
         assert result["fadeout_duration"] == 2.5
         assert result["exclusive"] is True
 
-        # Stylesheet is composed from the palette selector and font
-        # spin; key order in the CSS string isn't guaranteed, so
-        # decompose. Foreground color MUST be absent — the palette
-        # only owns background, and unknown keys drop.
+        # Task 15: canonical palette hex on load → color_name is set,
+        # and background is STRIPPED from the stylesheet (themed mode).
+        assert result["color_name"] == "Red"
         css = result["stylesheet"]
         assert "font-size:14pt" in css
-        assert "background:#C03A2A" in css
+        assert "background" not in css_to_dict(css)
         assert "color:" not in css
 
-    def test_legacy_non_palette_background_snaps_on_save(self, qtbot):
-        # Sessions written before the palette existed may carry
-        # arbitrary hex. loadSettings must snap to the nearest palette
-        # entry so the very next save lands within the contract —
-        # without this, legacy sessions silently produce non-palette
-        # output that the inspector can't edit.
-        page = CueGeneralSettingsPage(MediaCue)
+class TestHexToCanonicalNameMapping:
+    """Pin the canonical-hex → name mapping that drives the
+    auto-graduation behavior in loadSettings. If palette hexes change,
+    legacy sessions stop auto-graduating silently — this test fails
+    loudly so we know to update either the palette or this expectation."""
+
+    def test_each_canonical_hex_maps_to_its_name(self):
+        from lisp.ui.themes.base import CUE_COLOR_NAMES, DEFAULT_CUE_PALETTE
+        from lisp.ui.settings.cue_pages.cue_general import (
+            _hex_to_canonical_name,
+        )
+        for name in CUE_COLOR_NAMES:
+            hex_value = DEFAULT_CUE_PALETTE[name]
+            assert _hex_to_canonical_name(hex_value) == name, (
+                f"Expected {hex_value!r} → {name!r}; got something else"
+            )
+
+    def test_lowercase_canonical_hex_matches(self):
+        """Case-insensitive match — a session saved by a user who
+        hand-edited the file with lowercase hex should still
+        graduate."""
+        from lisp.ui.settings.cue_pages.cue_general import (
+            _hex_to_canonical_name,
+        )
+        assert _hex_to_canonical_name("#c03a2a") == "Red"
+
+    def test_non_palette_hex_returns_empty(self):
+        """The no-migration guard. Custom hexes route via
+        setCustomHex(), which only happens when this returns ''."""
+        from lisp.ui.settings.cue_pages.cue_general import (
+            _hex_to_canonical_name,
+        )
+        assert _hex_to_canonical_name("#A0413A") == ""
+
+    def test_empty_string_returns_empty(self):
+        from lisp.ui.settings.cue_pages.cue_general import (
+            _hex_to_canonical_name,
+        )
+        assert _hex_to_canonical_name("") == ""
+
+
+class TestCueGeneralSettingsPageRoundTripLegacy:
+    def test_legacy_non_palette_background_preserved_on_save(
+        self, qtbot
+    ):
+        """Legacy custom hex (not in canonical palette) must be
+        preserved verbatim on save — no silent migration. The picker
+        shows the hex as a custom annotation; the cue's color is
+        untouched until the user explicitly picks a swatch."""
+        page = CueGeneralSettingsPage(Cue)
         qtbot.addWidget(page)
 
-        # #C13B2B is one unit off red on each channel — must snap to
-        # the Red palette entry.
-        page.loadSettings(
-            {"stylesheet": "background:#C13B2B;font-size:12pt;"}
-        )
+        # Load a cue with a custom hex that's NOT in the palette.
+        page.loadSettings({
+            "stylesheet": "background: #A0413A",
+        })
 
-        css = page.getSettings()["stylesheet"]
-        assert "background:#C03A2A" in css
+        # The picker should show "no swatch selected" + the hex
+        assert page.colorPalette.color() == ""
+        assert page.colorPalette.customHex() == "#A0413A"
+
+        # Saving without any user edit must round-trip the same hex
+        saved = page.getSettings()
+        style = css_to_dict(saved["stylesheet"])
+        assert style.get("background") == "#A0413A"
+
+    def test_themed_save_sets_color_name_and_strips_background(
+        self, qtbot, mock_app
+    ):
+        """Picker with a canonical name selected → settings["color_name"]
+        is the name, AND stylesheet has no background key (themed mode
+        owns the background; no duplication)."""
+        page = CueGeneralSettingsPage(Cue)
+        qtbot.addWidget(page)
+
+        page.colorPalette.setColor("Red")
+
+        saved = page.getSettings()
+        assert saved["color_name"] == "Red"
+        style = css_to_dict(saved["stylesheet"])
+        assert "background" not in style
+
+    def test_load_color_name_takes_precedence_over_stylesheet_bg(
+        self, qtbot, mock_app
+    ):
+        """When both color_name and stylesheet bg are set (e.g., session
+        saved by older code that didn't strip), color_name wins on load."""
+        page = CueGeneralSettingsPage(Cue)
+        qtbot.addWidget(page)
+
+        page.loadSettings({
+            "color_name": "Blue",
+            "stylesheet": "background: #aabbcc",
+        })
+
+        assert page.colorPalette.color() == "Blue"
+        assert page.colorPalette.customHex() == ""
 
     def test_empty_load_does_not_crash(self, qtbot):
         page = CueGeneralSettingsPage(MediaCue)
@@ -142,8 +222,9 @@ class TestCueGeneralSettingsPageRoundTrip:
         page.getSettings()
 
     def test_stylesheet_without_font_size_loads_background(self, qtbot):
-        # Palette hex round-trips exactly; legacy foreground color is
-        # silently dropped because the palette doesn't own it.
+        # Canonical palette hex on load: legacy foreground color is
+        # silently dropped; background migrates to color_name on save
+        # and is stripped from the stylesheet (Task 15 themed mode).
         page = CueGeneralSettingsPage(MediaCue)
         qtbot.addWidget(page)
 
@@ -151,8 +232,10 @@ class TestCueGeneralSettingsPageRoundTrip:
             {"stylesheet": "background:#3535B8;color:#040506;"}
         )
 
-        css = page.getSettings().get("stylesheet", "")
-        assert "background:#3535B8" in css
+        saved = page.getSettings()
+        assert saved["color_name"] == "Blue"
+        css = saved.get("stylesheet", "")
+        assert "background" not in css_to_dict(css)
         assert "color:" not in css
 
 
@@ -260,18 +343,21 @@ class TestCueGeneralColorGroupEmission:
 
         This was already working pre-fix, but lock it in so the
         No-color fix doesn't overshoot and break the common case.
+        Task 15: themed mode writes color_name, strips background from
+        stylesheet (no duplicate storage).
         """
         page = CueGeneralSettingsPage(MediaCue)
         qtbot.addWidget(page)
         page.enableCheck(True)
 
         page.colorGroup.setChecked(True)
-        page.colorPalette.setColor("#3E8A3B")
+        page.colorPalette.setColor("Green")
 
         settings = page.getSettings()
 
         assert "stylesheet" in settings
-        assert "background:#3E8A3B" in settings["stylesheet"]
+        assert settings["color_name"] == "Green"
+        assert "background" not in css_to_dict(settings["stylesheet"])
 
     def test_color_group_unticked_still_omits_stylesheet(self, qtbot):
         """If the user hasn't ticked the colour or font groups, the
