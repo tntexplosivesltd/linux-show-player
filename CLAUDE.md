@@ -73,6 +73,24 @@ The harness provides 42 methods across 7 namespaces: `session.*`, `cue.*`, `layo
 - **Thread-safe**: Mutations dispatch to the Qt main thread via `invoke_on_main_thread`; reads are safe under the GIL
 - **Localhost only**: Binds to `127.0.0.1:8070` by default
 
+### Running E2E Test Scripts
+
+Standalone E2E tests live in `tests/e2e/` and run as scripts (not via pytest — they launch their own LiSP subprocess via `tests/e2e/helpers.py`). Helper code uses `sys.executable` to spawn LiSP, so the script's interpreter must be the poetry venv:
+
+```bash
+# CORRECT — uses the poetry venv interpreter for both the script
+# AND the LiSP subprocess it spawns.
+poetry run python tests/e2e/test_pre_arm_e2e.py
+
+# WRONG — bare `python` resolves to system Python, which lacks the
+# lisp dependencies. The script imports succeed (helpers don't pull
+# in lisp directly) but the spawned LiSP subprocess crashes immediately
+# and the test reports "LiSP did not start within 15s".
+python tests/e2e/test_pre_arm_e2e.py
+```
+
+Before running, run `pgrep -af "lisp.main"` to verify no stale LiSP is bound to port 8070 — a stale instance silently steals RPC calls and produces confusing "Method not found" errors for new RPCs.
+
 ## Architecture
 
 ### Entry Point & Lifecycle
