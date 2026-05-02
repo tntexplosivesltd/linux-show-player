@@ -41,7 +41,7 @@ class SolarizedDark(BaseTheme):
     Colors = ThemeColors(
         background=QColor("#002b36"),         # base03
         foreground=QColor("#073642"),         # base02 — chrome
-        text=QColor("#839496"),               # base0
+        text=QColor("#eee8d5"),               # base2 — high-contrast cream
         highlight=QColor("#2aa198"),          # cyan
         alternate_base=QColor("#073642"),     # base02 — list striping
         highlighted_text=QColor("#fdf6e3"),   # base3 — text on cyan

@@ -566,7 +566,11 @@ class TestSolarizedDarkTheme(_SolarizedExpectations):
         p = qapp.palette()
         assert p.color(QPalette.Base) == QColor("#002b36")        # base03
         assert p.color(QPalette.Window) == QColor("#073642")      # base02
-        assert p.color(QPalette.Text) == QColor("#839496")        # base0
+        # Text uses base2 (cream) for high-contrast readability over
+        # saturated cue-colour washes; Solarized's official base0 text
+        # tier is calibrated for plain backgrounds and reads poorly on
+        # the cue-list rows.
+        assert p.color(QPalette.Text) == QColor("#eee8d5")        # base2
         assert p.color(QPalette.AlternateBase) == QColor("#073642")
         assert p.color(QPalette.Highlight) == self.HIGHLIGHT_CYAN
         # HighlightedText and BrightText are explicit overrides on
@@ -646,7 +650,10 @@ class TestSolarizedLightTheme(_SolarizedExpectations):
         p = qapp.palette()
         assert p.color(QPalette.Base) == QColor("#fdf6e3")        # base3
         assert p.color(QPalette.Window) == QColor("#eee8d5")      # base2
-        assert p.color(QPalette.Text) == QColor("#657b83")        # base00
+        # Text uses base02 (deep teal) for high-contrast readability
+        # over saturated cue-colour washes — same rationale as the
+        # Dark theme's base2 text choice (see TestSolarizedDarkTheme).
+        assert p.color(QPalette.Text) == QColor("#073642")        # base02
         assert p.color(QPalette.AlternateBase) == QColor("#eee8d5")
         assert p.color(QPalette.Highlight) == self.HIGHLIGHT_CYAN
         assert p.color(QPalette.HighlightedText) == QColor("#fdf6e3")

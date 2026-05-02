@@ -38,7 +38,7 @@ class SolarizedLight(BaseTheme):
     Colors = ThemeColors(
         background=QColor("#fdf6e3"),         # base3
         foreground=QColor("#eee8d5"),         # base2 — chrome
-        text=QColor("#657b83"),               # base00
+        text=QColor("#073642"),               # base02 — high-contrast teal
         highlight=QColor("#2aa198"),          # cyan
         alternate_base=QColor("#eee8d5"),     # base2 — list striping
         highlighted_text=QColor("#fdf6e3"),   # base3 — text on cyan
