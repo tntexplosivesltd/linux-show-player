@@ -56,6 +56,38 @@ class IndexWidget(QLabel):
         self.setText(str(newIndex + 1))
 
 
+class CueNumberWidget(QLabel):
+    """Renders the static `cue.cue_number` (e.g. '1', '1.5', 'Pre-1').
+
+    Distinct from `IndexWidget` which renders the layout-managed
+    position. Cue numbers travel with the cue across reorders; index
+    changes whenever the row moves.
+    """
+
+    def __init__(self, item, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setAlignment(Qt.AlignCenter)
+
+        # Reserve room for typical labels including short alphanumeric
+        # prefixes ("Pre-99"). The column itself is ResizeToContents,
+        # so this is just the minimum reservation per row.
+        self.sizeIncrement = QSize(
+            self.fontMetrics().size(Qt.TextSingleLine, "Pre-99").width(), 0
+        )
+
+        item.cue.changed("cue_number").connect(
+            self.__update, Connection.QtQueued
+        )
+        self.__update(item.cue.cue_number)
+
+    def sizeHint(self):
+        return super().sizeHint() + self.sizeIncrement
+
+    def __update(self, value):
+        self.setText(value)
+
+
 class NameWidget(QLabel):
     def __init__(self, item, *args, **kwargs):
         super().__init__(*args, **kwargs)

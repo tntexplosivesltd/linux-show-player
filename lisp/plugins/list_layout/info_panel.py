@@ -58,22 +58,34 @@ class InfoPanel(QWidget):
     def cue(self, item):
         if self._cue is not None:
             self._cue.changed("name").disconnect(self._name_changed)
+            self._cue.changed("cue_number").disconnect(self._number_changed)
             self._cue.changed("description").disconnect(self._desc_changed)
 
         self._cue = item
 
         if self._cue is not None:
             self._cue.changed("name").connect(self._name_changed)
+            self._cue.changed("cue_number").connect(self._number_changed)
             self._cue.changed("description").connect(self._desc_changed)
 
-            self._name_changed(self._cue.name)
+            self._refresh_name()
             self._desc_changed(self._cue.description)
         else:
             self.cueName.clear()
             self.cueDescription.clear()
 
     def _name_changed(self, name):
-        self.cueName.setText(str(self.cue.index + 1) + " → " + name)
+        self._refresh_name()
+
+    def _number_changed(self, number):
+        self._refresh_name()
+
+    def _refresh_name(self):
+        # Prefer the static cue_number when set; fall back to the
+        # 1-based row position so old or unnumbered sessions still
+        # display something sensible.
+        prefix = self._cue.cue_number or str(self._cue.index + 1)
+        self.cueName.setText(prefix + " → " + self._cue.name)
 
     def _desc_changed(self, description):
         if hasattr(QTextDocument, "setMarkdown"):

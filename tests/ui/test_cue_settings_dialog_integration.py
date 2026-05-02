@@ -212,19 +212,20 @@ class TestCanonicalTabOrder:
 
 
 class TestGeneralTabStructure:
-    def test_base_cue_general_tab_has_ten_group_boxes(
+    def test_base_cue_general_tab_has_eleven_group_boxes(
         self, registry, qtbot
     ):
         dialog = _build_dialog(Cue, qtbot)
 
         general_tab = dialog.mainPage.page(0)
         groups = general_tab.findChildren(QGroupBox)
-        # Exactly ten group boxes: Name, Description, Color, Font Size,
+        # Eleven group boxes: Q#, Name, Description, Color, Font Size,
         # Start action, Stop action, Fade In, Fade Out, Exclusive,
         # Enabled.
-        assert len(groups) == 10
+        assert len(groups) == 11
 
         titles = {g.title() for g in groups}
+        assert "Q#" in titles
         assert "Cue Name and Icon" in titles
         assert "Description/Note" in titles
         assert "Color" in titles
@@ -236,11 +237,11 @@ class TestGeneralTabStructure:
         assert "Exclusive" in titles
         assert "Enabled" in titles
 
-    def test_stop_all_general_tab_also_has_ten_group_boxes(
+    def test_stop_all_general_tab_also_has_eleven_group_boxes(
         self, registry, qtbot
     ):
         dialog = _build_dialog(StopAll, qtbot)
 
         general_tab = dialog.mainPage.page(0)
         groups = general_tab.findChildren(QGroupBox)
-        assert len(groups) == 10
+        assert len(groups) == 11

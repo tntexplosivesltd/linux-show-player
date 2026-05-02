@@ -43,6 +43,7 @@ from lisp.plugins.action_cues.group_cue import GroupCue
 from lisp.core.util import subdict
 from lisp.plugins.list_layout.list_widgets import (
     CueStatusIcons,
+    CueNumberWidget,
     NameWidget,
     PreWaitWidget,
     CueTimeWidget,
@@ -84,6 +85,11 @@ class CueListView(QTreeWidget):
     COLUMNS = [
         ListColumn("", CueStatusIcons, QHeaderView.Fixed, width=75),
         ListColumn("#", IndexWidget, QHeaderView.ResizeToContents),
+        ListColumn(
+            QT_TRANSLATE_NOOP("ListLayoutHeader", "Q#"),
+            CueNumberWidget,
+            QHeaderView.ResizeToContents,
+        ),
         ListColumn(
             QT_TRANSLATE_NOOP("ListLayoutHeader", "Cue"),
             NameWidget,
