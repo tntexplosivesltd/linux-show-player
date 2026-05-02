@@ -76,6 +76,14 @@ class CollectionCue(TargetingCue, Cue):
             for tid, _action in targets
         )
 
+    def _on_model_change(self, cue):
+        # The base-class guard checks `cue.id == self.target_id`, but
+        # CollectionCue has no scalar `target_id` — it keeps a list.
+        # Always recheck so that removing any target in the list flips
+        # `invalid_target` from False to True without a round-trip
+        # through an already-invalid state.
+        self._recheck_target()
+
     def __start__(self, fade=False):
         for target_id, action in self.targets:
             cue = self.app.cue_model.get(target_id)
