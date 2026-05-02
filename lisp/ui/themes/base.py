@@ -59,6 +59,7 @@ class ThemeColors:
         default_factory=lambda: DEFAULT_CUE_PALETTE
     )
     cue_alpha: int = 150
+    standby_indicator: Optional[QColor] = None
 
     def __post_init__(self):
         if not isinstance(self.cue_alpha, int) or not 0 <= self.cue_alpha <= 255:

@@ -439,3 +439,86 @@ class TestCueAlpha:
         from lisp.ui.themes.dark.dark import Dark
         Dark().apply(qapp)
         assert cue_color_alpha() == 150
+
+
+class TestStandbyIndicator:
+    """The list-layout standby cue band colour is theme-controlled.
+
+    Dark and Light inherit the legacy hardcoded yellow
+    (``QColor(250, 220, 0, 100)``); Solarized themes override to a
+    palette-faithful magenta. Themes that don't set the field fall
+    through to the default — never raising or returning ``None``.
+    """
+
+    def setup_method(self):
+        from lisp.ui import themes
+        themes._active = None  # reset between tests
+
+    def test_default_is_none_on_themecolors(self):
+        c = ThemeColors(
+            background=QColor(30, 30, 30),
+            foreground=QColor(52, 52, 52),
+            text=QColor(230, 230, 230),
+            highlight=QColor(65, 155, 230),
+        )
+        assert c.standby_indicator is None
+
+    def test_explicit_override_stored(self):
+        c = ThemeColors(
+            background=QColor(30, 30, 30),
+            foreground=QColor(52, 52, 52),
+            text=QColor(230, 230, 230),
+            highlight=QColor(65, 155, 230),
+            standby_indicator=QColor(211, 54, 130, 100),
+        )
+        assert c.standby_indicator == QColor(211, 54, 130, 100)
+
+    def test_default_constant_matches_legacy_hardcoded_value(self):
+        """The default MUST byte-equal the value previously hardcoded
+        in CueListView.ITEM_CURRENT_BG. Drift breaks Dark/Light's
+        visual baseline."""
+        from lisp.ui.themes import DEFAULT_STANDBY_INDICATOR
+        assert DEFAULT_STANDBY_INDICATOR == QColor(250, 220, 0, 100)
+
+    def test_helper_no_active_theme_returns_default(self):
+        from lisp.ui.themes import (
+            DEFAULT_STANDBY_INDICATOR,
+            standby_indicator,
+        )
+        assert standby_indicator() == DEFAULT_STANDBY_INDICATOR
+
+    def test_helper_active_theme_without_field_returns_default(self, qapp):
+        from lisp.ui.themes import (
+            DEFAULT_STANDBY_INDICATOR,
+            standby_indicator,
+        )
+        from lisp.ui.themes.dark.dark import Dark
+        Dark().apply(qapp)
+        assert standby_indicator() == DEFAULT_STANDBY_INDICATOR
+
+    def test_helper_uses_active_theme_value(self, qapp):
+        from lisp.ui.themes import standby_indicator
+        from lisp.ui.themes.base import BaseTheme
+
+        class _CustomTheme(BaseTheme):
+            Colors = ThemeColors(
+                background=QColor(0, 43, 54),
+                foreground=QColor(7, 54, 66),
+                text=QColor(131, 148, 150),
+                highlight=QColor(42, 161, 152),
+                standby_indicator=QColor(211, 54, 130, 100),
+            )
+
+        _CustomTheme().apply(qapp)
+        assert standby_indicator() == QColor(211, 54, 130, 100)
+
+    def test_light_theme_inherits_default(self, qapp):
+        """Light deliberately does not override; it must keep the
+        legacy yellow so existing user expectations don't change."""
+        from lisp.ui.themes import (
+            DEFAULT_STANDBY_INDICATOR,
+            standby_indicator,
+        )
+        from lisp.ui.themes.light.light import Light
+        Light().apply(qapp)
+        assert standby_indicator() == DEFAULT_STANDBY_INDICATOR

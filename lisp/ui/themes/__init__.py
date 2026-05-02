@@ -1,9 +1,17 @@
 from os import path
 from typing import Mapping
 
+from PyQt5.QtGui import QColor
+
 from lisp.core.loading import load_classes
 from lisp.ui.themes.base import DEFAULT_CUE_PALETTE
 from lisp.ui.ui_utils import css_to_dict
+
+# Legacy hardcoded value, previously
+# ``CueListView.ITEM_CURRENT_BG = QBrush(QColor(250, 220, 0, 100))``.
+# Themes that don't override ``standby_indicator`` fall through to
+# this — preserving Dark/Light behaviour unchanged.
+DEFAULT_STANDBY_INDICATOR = QColor(250, 220, 0, 100)
 
 _THEMES = {}
 _active = None
@@ -61,6 +69,20 @@ def cue_palette() -> Mapping[str, str]:
     if _active is not None and hasattr(_active, "Colors"):
         return _active.Colors.cue_palette
     return DEFAULT_CUE_PALETTE
+
+
+def standby_indicator() -> QColor:
+    """Return the active theme's standby cue band colour.
+
+    Falls back to ``DEFAULT_STANDBY_INDICATOR`` when no theme is
+    active, the active theme has no ``Colors``, or the theme's
+    ``standby_indicator`` field is ``None``.
+    """
+    if _active is not None and hasattr(_active, "Colors"):
+        c = _active.Colors.standby_indicator
+        if c is not None:
+            return c
+    return DEFAULT_STANDBY_INDICATOR
 
 
 def cue_background_hex(cue) -> str:
