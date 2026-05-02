@@ -58,7 +58,7 @@ class ThemeColors:
     cue_palette: Mapping[str, str] = field(
         default_factory=lambda: DEFAULT_CUE_PALETTE
     )
-    cue_alpha: int = 150
+    cue_alpha: int = 100
     standby_indicator: Optional[QColor] = None
 
     def __post_init__(self):

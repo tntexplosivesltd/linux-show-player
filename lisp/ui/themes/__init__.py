@@ -58,12 +58,12 @@ def cue_color_hex(name: str) -> str:
 def cue_color_alpha() -> int:
     """Return the active theme's cue color alpha (0-255).
 
-    Falls back to 150 (the legacy default) when no theme is active or
-    the active theme has no ``Colors``.
+    Falls back to 100 (LiSP's default subtle-tint alpha) when no
+    theme is active or the active theme has no ``Colors``.
     """
     if _active is not None and hasattr(_active, "Colors"):
         return _active.Colors.cue_alpha
-    return 150
+    return 100
 
 
 def cue_palette() -> Mapping[str, str]:

@@ -385,17 +385,18 @@ class TestCueAlpha:
         from lisp.ui import themes
         themes._active = None  # reset between tests
 
-    def test_themecolors_api_default_is_150(self):
-        """The API-level default on ``ThemeColors`` stays at 150 for
-        third-party themes that don't pick an alpha. LiSP's own
-        themes (Dark/Light/Solarized) override to subtler values."""
+    def test_themecolors_api_default_is_100(self):
+        """The API-level default on ``ThemeColors`` is 100 — LiSP's
+        preferred subtle-tint alpha. Third-party themes that don't
+        pick a value get the same calibration as the in-house
+        Dark theme rather than the historically saturated 150."""
         c = ThemeColors(
             background=QColor(30, 30, 30),
             foreground=QColor(52, 52, 52),
             text=QColor(230, 230, 230),
             highlight=QColor(65, 155, 230),
         )
-        assert c.cue_alpha == 150
+        assert c.cue_alpha == 100
 
     def test_explicit_override_wins(self):
         c = ThemeColors(
@@ -427,9 +428,11 @@ class TestCueAlpha:
                 cue_alpha=300,
             )
 
-    def test_helper_no_active_theme_returns_150(self):
+    def test_helper_no_active_theme_returns_default(self):
+        """Helper falls back to the API default (100) when there's
+        no active theme."""
         from lisp.ui.themes import cue_color_alpha
-        assert cue_color_alpha() == 150
+        assert cue_color_alpha() == 100
 
     def test_light_theme_alpha(self, qapp):
         from lisp.ui.themes import cue_color_alpha
@@ -599,9 +602,9 @@ class TestSolarizedDarkTheme(_SolarizedExpectations):
         assert cue_color_hex("Grey") == "#586e75"  # base01
 
     def test_cue_alpha_is_subtle(self, qapp):
-        """Solarized intentionally uses a lower cue_alpha than the
-        legacy Dark theme (150) so cue colours read as a gentle tint
-        rather than a saturated block over Solarized's muted base03."""
+        """Solarized Dark uses cue_alpha=80 (same calibration as the
+        Dark theme) — cue colours read as a gentle tint rather than
+        a saturated block over base03."""
         from lisp.ui.themes import cue_color_alpha
         from lisp.ui.themes.solarized_dark.solarized_dark import (
             SolarizedDark,
@@ -680,10 +683,9 @@ class TestSolarizedLightTheme(_SolarizedExpectations):
         assert cue_color_hex("Grey") == "#93a1a1"  # base1
 
     def test_cue_alpha_is_subtle(self, qapp):
-        """Solarized intentionally uses a lower cue_alpha than the
-        legacy Light theme (220) so cue colours read as a gentle tint
-        over Solarized's warm base3 cream rather than dominating the
-        row."""
+        """Solarized Light uses cue_alpha=130 (same calibration as
+        the Light theme) — cue colours read as a gentle tint over
+        the warm base3 cream rather than dominating the row."""
         from lisp.ui.themes import cue_color_alpha
         from lisp.ui.themes.solarized_light.solarized_light import (
             SolarizedLight,
