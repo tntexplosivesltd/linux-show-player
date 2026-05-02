@@ -377,15 +377,18 @@ class TestSystemTheme:
 
 
 class TestCueAlpha:
-    """The cue color alpha is theme-controlled — Dark uses the legacy
-    150 default, Light overrides to 220 for less blending against the
-    light background."""
+    """The cue color alpha is theme-controlled. Dark and Light each
+    pick subtle alphas that read as a category tint over their
+    respective base background, rather than a saturated block."""
 
     def setup_method(self):
         from lisp.ui import themes
         themes._active = None  # reset between tests
 
-    def test_default_is_150(self):
+    def test_themecolors_api_default_is_150(self):
+        """The API-level default on ``ThemeColors`` stays at 150 for
+        third-party themes that don't pick an alpha. LiSP's own
+        themes (Dark/Light/Solarized) override to subtler values."""
         c = ThemeColors(
             background=QColor(30, 30, 30),
             foreground=QColor(52, 52, 52),
@@ -428,26 +431,26 @@ class TestCueAlpha:
         from lisp.ui.themes import cue_color_alpha
         assert cue_color_alpha() == 150
 
-    def test_helper_uses_active_theme(self, qapp):
+    def test_light_theme_alpha(self, qapp):
         from lisp.ui.themes import cue_color_alpha
         from lisp.ui.themes.light.light import Light
         Light().apply(qapp)
-        assert cue_color_alpha() == 220
+        assert cue_color_alpha() == 130
 
-    def test_dark_theme_uses_default_150(self, qapp):
+    def test_dark_theme_alpha(self, qapp):
         from lisp.ui.themes import cue_color_alpha
         from lisp.ui.themes.dark.dark import Dark
         Dark().apply(qapp)
-        assert cue_color_alpha() == 150
+        assert cue_color_alpha() == 80
 
 
 class TestStandbyIndicator:
     """The list-layout standby cue band colour is theme-controlled.
 
-    Dark and Light inherit the legacy hardcoded yellow
-    (``QColor(250, 220, 0, 100)``); Solarized themes override to a
-    palette-faithful magenta. Themes that don't set the field fall
-    through to the default — never raising or returning ``None``.
+    Dark and Light inherit ``DEFAULT_STANDBY_INDICATOR`` (warm yellow
+    α 180); Solarized themes override to a palette-faithful magenta.
+    Themes that don't set the field fall through to the default —
+    never raising or returning ``None``.
     """
 
     def setup_method(self):
@@ -473,12 +476,13 @@ class TestStandbyIndicator:
         )
         assert c.standby_indicator == QColor(211, 54, 130, 100)
 
-    def test_default_constant_matches_legacy_hardcoded_value(self):
-        """The default MUST byte-equal the value previously hardcoded
-        in CueListView.ITEM_CURRENT_BG. Drift breaks Dark/Light's
-        visual baseline."""
+    def test_default_value(self):
+        """``DEFAULT_STANDBY_INDICATOR`` is warm yellow at α 180 —
+        bright enough to read clearly above coloured cue washes
+        on both Dark and Light themes (which both fall through to
+        this default)."""
         from lisp.ui.themes import DEFAULT_STANDBY_INDICATOR
-        assert DEFAULT_STANDBY_INDICATOR == QColor(250, 220, 0, 100)
+        assert DEFAULT_STANDBY_INDICATOR == QColor(250, 220, 0, 180)
 
     def test_helper_no_active_theme_returns_default(self):
         from lisp.ui.themes import (
@@ -513,8 +517,8 @@ class TestStandbyIndicator:
         assert standby_indicator() == QColor(211, 54, 130, 100)
 
     def test_light_theme_inherits_default(self, qapp):
-        """Light deliberately does not override; it must keep the
-        legacy yellow so existing user expectations don't change."""
+        """Light deliberately does not override standby_indicator; it
+        falls through to the warm-yellow α 180 default."""
         from lisp.ui.themes import (
             DEFAULT_STANDBY_INDICATOR,
             standby_indicator,

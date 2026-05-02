@@ -31,5 +31,6 @@ class Dark(BaseTheme):
         foreground=QColor(52, 52, 52),
         text=QColor(230, 230, 230),
         highlight=QColor(65, 155, 230),
+        cue_alpha=80,
     )
     QssPath = os.path.join(os.path.dirname(__file__), "theme.qss")
