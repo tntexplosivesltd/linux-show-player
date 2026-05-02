@@ -43,9 +43,9 @@ class SolarizedLight(BaseTheme):
         alternate_base=QColor("#eee8d5"),     # base2 — list striping
         highlighted_text=QColor("#fdf6e3"),   # base3 — text on cyan
         bright_text=QColor("#dc322f"),        # red
-        standby_indicator=QColor(211, 54, 130, 100),  # magenta α 100
+        standby_indicator=QColor(211, 54, 130, 180),  # magenta α 180
         cue_palette=_SOLARIZED_CUE_PALETTE_LIGHT,
-        cue_alpha=220,
+        cue_alpha=130,
     )
     QssPath = os.path.join(
         os.path.dirname(__file__), "..", "light", "theme.qss"

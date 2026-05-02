@@ -46,9 +46,9 @@ class SolarizedDark(BaseTheme):
         alternate_base=QColor("#073642"),     # base02 — list striping
         highlighted_text=QColor("#fdf6e3"),   # base3 — text on cyan
         bright_text=QColor("#dc322f"),        # red
-        standby_indicator=QColor(211, 54, 130, 100),  # magenta α 100
+        standby_indicator=QColor(211, 54, 130, 180),  # magenta α 180
         cue_palette=_SOLARIZED_CUE_PALETTE_DARK,
-        cue_alpha=150,
+        cue_alpha=80,
     )
     # Phase 1 ships palette-only fidelity by reusing the dark QSS.
     # A targeted retuning pass for off-palette hex values is planned

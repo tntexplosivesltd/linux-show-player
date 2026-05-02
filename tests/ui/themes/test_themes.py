@@ -541,7 +541,7 @@ class _SolarizedExpectations:
         "Purple": "#6c71c4",
     }
     HIGHLIGHT_CYAN = QColor("#2aa198")
-    STANDBY_MAGENTA = QColor(211, 54, 130, 100)
+    STANDBY_MAGENTA = QColor(211, 54, 130, 180)
 
 
 class TestSolarizedDarkTheme(_SolarizedExpectations):
@@ -591,13 +591,16 @@ class TestSolarizedDarkTheme(_SolarizedExpectations):
             )
         assert cue_color_hex("Grey") == "#586e75"  # base01
 
-    def test_cue_alpha_matches_dark(self, qapp):
+    def test_cue_alpha_is_subtle(self, qapp):
+        """Solarized intentionally uses a lower cue_alpha than the
+        legacy Dark theme (150) so cue colours read as a gentle tint
+        rather than a saturated block over Solarized's muted base03."""
         from lisp.ui.themes import cue_color_alpha
         from lisp.ui.themes.solarized_dark.solarized_dark import (
             SolarizedDark,
         )
         SolarizedDark().apply(qapp)
-        assert cue_color_alpha() == 150
+        assert cue_color_alpha() == 80
 
     def test_standby_indicator_is_magenta(self, qapp):
         from lisp.ui.themes import standby_indicator
@@ -669,13 +672,17 @@ class TestSolarizedLightTheme(_SolarizedExpectations):
             assert cue_color_hex(name) == expected
         assert cue_color_hex("Grey") == "#93a1a1"  # base1
 
-    def test_cue_alpha_matches_light(self, qapp):
+    def test_cue_alpha_is_subtle(self, qapp):
+        """Solarized intentionally uses a lower cue_alpha than the
+        legacy Light theme (220) so cue colours read as a gentle tint
+        over Solarized's warm base3 cream rather than dominating the
+        row."""
         from lisp.ui.themes import cue_color_alpha
         from lisp.ui.themes.solarized_light.solarized_light import (
             SolarizedLight,
         )
         SolarizedLight().apply(qapp)
-        assert cue_color_alpha() == 220
+        assert cue_color_alpha() == 130
 
     def test_standby_indicator_is_magenta(self, qapp):
         from lisp.ui.themes import standby_indicator
