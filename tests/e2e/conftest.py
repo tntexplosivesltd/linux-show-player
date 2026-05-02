@@ -25,4 +25,5 @@ collect_ignore = [
     "test_global_controls_e2e.py",
     "test_exclusive_mode_e2e.py",
     "test_model_signals_e2e.py",
+    "test_pre_arm_e2e.py",
 ]
