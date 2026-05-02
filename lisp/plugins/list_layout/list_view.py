@@ -636,16 +636,32 @@ class CueListView(QTreeWidget):
         self.blockSignals(True)
         try:
             if isinstance(cue, GroupCue):
-                pos = 0
-                for i in range(self.topLevelItemCount()):
-                    if (
-                        self.topLevelItem(i).cue.index
-                        < cue.index
-                    ):
-                        pos = i + 1
-                    else:
-                        break
-                self.insertTopLevelItem(pos, item)
+                if (
+                    cue.group_id
+                    and cue.group_id in self._group_items
+                ):
+                    parent = self._group_items[cue.group_id]
+                    child_pos = 0
+                    for j in range(parent.childCount()):
+                        if (
+                            parent.child(j).cue.index
+                            < cue.index
+                        ):
+                            child_pos = j + 1
+                        else:
+                            break
+                    parent.insertChild(child_pos, item)
+                else:
+                    pos = 0
+                    for i in range(self.topLevelItemCount()):
+                        if (
+                            self.topLevelItem(i).cue.index
+                            < cue.index
+                        ):
+                            pos = i + 1
+                        else:
+                            break
+                    self.insertTopLevelItem(pos, item)
                 self._group_items[cue.id] = item
                 item.setExpanded(not cue.collapsed)
                 cue.started.connect(

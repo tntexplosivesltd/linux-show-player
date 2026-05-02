@@ -1,9 +1,12 @@
 """Test that removing a nested GroupCue reparents its children
 to the surviving grandparent QTreeWidgetItem, not to top-level.
+Also tests that __cueAdded correctly inserts a nested GroupCue
+under its parent rather than at top-level (session-reload path).
 
-The test builds the QTreeWidget structure directly (bypassing
-__cueAdded, which currently places all GroupCues at top-level)
-and calls __cueRemoved directly to isolate the reparenting logic.
+The removal tests build the QTreeWidget structure directly
+(bypassing __cueAdded) and call __cueRemoved directly to isolate
+the reparenting logic. The add test calls __cueAdded directly to
+exercise the nested-GroupCue insertion path.
 """
 import pytest
 
@@ -149,3 +152,60 @@ def test_removing_top_level_group_still_reparents_to_top(
         f"top-level ids: {top_ids}"
     )
     assert leaf_item.parent() is None
+
+
+def test_adding_nested_groupcue_inserts_under_parent(
+    bare_view, qapp
+):
+    """Adding a GroupCue with a populated group_id (e.g. during
+    session reload, where update_properties sets group_id before
+    cue_model.add) must place the new GroupCue under its parent
+    group's QTreeWidgetItem, not at top-level.
+
+    This exercises CueListView.__cueAdded's isinstance(GroupCue)
+    branch when cue.group_id is already set and tracked in
+    _group_items.
+    """
+    view, mock_app = bare_view
+
+    # Create an outer GroupCue and insert it at top-level (as
+    # normal, since it has no group_id).
+    outer = GroupCue(id="outer_add", app=mock_app)
+    outer.index = 0
+    outer_item = CueTreeWidgetItem(outer)
+    view.insertTopLevelItem(0, outer_item)
+    view._group_items[outer.id] = outer_item
+
+    # Create an inner GroupCue with group_id already set to outer
+    # (simulating session reload where update_properties runs
+    # before cue_model.add triggers __cueAdded).
+    inner = GroupCue(id="inner_add", app=mock_app)
+    inner.group_id = outer.id
+    inner.index = 1
+
+    # Call __cueAdded directly (name-mangled).
+    view._CueListView__cueAdded(inner)
+
+    # inner_item must be a child of outer_item, not at top-level.
+    inner_item = view._group_items.get(inner.id)
+    assert inner_item is not None, (
+        "inner GroupCue id not registered in _group_items after __cueAdded"
+    )
+    assert inner_item.parent() is outer_item, (
+        f"expected inner_item.parent() to be outer_item, "
+        f"got {inner_item.parent()!r} (None means top-level)"
+    )
+
+    # Confirm inner is NOT at top-level.
+    top_ids = {
+        view.topLevelItem(i).cue.id
+        for i in range(view.topLevelItemCount())
+    }
+    assert inner.id not in top_ids, (
+        f"inner ({inner.id}) appeared at top-level; "
+        f"top-level ids: {top_ids}"
+    )
+
+    # GroupCue-specific bookkeeping: setExpanded was called
+    # (inner.collapsed defaults to False, so item should be expanded).
+    assert inner_item.isExpanded() == (not inner.collapsed)
