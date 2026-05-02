@@ -92,41 +92,26 @@ class TargetWarningRow(QWidget):
             picker_widget.setStyleSheet(_OUTLINE_QSS)
 
 
-# Saturated amber, matches the existing list-layout "current row"
-# flag's high-contrast palette (yellow with black outline).
 _BADGE_FILL = "#f39c12"     # amber
-_BADGE_OUTLINE = "#000000"  # thin dark outline for contrast on
-                            # both light and dark backgrounds
-_BADGE_GLYPH = "#ffffff"    # white "!"
 
 
 def paint_invalid_target_badge(painter, rect):
     """Paint a warning badge into rect.
 
-    A filled amber circle with a thin dark outline and a centered
-    white "!". The exclamation mark is dropped for sizes below
-    12 px since it doesn't render legibly.
+    A solid amber filled circle. Readable on both light and dark
+    backgrounds at the small sizes used for cue-icon overlays.
 
     The painter's state is saved/restored, so callers don't need
     to manage QPen/QBrush themselves.
     """
-    from PyQt5.QtGui import QBrush, QColor, QFont, QPen
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtGui import QBrush, QColor
 
     painter.save()
     painter.setRenderHint(painter.Antialiasing, True)
 
-    pen = QPen(QColor(_BADGE_OUTLINE))
-    pen.setWidthF(max(1.0, rect.width() / 16.0))
-    painter.setPen(pen)
+    painter.setPen(Qt.NoPen)
     painter.setBrush(QBrush(QColor(_BADGE_FILL)))
     painter.drawEllipse(rect)
-
-    if rect.width() >= 12:
-        painter.setPen(QColor(_BADGE_GLYPH))
-        font = QFont(painter.font())
-        font.setBold(True)
-        font.setPixelSize(max(8, rect.width() - 4))
-        painter.setFont(font)
-        painter.drawText(rect, Qt.AlignCenter, "!")
 
     painter.restore()
