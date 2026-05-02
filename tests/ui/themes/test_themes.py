@@ -522,3 +522,172 @@ class TestStandbyIndicator:
         from lisp.ui.themes.light.light import Light
         Light().apply(qapp)
         assert standby_indicator() == DEFAULT_STANDBY_INDICATOR
+
+
+class _SolarizedExpectations:
+    """Shared expected hex values for both Solarized themes.
+
+    Cue accents are identical across Solarized Light and Dark — the
+    only differences are chrome (bg/fg/text/alternate_base) and the
+    Grey cue colour (base01 vs base1).
+    """
+
+    CUE_ACCENTS = {
+        "Red":    "#dc322f",
+        "Orange": "#cb4b16",
+        "Yellow": "#b58900",
+        "Green":  "#859900",
+        "Blue":   "#268bd2",
+        "Purple": "#6c71c4",
+    }
+    HIGHLIGHT_CYAN = QColor("#2aa198")
+    STANDBY_MAGENTA = QColor(211, 54, 130, 100)
+
+
+class TestSolarizedDarkTheme(_SolarizedExpectations):
+    """Solarized Dark — base03/base02 chrome, Solarized accent cues,
+    cyan selection, magenta standby indicator. Reuses dark/theme.qss."""
+
+    def setup_method(self):
+        from lisp.ui import themes
+        themes._active = None
+
+    def test_applies_without_error(self, qapp):
+        from lisp.ui.themes.solarized_dark.solarized_dark import (
+            SolarizedDark,
+        )
+        SolarizedDark().apply(qapp)
+
+    def test_palette_uses_solarized_base_tones(self, qapp):
+        from lisp.ui.themes.solarized_dark.solarized_dark import (
+            SolarizedDark,
+        )
+        SolarizedDark().apply(qapp)
+        p = qapp.palette()
+        assert p.color(QPalette.Base) == QColor("#002b36")        # base03
+        assert p.color(QPalette.Window) == QColor("#073642")      # base02
+        assert p.color(QPalette.Text) == QColor("#839496")        # base0
+        assert p.color(QPalette.AlternateBase) == QColor("#073642")
+        assert p.color(QPalette.Highlight) == self.HIGHLIGHT_CYAN
+
+    def test_cue_palette_uses_solarized_accents(self, qapp):
+        from lisp.ui.themes import cue_color_hex
+        from lisp.ui.themes.solarized_dark.solarized_dark import (
+            SolarizedDark,
+        )
+        SolarizedDark().apply(qapp)
+        for name, expected in self.CUE_ACCENTS.items():
+            assert cue_color_hex(name) == expected, (
+                f"{name} expected {expected}, got {cue_color_hex(name)}"
+            )
+        assert cue_color_hex("Grey") == "#586e75"  # base01
+
+    def test_cue_alpha_matches_dark(self, qapp):
+        from lisp.ui.themes import cue_color_alpha
+        from lisp.ui.themes.solarized_dark.solarized_dark import (
+            SolarizedDark,
+        )
+        SolarizedDark().apply(qapp)
+        assert cue_color_alpha() == 150
+
+    def test_standby_indicator_is_magenta(self, qapp):
+        from lisp.ui.themes import standby_indicator
+        from lisp.ui.themes.solarized_dark.solarized_dark import (
+            SolarizedDark,
+        )
+        SolarizedDark().apply(qapp)
+        assert standby_indicator() == self.STANDBY_MAGENTA
+
+    def test_reuses_dark_theme_qss(self, qapp):
+        """Phase 1 ships palette-only fidelity. The Solarized Dark
+        theme reuses the existing dark/theme.qss."""
+        from lisp.ui.themes.solarized_dark.solarized_dark import (
+            SolarizedDark,
+        )
+        qapp.setStyleSheet("")
+        SolarizedDark().apply(qapp)
+        # Dark's QSS is the heavy ~16KB chrome stylesheet
+        assert len(qapp.styleSheet()) > 8192, (
+            f"SolarizedDark QSS unexpectedly small "
+            f"({len(qapp.styleSheet())} bytes); expected dark/theme.qss"
+        )
+
+    def test_discoverable(self):
+        from lisp.ui import themes
+        themes._THEMES.clear()
+        from lisp.ui.themes import themes_names
+        assert "SolarizedDark" in themes_names()
+
+
+class TestSolarizedLightTheme(_SolarizedExpectations):
+    """Solarized Light — base3/base2 chrome, Solarized accent cues,
+    cyan selection, magenta standby indicator. Reuses light/theme.qss."""
+
+    def setup_method(self):
+        from lisp.ui import themes
+        themes._active = None
+
+    def test_applies_without_error(self, qapp):
+        from lisp.ui.themes.solarized_light.solarized_light import (
+            SolarizedLight,
+        )
+        SolarizedLight().apply(qapp)
+
+    def test_palette_uses_solarized_base_tones(self, qapp):
+        from lisp.ui.themes.solarized_light.solarized_light import (
+            SolarizedLight,
+        )
+        SolarizedLight().apply(qapp)
+        p = qapp.palette()
+        assert p.color(QPalette.Base) == QColor("#fdf6e3")        # base3
+        assert p.color(QPalette.Window) == QColor("#eee8d5")      # base2
+        assert p.color(QPalette.Text) == QColor("#657b83")        # base00
+        assert p.color(QPalette.AlternateBase) == QColor("#eee8d5")
+        assert p.color(QPalette.Highlight) == self.HIGHLIGHT_CYAN
+        assert p.color(QPalette.HighlightedText) == QColor("#fdf6e3")
+        assert p.color(QPalette.BrightText) == QColor("#dc322f")
+
+    def test_cue_palette_uses_solarized_accents(self, qapp):
+        from lisp.ui.themes import cue_color_hex
+        from lisp.ui.themes.solarized_light.solarized_light import (
+            SolarizedLight,
+        )
+        SolarizedLight().apply(qapp)
+        for name, expected in self.CUE_ACCENTS.items():
+            assert cue_color_hex(name) == expected
+        assert cue_color_hex("Grey") == "#93a1a1"  # base1
+
+    def test_cue_alpha_matches_light(self, qapp):
+        from lisp.ui.themes import cue_color_alpha
+        from lisp.ui.themes.solarized_light.solarized_light import (
+            SolarizedLight,
+        )
+        SolarizedLight().apply(qapp)
+        assert cue_color_alpha() == 220
+
+    def test_standby_indicator_is_magenta(self, qapp):
+        from lisp.ui.themes import standby_indicator
+        from lisp.ui.themes.solarized_light.solarized_light import (
+            SolarizedLight,
+        )
+        SolarizedLight().apply(qapp)
+        assert standby_indicator() == self.STANDBY_MAGENTA
+
+    def test_reuses_light_theme_qss(self, qapp):
+        """Phase 1 ships palette-only fidelity. The Solarized Light
+        theme reuses the existing light/theme.qss (small, just the
+        item:selected force-styling)."""
+        from lisp.ui.themes.solarized_light.solarized_light import (
+            SolarizedLight,
+        )
+        qapp.setStyleSheet("")
+        SolarizedLight().apply(qapp)
+        # Light's QSS is small but non-empty
+        assert qapp.styleSheet() != ""
+        assert "item:selected" in qapp.styleSheet()
+
+    def test_discoverable(self):
+        from lisp.ui import themes
+        themes._THEMES.clear()
+        from lisp.ui.themes import themes_names
+        assert "SolarizedLight" in themes_names()
