@@ -65,12 +65,21 @@ class Slot:
 
     def call(self, *args, **kwargs):
         """Call the callable object within the given parameters."""
+        # Resolve the weakref ONCE and capture into a local. A
+        # naive `if self.is_alive(): self._reference()(...)` is
+        # TOCTOU: the underlying object can be GC'd between the
+        # liveness check and the call, returning None — and
+        # `None()` raises TypeError. Now that Signal.emit iterates
+        # a snapshot and releases its lock before calling slots,
+        # that window is wider, so handle the race here.
+        target = self._reference()
+        if target is None:
+            return
         try:
-            if self.is_alive():
-                if self._no_args:
-                    self._reference()()
-                else:
-                    self._reference()(*args, **kwargs)
+            if self._no_args:
+                target()
+            else:
+                target(*args, **kwargs)
         except Exception as e:
             logger.warning(str(e), exc_info=True)
 

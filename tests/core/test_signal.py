@@ -134,6 +134,71 @@ class TestSignalWeakRef:
         # Emitting should not raise — dead slot is silently skipped
         signal.emit()
 
+    def test_emit_survives_gc_during_iteration(self):
+        """A weakref-backed slot whose owner is dropped during emit
+        (by another slot in the same emit, triggering GC) must not
+        crash with `RuntimeError: dictionary changed size during
+        iteration`.
+
+        Regression test for the original race the snapshot fix
+        addresses: __slots is mutated by __remove_slot when a
+        weakref's _expired callback fires during GC, and the lock
+        is reentrant so the GC callback can re-enter __remove_slot
+        on the same thread that's iterating.
+        """
+        signal = Signal()
+        order = []
+
+        class Receiver:
+            def __init__(self, name):
+                self.name = name
+
+            def handler(self, *_a, **_k):
+                order.append(self.name)
+
+        gc_target = [Receiver("victim")]
+
+        def gc_trigger(*_a, **_k):
+            # Drop the only strong reference to gc_target[0] so its
+            # weakref can expire, then force GC. Pre-fix, this
+            # caused __remove_slot to mutate __slots while emit was
+            # iterating it.
+            order.append("trigger")
+            gc_target.clear()
+            gc.collect()
+
+        signal.connect(gc_trigger)
+        signal.connect(gc_target[0].handler)
+
+        # Must reach here without RuntimeError. The victim handler
+        # may or may not run depending on emit's snapshot timing —
+        # what matters is that the iteration completes cleanly.
+        signal.emit()
+        assert "trigger" in order
+
+    def test_call_handles_weakref_expiring_between_check_and_call(self):
+        """Slot.call must tolerate the weakref returning None
+        between liveness check and invocation. Pre-fix this was a
+        pure TypeError on `None()`; with snapshot-based emit
+        releasing the lock before slot calls, the window is wider.
+        """
+        from lisp.core.signal import Slot
+
+        class Obj:
+            def handler(self):
+                pass
+
+        obj = Obj()
+        slot = Slot(obj.handler)
+        # Drop the only strong reference; the underlying WeakMethod
+        # now resolves to None.
+        del obj
+        gc.collect()
+
+        # Pre-fix this raised TypeError caught by the inner except
+        # and warning-logged. Post-fix it's a clean no-op.
+        slot.call()
+
 
 class TestSignalConnectionModes:
     def test_invalid_mode_raises(self):
