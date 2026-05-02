@@ -17,6 +17,7 @@
 
 import logging
 import weakref
+from threading import Lock
 
 from lisp.backend.media import Media, MediaState
 from lisp.core.properties import Property
@@ -66,6 +67,15 @@ class GstMedia(Media):
         self.__loop = 0  # current number of loops left to do
         self.__current_pipe = None  # A copy of the pipe property
         self.__armed = False  # True when pre-armed (pipeline in PAUSED)
+        # Serialises pipeline (re)builds. Without it, two threads
+        # racing into __init_pipeline (e.g. PreArmManager.prearm on
+        # the standby cue and the parallel-group's start firing
+        # cue.media.play on the same cue) corrupt self.elements:
+        # both clear() the shared container and then append into
+        # different Gst.Pipeline instances, leaving a hybrid state
+        # that GStreamer then spins on while trying to link
+        # elements across pipelines.
+        self.__init_lock = Lock()
 
         self.changed("loop").connect(self.__on_loops_changed)
         self.changed("pipe").connect(self.__on_pipe_changed)
@@ -318,6 +328,15 @@ class GstMedia(Media):
             self.__init_pipeline()
 
     def __init_pipeline(self):
+        # Serialise pipeline (re)builds. See __init__ for the race
+        # this guards against. Held for the entire teardown+rebuild;
+        # any other thread that wanted to (re)init will run AFTER us
+        # against a fully-initialised pipeline rather than racing on
+        # a half-cleared self.elements.
+        with self.__init_lock:
+            self.__init_pipeline_locked()
+
+    def __init_pipeline_locked(self):
         # Make a copy of the current elements properties
         elements_properties = self.elements.properties()
 
