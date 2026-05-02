@@ -191,6 +191,10 @@ class CueListView(QTreeWidget):
         self.itemCollapsed.connect(self.__itemCollapsed)
         self.itemExpanded.connect(self.__itemExpanded)
 
+        # Re-style every row when the active theme changes so cached
+        # cue/standby brushes pick up the new palette without restart.
+        themes.theme_changed.connect(self._on_theme_changed)
+
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
             if all([x.isLocalFile() for x in event.mimeData().urls()]):
@@ -496,6 +500,11 @@ class CueListView(QTreeWidget):
     def __itemExpanded(self, item):
         if isinstance(item.cue, GroupCue):
             item.cue.collapsed = False
+        self.viewport().update()
+
+    def _on_theme_changed(self):
+        for item in self.iterAllItems():
+            self.__updateItemStyle(item)
         self.viewport().update()
 
     def __updateItemStyle(self, item):

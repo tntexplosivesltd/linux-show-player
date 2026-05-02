@@ -721,6 +721,89 @@ class TestSolarizedLightTheme(_SolarizedExpectations):
         assert "SolarizedLight" in themes_names()
 
 
+class TestThemeChangedSignal:
+    """``theme_changed`` is a module-level Signal in ``lisp.ui.themes``
+    that fires every time a theme finishes applying. It is the
+    propagation mechanism for live theme switching: stateful render
+    sites (cue list rows, cart cells, palette swatches) subscribe
+    once and refresh themselves whenever the active theme changes.
+
+    The signal carries no payload — subscribers re-read whatever
+    they need from the active theme on each fire."""
+
+    class _Counter:
+        """Holder kept alive for the test's duration so that the
+        ``WeakMethod`` slot the Signal stores has a live referent.
+        Bare lambdas would be GC'd between connect and emit."""
+
+        def __init__(self):
+            self.fires = 0
+
+        def on_theme_changed(self):
+            self.fires += 1
+
+    def setup_method(self):
+        from lisp.ui import themes
+        themes._active = None
+
+    def test_signal_exists(self):
+        from lisp.ui import themes
+        from lisp.core.signal import Signal
+        assert isinstance(themes.theme_changed, Signal)
+
+    def test_apply_emits_signal(self, qapp):
+        from lisp.ui import themes
+        from lisp.ui.themes.dark.dark import Dark
+
+        counter = self._Counter()
+        themes.theme_changed.connect(counter.on_theme_changed)
+        try:
+            Dark().apply(qapp)
+        finally:
+            themes.theme_changed.disconnect(counter.on_theme_changed)
+
+        assert counter.fires == 1
+
+    def test_repeated_applies_emit_each_time(self, qapp):
+        from lisp.ui import themes
+        from lisp.ui.themes.dark.dark import Dark
+        from lisp.ui.themes.light.light import Light
+
+        counter = self._Counter()
+        themes.theme_changed.connect(counter.on_theme_changed)
+        try:
+            Dark().apply(qapp)
+            Light().apply(qapp)
+            Dark().apply(qapp)
+        finally:
+            themes.theme_changed.disconnect(counter.on_theme_changed)
+
+        assert counter.fires == 3
+
+    def test_signal_fires_after_active_is_set(self, qapp):
+        """The signal must emit *after* ``themes._active`` is updated,
+        so subscribers reading active-theme-derived values during the
+        slot get the new theme — not the previous one."""
+        from lisp.ui import themes
+        from lisp.ui.themes.dark.dark import Dark
+
+        observed = []
+
+        class _Holder:
+            def slot(self):
+                observed.append(themes._active)
+
+        holder = _Holder()
+        themes.theme_changed.connect(holder.slot)
+        try:
+            dark = Dark()
+            dark.apply(qapp)
+        finally:
+            themes.theme_changed.disconnect(holder.slot)
+
+        assert observed == [dark]
+
+
 class TestThemeDiscoveryAggregate:
     """Lock the full theme roster in one test so a merge accident
     that drops one of the existing themes can't slip past the

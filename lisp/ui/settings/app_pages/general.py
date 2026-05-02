@@ -26,10 +26,13 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
 )
 
+from PyQt5.QtWidgets import QApplication
+
 from lisp.layout import get_layouts
+from lisp.ui import themes
 from lisp.ui.icons import icon_themes_names
 from lisp.ui.settings.pages import SettingsPage
-from lisp.ui.themes import themes_names
+from lisp.ui.themes import get_theme, themes_names
 from lisp.ui.ui_utils import translate
 from lisp.ui.widgets import LocaleComboBox
 
@@ -136,6 +139,14 @@ class AppGeneral(SettingsPage):
             settings["layout"]["default"] = "NoDefault"
         else:
             settings["layout"]["default"] = self.layoutCombo.currentData()
+
+        # Live-apply the UI theme so the change takes effect without
+        # restart. Idempotent: skip if the chosen theme is already
+        # the active instance (avoids a redundant emit when the user
+        # opens settings, doesn't change theme, and clicks OK).
+        chosen = get_theme(settings["theme"]["theme"])
+        if themes._active is not chosen:
+            chosen.apply(QApplication.instance())
 
         return settings
 

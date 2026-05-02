@@ -164,3 +164,113 @@ class TestStandbyBrushFromTheme:
         qapp.processEvents()
 
         assert item.background(0).color() == DEFAULT_STANDBY_INDICATOR
+
+
+class TestListViewLiveThemeSwitch:
+    """When the active theme changes mid-session, every existing item's
+    background brush must be recomputed against the new palette. The
+    brush is cached on the QTreeWidgetItem at the moment of the last
+    ``__updateItemStyle`` call, so without a live refresh the rows keep
+    showing the *previous* theme's hex until they are otherwise touched
+    (selection change, cue edit, etc.)."""
+
+    def setup_method(self):
+        from lisp.ui import themes
+        themes._active = None
+
+    def teardown_method(self):
+        # Apply leaks _active across tests; reset so the next file
+        # doesn't see this test's theme as the active one.
+        from lisp.ui import themes
+        themes._active = None
+
+    def _make_theme_with_red(self, red_hex, alpha=100):
+        from lisp.ui.themes.base import (
+            BaseTheme,
+            DEFAULT_CUE_PALETTE,
+            ThemeColors,
+        )
+
+        palette = dict(DEFAULT_CUE_PALETTE)
+        palette["Red"] = red_hex
+
+        class _T(BaseTheme):
+            Colors = ThemeColors(
+                background=QColor(30, 30, 30),
+                foreground=QColor(52, 52, 52),
+                text=QColor(230, 230, 230),
+                highlight=QColor(65, 155, 230),
+                cue_palette=palette,
+                cue_alpha=alpha,
+            )
+
+        return _T()
+
+    def test_item_brush_refreshes_after_theme_swap(
+        self, qapp, mock_app
+    ):
+        theme_a = self._make_theme_with_red("#aa0000", alpha=120)
+        theme_b = self._make_theme_with_red("#00aa00", alpha=120)
+
+        theme_a.apply(qapp)
+
+        view, item = _build_view_with_cue(mock_app)
+        item.cue.color_name = "Red"
+        # Force initial style application via a non-current touch:
+        # the model add already styles it once, but we re-trigger
+        # explicitly to be safe.
+        view.setCurrentItem(item)
+        view.setCurrentItem(None)
+        qapp.processEvents()
+
+        before = item.background(0).color()
+        # Sanity: item is painted with theme A's red.
+        assert before.red() == 0xAA and before.green() == 0x00, (
+            f"Pre-swap brush should be theme A red, got {before.getRgb()}"
+        )
+
+        # Swap themes — this fires theme_changed; the view should
+        # re-style every item.
+        theme_b.apply(qapp)
+        qapp.processEvents()
+
+        after = item.background(0).color()
+        assert after.red() == 0x00 and after.green() == 0xAA, (
+            f"Post-swap brush should be theme B red, got {after.getRgb()}"
+        )
+
+    def test_standby_brush_refreshes_after_theme_swap(
+        self, qapp, mock_app
+    ):
+        """The current/standby item's brush is sourced from
+        ``standby_indicator()``. After a theme swap that changes the
+        indicator, the standby row must repaint."""
+        from lisp.ui.themes.base import BaseTheme, ThemeColors
+
+        class _ThemeYellow(BaseTheme):
+            Colors = ThemeColors(
+                background=QColor(30, 30, 30),
+                foreground=QColor(52, 52, 52),
+                text=QColor(230, 230, 230),
+                highlight=QColor(65, 155, 230),
+                standby_indicator=QColor(250, 220, 0, 100),
+            )
+
+        class _ThemeMagenta(BaseTheme):
+            Colors = ThemeColors(
+                background=QColor(30, 30, 30),
+                foreground=QColor(52, 52, 52),
+                text=QColor(230, 230, 230),
+                highlight=QColor(65, 155, 230),
+                standby_indicator=QColor(211, 54, 130, 180),
+            )
+
+        _ThemeYellow().apply(qapp)
+        view, item = _build_view_with_cue(mock_app)
+        view.setCurrentItem(item)
+        qapp.processEvents()
+        assert item.background(0).color() == QColor(250, 220, 0, 100)
+
+        _ThemeMagenta().apply(qapp)
+        qapp.processEvents()
+        assert item.background(0).color() == QColor(211, 54, 130, 180)
