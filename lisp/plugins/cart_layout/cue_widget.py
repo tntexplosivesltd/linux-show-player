@@ -313,7 +313,7 @@ class CueWidget(QWidget):
         # cell stays frozen on its old icon until _setCue runs again
         # (i.e., until the session reloads).
         self._cue.changed("icon").connect(
-            self._refreshStyle, Connection.QtQueued
+            self._updateStyle, Connection.QtQueued
         )
         self._wire_ancestor_disable()
         self._cue.changed("duration").connect(

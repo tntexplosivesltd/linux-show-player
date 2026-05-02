@@ -78,3 +78,58 @@ class TestCartCueWidgetThemedColor:
         assert css.get("background") == ""
         # Other CSS preserved
         assert css.get("color") == "#fff"
+
+
+class TestCueWidgetConstruction:
+    """Constructing a ``CueWidget`` for a cue must not raise.
+
+    Regression: a previous refactor that renamed ``_refreshStyle`` to
+    ``_updateStyle`` missed the ``cue.changed("icon").connect(...)``
+    line, leaving a dangling attribute reference. The resulting
+    ``AttributeError`` was raised inside ``_setCue`` during widget
+    construction, bubbled up to ``CartLayout.__cue_added``, and was
+    silently swallowed by the outer signal-call exception handler —
+    so the cart cell was never actually added to the layout.
+    """
+
+    def test_widget_constructs_without_crash(self, qapp, mock_app):
+        from lisp.plugins.cart_layout.cue_widget import CueWidget
+        from lisp.ui.icons import IconTheme
+
+        if IconTheme._GlobalTheme is None:
+            IconTheme.set_theme_name("lisp")
+
+        cue = Cue(mock_app)
+        # If any signal slot in _setCue is mis-named, this raises
+        # AttributeError before the widget is fully constructed.
+        widget = CueWidget(cue)
+        assert widget is not None
+
+    def test_icon_change_does_not_warn(self, qapp, mock_app, caplog):
+        """The ``cue.changed("icon")`` subscription must invoke a real
+        method. Emitting the signal triggers the slot synchronously
+        in this test (no Qt event loop), and any AttributeError gets
+        caught by ``Slot.call`` and logged as a warning. Asserting
+        the warning is absent locks in the wiring."""
+        import logging
+        from lisp.plugins.cart_layout.cue_widget import CueWidget
+        from lisp.ui.icons import IconTheme
+
+        if IconTheme._GlobalTheme is None:
+            IconTheme.set_theme_name("lisp")
+
+        cue = Cue(mock_app)
+        widget = CueWidget(cue)  # noqa: F841 — kept alive for slot
+
+        with caplog.at_level(logging.WARNING, logger="lisp.core.signal"):
+            cue.icon = "media-playback-start"
+
+        attr_warnings = [
+            r for r in caplog.records
+            if "_refreshStyle" in r.getMessage()
+            or "no attribute" in r.getMessage()
+        ]
+        assert not attr_warnings, (
+            f"icon change produced AttributeError warnings: "
+            f"{[r.getMessage() for r in attr_warnings]}"
+        )
