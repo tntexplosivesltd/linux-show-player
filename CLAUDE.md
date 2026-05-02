@@ -130,6 +130,10 @@ Uses Qt Linguist `.ts`/`.qm` files. Source translations in `lisp/i18n/ts/`, comp
 
 Custom theme system in `lisp/ui/themes/` with icon theme support in `lisp/ui/icons/`. Default is a dark theme with Numix-style icons.
 
+### Concurrency
+
+LiSP runs on the Qt main loop with worker threads for cue start/stop, fades, pre-arm pipeline init, GStreamer bus callbacks, and the test-harness JSON-RPC server. Anything that touches Qt widgets, the layout's selection cursor, or the cue model's row order belongs on the main thread; cross-thread invocations use `Connection.QtQueued` slots or `invoke_on_main_thread()`. `GstMedia.__init_pipeline` is serialised with a deliberately non-reentrant `threading.Lock` (`__init_lock`) — see `docs/threading.md` for the full model, including the `Signal.emit` snapshot pattern, the standby-vs-parallel-start race that motivated the lock, and the rules for adding new signal handlers without re-introducing races.
+
 ## Code Style
 
 - Ruff enforced: 80 char line length, Python 3.9+ target
