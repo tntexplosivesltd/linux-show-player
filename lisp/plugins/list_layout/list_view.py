@@ -420,18 +420,22 @@ class CueListView(QTreeWidget):
     def cueItemAt(self, index):
         """Return the QTreeWidgetItem for a flat model index.
 
-        Walks the tree in visual order (top-level items and
-        their children) to find the item whose cue.index
-        matches the requested index.
+        Walks the tree depth-first to support arbitrarily nested
+        GroupCue hierarchies.
         """
+        def _search(item):
+            if item.cue.index == index:
+                return item
+            for j in range(item.childCount()):
+                found = _search(item.child(j))
+                if found is not None:
+                    return found
+            return None
+
         for i in range(self.topLevelItemCount()):
-            top = self.topLevelItem(i)
-            if top.cue.index == index:
-                return top
-            for j in range(top.childCount()):
-                child = top.child(j)
-                if child.cue.index == index:
-                    return child
+            found = _search(self.topLevelItem(i))
+            if found is not None:
+                return found
         return None
 
     def cueIndexOf(self, item):
@@ -464,13 +468,14 @@ class CueListView(QTreeWidget):
         return rect
 
     def iterAllItems(self):
-        """Yield all items in visual order (groups then children
-        interleaved)."""
+        """Yield all items in visual order, depth-first."""
+        def _walk(item):
+            yield item
+            for j in range(item.childCount()):
+                yield from _walk(item.child(j))
+
         for i in range(self.topLevelItemCount()):
-            top = self.topLevelItem(i)
-            yield top
-            for j in range(top.childCount()):
-                yield top.child(j)
+            yield from _walk(self.topLevelItem(i))
 
     def setAutoExpand(self, enabled):
         self._auto_expand = enabled
@@ -544,12 +549,14 @@ class CueListView(QTreeWidget):
                 item.setBackground(column, brush)
 
     def _iter_all_items(self):
-        """Yield every QTreeWidgetItem in the tree (top-level + children)."""
+        """Yield every QTreeWidgetItem in the tree, depth-first."""
+        def _walk(item):
+            yield item
+            for j in range(item.childCount()):
+                yield from _walk(item.child(j))
+
         for i in range(self.topLevelItemCount()):
-            top = self.topLevelItem(i)
-            yield top
-            for j in range(top.childCount()):
-                yield top.child(j)
+            yield from _walk(self.topLevelItem(i))
 
     def __cuePropChanged(self, cue, property_name, _):
         if property_name == "stylesheet":

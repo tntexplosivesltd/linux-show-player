@@ -209,3 +209,39 @@ def test_adding_nested_groupcue_inserts_under_parent(
     # GroupCue-specific bookkeeping: setExpanded was called
     # (inner.collapsed defaults to False, so item should be expanded).
     assert inner_item.isExpanded() == (not inner.collapsed)
+
+
+def test_removing_depth2_leaf_actually_removes_it(bare_view, qapp):
+    """Removing a leaf at depth 2 (inside outer->inner) must
+    actually remove its QTreeWidgetItem. Without recursive
+    cueItemAt, the lookup returns None and the row persists
+    in the tree as a phantom."""
+    view, mock_app = bare_view
+
+    (
+        outer, inner, leaf,
+        outer_item, inner_item, leaf_item,
+    ) = _build_nested_tree(view, mock_app)
+
+    # Sanity check: leaf is at depth 2
+    assert inner_item.childCount() == 1
+    assert inner_item.child(0) is leaf_item
+
+    # Remove the depth-2 leaf cue
+    view._CueListView__cueRemoved(leaf)
+
+    # The leaf's QTreeWidgetItem must be gone from the tree
+    assert inner_item.childCount() == 0, (
+        "leaf QTreeWidgetItem persists under inner_item after __cueRemoved — "
+        "cueItemAt returned None (depth-2 not found) and the early-return "
+        "short-circuited before the takeChild call"
+    )
+    # Leaf must not appear at top level either
+    top_ids = {
+        view.topLevelItem(i).cue.id
+        for i in range(view.topLevelItemCount())
+    }
+    assert leaf.id not in top_ids, (
+        f"leaf ({leaf.id}) appeared at top-level unexpectedly; "
+        f"top-level cue ids: {top_ids}"
+    )
