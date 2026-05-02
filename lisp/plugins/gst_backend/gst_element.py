@@ -15,6 +15,7 @@
 # You should have received a copy of the GNU General Public License
 # along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
+import logging
 from collections.abc import Collection
 from typing import Union, Optional
 
@@ -25,6 +26,8 @@ from lisp.core.session_uri import SessionURI
 from lisp.core.util import typename
 from lisp.plugins.gst_backend.gst_fader import GstFader
 from lisp.plugins.gst_backend.gst_properties import GstPropertyController
+
+logger = logging.getLogger(__name__)
 
 
 class GstMediaElement(MediaElement):
@@ -170,6 +173,18 @@ class GstMediaElements(Collection, HasInstanceProperties):
         name = typename(element)
         if hasattr(self, name):
             delattr(self, name)
+        else:
+            # Observable signal that we're recovering from a
+            # half-built state. If this fires outside the
+            # __init_pipeline race-recovery path (which is the
+            # only known cause), the codebase has gained a new
+            # bug that's mutating the elements container without
+            # going through append/pop — surface it in dev logs.
+            logger.debug(
+                "GstMediaElements.pop: %s element had no attribute "
+                "slot — recovering from half-built __init_pipeline "
+                "state", name,
+            )
 
     def clear(self):
         while self.elements:
