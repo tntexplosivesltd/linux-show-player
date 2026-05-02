@@ -569,20 +569,36 @@ class ListLayout(CueLayout):
         self._group_cues([cue])
 
     def _group_cues(self, cues):
-        from lisp.plugins.action_cues.group_cue import GroupCue
-
-        # Filter out cues that are already in a live group or are
-        # GroupCues. Stale group_id (parent deleted) is allowed.
+        # Filter out cues that are already in a live group. Stale
+        # group_id (parent deleted) is allowed. GroupCues are
+        # accepted as children to support nested groups.
         cues = [
             c for c in cues
-            if not isinstance(c, GroupCue)
-            and (
-                not c.group_id
-                or self.app.cue_model.get(c.group_id) is None
-            )
+            if not c.group_id
+            or self.app.cue_model.get(c.group_id) is None
         ]
         if len(cues) < 1:
             return
+
+        # Cycle guard (defense-in-depth): reject selections where one
+        # cue is an ancestor of another. Existing live-parent filter
+        # already drops descendants of selected groups, so this only
+        # fires on pathological corrupted-session inputs. Walk each
+        # cue's group_id chain; abort if any ancestor is in the set.
+        selection_ids = {c.id for c in cues}
+        for cue in cues:
+            gid = cue.group_id
+            visited = set()
+            while gid and gid not in visited:
+                if gid in selection_ids:
+                    # ancestor of `cue` is also in the selection -
+                    # silent abort, mirroring the empty-filter case.
+                    return
+                visited.add(gid)
+                parent = self.app.cue_model.get(gid)
+                if parent is None:
+                    break
+                gid = parent.group_id
 
         self.app.commands_stack.do(
             GroupCuesCommand(self.app, self._list_model, cues)
