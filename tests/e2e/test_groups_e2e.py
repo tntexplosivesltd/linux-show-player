@@ -798,15 +798,20 @@ def test_14_move_cue_with_groups(ids, group_id):
     """Moving cues should work correctly with groups present."""
     print("\n═══ Test 14: Move Cue With Groups ═══")
 
-    D = ids["tone_D"]
-
-    # Get current positions
+    # The `ids` dict captured in setup() is stale: tests 9 and 11
+    # both call session.load, which regenerates every cue UUID. Look
+    # up tone_D fresh by name instead.
     cues_before = sorted(
         call("cue.list"), key=lambda c: c["index"]
     )
-    d_index_before = next(
-        c["index"] for c in cues_before if c["id"] == D
+    d_cue = next(
+        (c for c in cues_before if c["name"] == "tone_D"), None,
     )
+    if d_cue is None:
+        check("14: tone_D present", False)
+        return
+    D = d_cue["id"]
+    d_index_before = d_cue["index"]
 
     # Move D to the front
     call("layout.move_cue", {
