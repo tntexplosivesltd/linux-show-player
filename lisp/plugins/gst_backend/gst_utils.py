@@ -27,9 +27,16 @@ def gst_uri_duration(uri: SessionURI):
     if uri.is_local:
         duration = audio_file_duration(uri.absolute_path)
 
-    # Fallback to GStreamer discoverer
+    # Fallback to GStreamer discoverer. metadata can be None when the URI
+    # is missing, malformed, or unreachable — gst_uri_metadata swallows
+    # discoverer exceptions and returns None. Treat that as "unknown
+    # duration" rather than crashing the caller (which is typically the
+    # inspector loading settings for a cue with a stale/empty URI).
     if duration <= 0:
-        duration = gst_uri_metadata(uri).get_duration() // Gst.MSECOND
+        metadata = gst_uri_metadata(uri)
+        if metadata is None:
+            return 0
+        duration = metadata.get_duration() // Gst.MSECOND
 
     return duration if duration >= 0 else 0
 

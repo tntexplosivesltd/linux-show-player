@@ -36,6 +36,7 @@ panel reacts by re-running `loadSettings` inside the engine's
 signals do not trip the engine into pushing a fresh command.
 """
 
+import logging
 from typing import Optional, Sequence
 
 from PyQt5.QtCore import Qt, QTimer
@@ -66,6 +67,8 @@ from lisp.ui.settings.cue_settings import (
 from lisp.ui.settings.pages import CuePageMixin
 from lisp.ui.ui_utils import escape_mnemonic, translate
 from lisp.ui.widgets.cue_color_palette import CueColorPalette
+
+logger = logging.getLogger(__name__)
 
 
 # Widget classes we know how to (a) read a scalar value from for
@@ -432,7 +435,19 @@ class InspectorPanel(QWidget):
         with self._engine.suppressing_commits():
             for i in range(self._tabs.count()):
                 page = self._tabs.widget(i)
-                self._populate_page(page, cues, single=single)
+                # A page raising during loadSettings (e.g. waveform
+                # discovery on a cue with a missing/broken URI) must
+                # not abort the rebuild — the remaining pages still
+                # need their settings populated, otherwise downstream
+                # tab-changes hit getSettings() on uninitialised pages.
+                try:
+                    self._populate_page(page, cues, single=single)
+                except Exception:
+                    logger.warning(
+                        "Inspector: page %r failed to populate",
+                        type(page).__name__,
+                        exc_info=True,
+                    )
 
     def _populate_page(self, page: QWidget, cues, *, single: bool) -> None:
         if not cues:

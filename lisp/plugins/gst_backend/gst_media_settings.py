@@ -100,9 +100,15 @@ class GstMediaSettings(SettingsPage):
             if page_settings:
                 settings["elements"][page.ELEMENT.__name__] = page_settings
 
-        # The pipeline is returned only if check is disabled
+        # The pipeline is returned only if check is disabled.
+        # _settings is populated by loadSettings(); if loadSettings
+        # was skipped or aborted early (e.g. a sibling page raised
+        # while the inspector was building pages, breaking the
+        # rebuild loop), "pipe" may be absent. Fall back to an empty
+        # tuple so the inspector commit-engine can still snapshot
+        # this page rather than aborting the whole event handler.
         if not self._check:
-            settings["pipe"] = self._settings["pipe"]
+            settings["pipe"] = self._settings.get("pipe", ())
 
         return {"media": settings}
 
