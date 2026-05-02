@@ -580,11 +580,11 @@ class ListLayout(CueLayout):
         if len(cues) < 1:
             return
 
-        # Cycle guard (defense-in-depth): reject selections where one
-        # cue is an ancestor of another. Existing live-parent filter
-        # already drops descendants of selected groups, so this only
-        # fires on pathological corrupted-session inputs. Walk each
-        # cue's group_id chain; abort if any ancestor is in the set.
+        # Cycle guard: abort if any cue's ancestor chain contains
+        # another selected cue. Covers both corrupted sessions
+        # (group_id loops) and direct callers that bypass the
+        # live-parent filter above. Walk each cue's group_id chain;
+        # abort if any ancestor is in the selection set.
         selection_ids = {c.id for c in cues}
         for cue in cues:
             gid = cue.group_id
