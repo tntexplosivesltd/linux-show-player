@@ -96,13 +96,22 @@ class _SecondPage(CueSettingsPage):
 
 @pytest.fixture
 def registered_pages():
-    """Register the test pages against `_PanelCue` and tear down after."""
+    """Register the test pages against `_PanelCue` and tear down after.
+
+    The registry is a Singleton, so other tests that (directly or
+    indirectly) instantiate `Application` will have registered
+    `CueGeneralSettingsPage` / `CueTimingPage` against `Cue` — which
+    leaks into `_PanelCue` filters because `_PanelCue` subclasses
+    `Cue`. Snapshot and replace `_registry` to isolate this module
+    from that pollution; restore on teardown.
+    """
     registry = CueSettingsRegistry()
+    original = registry._registry
+    registry._registry = {}
     registry.add(_PanelPage, _PanelCue)
     registry.add(_SecondPage, _PanelCue)
     yield
-    registry.remove(_PanelPage)
-    registry.remove(_SecondPage)
+    registry._registry = original
 
 
 @pytest.fixture
