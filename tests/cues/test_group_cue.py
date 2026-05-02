@@ -592,6 +592,103 @@ class TestPlaylistShuffle:
 
         assert group.children != ids
 
+
+class TestNestedGroupRuntime:
+    """The engine doesn't care if a child is itself a GroupCue;
+    these tests pin that behavior so future refactors notice if
+    nesting regresses."""
+
+    def test_outer_parallel_starts_inner_group(self, mock_app):
+        import time
+        from lisp.plugins.action_cues.group_cue import GroupCue
+
+        # Unblock execute() — MagicMock auto-creates these attrs
+        # with truthy return values, which would trip the exclusive-
+        # manager gate and silently swallow inner.execute().
+        mock_app.exclusive_manager.is_start_blocked.return_value = (
+            False
+        )
+        mock_app.video_exclusive_manager.is_start_blocked.return_value = (
+            False
+        )
+
+        outer = GroupCue(app=mock_app)
+        inner = GroupCue(app=mock_app)
+        inner.group_id = outer.id
+
+        leaf = MagicMock()
+        leaf.id = "leaf"
+        leaf.group_id = inner.id
+        leaf.effective_disabled = False
+        leaf.state = 0  # CueState.Stop
+        leaf.fadein_duration = 0
+        # Capture executes
+        leaf.execute = MagicMock()
+
+        mock_app.cue_model.get.side_effect = lambda i: {
+            outer.id: outer,
+            inner.id: inner,
+            leaf.id: leaf,
+        }.get(i)
+
+        outer.children = [inner.id]
+        inner.children = [leaf.id]
+        outer.group_mode = "parallel"
+        inner.group_mode = "parallel"
+
+        # Drive the cascade by directly invoking __start__ as
+        # the engine would — this avoids state-machine setup.
+        outer.__start__(False)
+
+        # inner.execute(CueAction.Start) spawns an async thread
+        # (Cue.start is @async_function). Poll until leaf.execute
+        # is called or the deadline expires — exits as soon as the
+        # cascade completes (<10ms typical), avoiding both the
+        # slowness and the flake-risk of a fixed sleep.
+        deadline = time.monotonic() + 1.0
+        while not leaf.execute.called and time.monotonic() < deadline:
+            time.sleep(0.005)
+
+        # Outer started inner; inner's __start__ should have
+        # started the leaf.
+        # We can't easily intercept inner.execute (it's a real
+        # GroupCue); assert via leaf.execute being called.
+        assert leaf.execute.called, (
+            "leaf.execute should have been called via cascade "
+            "outer -> inner -> leaf"
+        )
+
+    def test_effective_disabled_propagates_two_levels(
+        self, mock_app
+    ):
+        """Disabling the outer group makes a depth-2 leaf
+        report effective_disabled = True via the existing
+        ancestor-walk in Cue.effective_disabled."""
+        from lisp.cues.cue import Cue
+        from lisp.plugins.action_cues.group_cue import GroupCue
+
+        outer = GroupCue(app=mock_app)
+        inner = GroupCue(app=mock_app)
+        inner.group_id = outer.id
+
+        # Use a real Cue subclass-like object so we exercise
+        # the actual effective_disabled property. The base Cue
+        # is abstract enough; spawn a minimal concrete subclass.
+        class _LeafCue(Cue):
+            CueActions = (Cue.CueActions[0],)
+
+        leaf = _LeafCue(app=mock_app)
+        leaf.group_id = inner.id
+
+        mock_app.cue_model.get.side_effect = lambda i: {
+            outer.id: outer,
+            inner.id: inner,
+        }.get(i)
+
+        assert leaf.effective_disabled is False
+        outer.disabled = True
+        assert leaf.effective_disabled is True
+
     def test_shuffle_on_load_multiple_shuffle_groups(
         self, mock_app
     ):
