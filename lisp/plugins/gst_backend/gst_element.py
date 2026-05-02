@@ -161,8 +161,15 @@ class GstMediaElements(Collection, HasInstanceProperties):
         element = self.elements.pop(index)
         element.dispose()
 
-        # Remove the element corresponding property
-        delattr(self, typename(element))
+        # Remove the element corresponding property. If a previous
+        # __init_pipeline failed mid-build, the elements list can
+        # contain entries whose attribute slot was already deleted
+        # (or never registered) — tolerate that here so clear() can
+        # finish draining the list instead of aborting and leaving
+        # the container in a broken half-state.
+        name = typename(element)
+        if hasattr(self, name):
+            delattr(self, name)
 
     def clear(self):
         while self.elements:

@@ -330,6 +330,14 @@ class GstMedia(Media):
         if self.__finalizer is not None:
             # Set pipeline to NULL, finalize bus-handler and elements
             self.__finalizer()
+            # weakref.finalize is single-shot: once called, alive=False
+            # and subsequent calls are no-ops. If pipeline build below
+            # raises, leaving this attribute set would cause the next
+            # __init_pipeline to "call" a dead finalizer (silently
+            # skipping cleanup) and then append on top of stale
+            # elements. Drop the reference so the next entry treats
+            # this as a fresh build.
+            self.__finalizer = None
 
         self.__pipeline = Gst.Pipeline()
         # Add a callback to watch for pipeline bus-messages
