@@ -138,7 +138,20 @@ class CueWidget(QWidget):
         )
 
         self.targetWarning = QLabel(self.nameButton)
-        self.targetWarning.setStyleSheet("background-color: transparent")
+        # The QToolTip rule overrides inheritance from `nameButton`'s
+        # per-cue stylesheet (cue colour as background), which would
+        # otherwise paint the tooltip in the cue colour. Local
+        # widget-set stylesheet beats cascaded stylesheet from a
+        # parent, so this rule wins regardless of the active theme.
+        self.targetWarning.setStyleSheet(
+            "QLabel { background-color: transparent; }"
+            "QToolTip {"
+            "  background-color: palette(base);"
+            "  color: palette(text);"
+            "  border: 1px solid palette(midlight);"
+            "  padding: 2px;"
+            "}"
+        )
         self.targetWarning.setPixmap(
             self._make_target_badge_pixmap(CueWidget.ICON_SIZE)
         )
