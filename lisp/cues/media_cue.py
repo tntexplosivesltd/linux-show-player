@@ -33,6 +33,7 @@ class MediaCue(Cue):
     icon = Property("speaker")
     default_start_action = Property(default=CueAction.FadeInStart.value)
     default_stop_action = Property(default=CueAction.FadeOutStop.value)
+    preload = Property(default=False)
 
     CueActions = (
         CueAction.Default,

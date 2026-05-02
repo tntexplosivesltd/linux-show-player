@@ -65,6 +65,7 @@ class GstMedia(Media):
         self.__finalizer = None
         self.__loop = 0  # current number of loops left to do
         self.__current_pipe = None  # A copy of the pipe property
+        self.__armed = False  # True when pre-armed (pipeline in PAUSED)
 
         self.changed("loop").connect(self.__on_loops_changed)
         self.changed("pipe").connect(self.__on_pipe_changed)
@@ -73,6 +74,9 @@ class GstMedia(Media):
     def state(self):
         if self.__pipeline is None:
             return MediaState.Null
+
+        if self.__armed:
+            return MediaState.Armed
 
         return GST_TO_MEDIA_STATE.get(
             self.__pipeline.get_state(Gst.MSECOND)[1], MediaState.Null
@@ -89,19 +93,30 @@ class GstMedia(Media):
         if self.state == MediaState.Null:
             self.__init_pipeline()
 
-        if self.state == MediaState.Ready or self.state == MediaState.Paused:
+        if self.state in (
+            MediaState.Ready, MediaState.Paused, MediaState.Armed,
+        ):
             self.on_play.emit(self)
 
             for element in self.elements:
                 element.play()
 
-            if self.state != MediaState.Paused:
+            if self.state == MediaState.Armed:
+                # Pre-armed: pipeline already in PAUSED and seeked to
+                # start_time. Skip the preroll/seek work — that latency
+                # was paid at prearm time. This is the latency saving.
+                pass
+            elif self.state == MediaState.Paused:
+                self.__seek(self.current_time())
+            else:  # Ready
                 self.__pipeline.set_state(Gst.State.PAUSED)
                 self.__pipeline.get_state(Gst.SECOND)
                 self.__seek(self.start_time)
-            else:
-                self.__seek(self.current_time())
 
+            # Clear the arm flag — once we go to PLAYING, the state
+            # property must derive from the live pipeline (Playing),
+            # not keep reporting Armed via the override.
+            self.__armed = False
             self.__pipeline.set_state(Gst.State.PLAYING)
             self.__pipeline.get_state(Gst.SECOND)
 
@@ -123,6 +138,13 @@ class GstMedia(Media):
             self.paused.emit(self)
 
     def stop(self):
+        if self.state == MediaState.Armed:
+            # An Armed pipeline holds audio device resources in PAUSED
+            # state. stop() on Armed must release them — defer to
+            # disarm() rather than emitting on_stop/stopped signals,
+            # since the cue never started playing.
+            self.disarm()
+            return
         if self.state == MediaState.Playing or self.state == MediaState.Paused:
             self.on_stop.emit(self)
 
@@ -140,6 +162,64 @@ class GstMedia(Media):
             # properties (volume, alpha) aren't left at fade values.
             for element in self.elements:
                 element.stop()
+
+    def prearm(self) -> bool:
+        """Drive the pipeline to PAUSED + seek to start_time.
+
+        Returns False on any failure (file missing, decoder error, sink
+        refused, preroll deadline exceeded). Logs WARNING on failure.
+        Idempotent: returns True immediately if already Armed/Playing/Paused.
+        """
+        if self.state in (
+            MediaState.Playing,
+            MediaState.Paused,
+            MediaState.Armed,
+        ):
+            return True
+
+        if self.state == MediaState.Null:
+            try:
+                self.__init_pipeline()
+            except Exception as exc:
+                logger.warning(
+                    "GstMedia.prearm: pipeline init failed: %s", exc
+                )
+                return False
+
+        # Pipeline is now in READY; drive it to PAUSED for preroll
+        ret = self.__pipeline.set_state(Gst.State.PAUSED)
+        if ret == Gst.StateChangeReturn.FAILURE:
+            logger.warning("GstMedia.prearm: set_state(PAUSED) FAILURE")
+            self.__pipeline.set_state(Gst.State.NULL)
+            return False
+
+        state_ret, *_ = self.__pipeline.get_state(Gst.SECOND)
+        if state_ret != Gst.StateChangeReturn.SUCCESS:
+            logger.warning(
+                "GstMedia.prearm: preroll did not complete (%s)",
+                state_ret,
+            )
+            self.__pipeline.set_state(Gst.State.NULL)
+            return False
+
+        self.__armed = True
+        self.__seek(self.start_time)
+        self.armed.emit(self)
+        return True
+
+    def disarm(self) -> None:
+        """Tear down an armed pipeline. Idempotent."""
+        if self.state != MediaState.Armed:
+            return
+        self.__pipeline.set_state(Gst.State.NULL)
+        self.__armed = False
+        self.disarmed.emit(self)
+
+    def reseek(self, position: int) -> None:
+        """Re-seek a pre-armed pipeline without tearing it down."""
+        if self.state != MediaState.Armed:
+            return
+        self.__seek(position)
 
     def seek(self, position):
         if self.__seek(position):
@@ -186,7 +266,8 @@ class GstMedia(Media):
 
     def __seek(self, position, flush=True):
         if (
-            self.state not in (MediaState.Playing, MediaState.Paused)
+            self.state
+            not in (MediaState.Playing, MediaState.Paused, MediaState.Armed)
             or position > self.__segment_stop_position()
         ):
             return False
@@ -239,6 +320,11 @@ class GstMedia(Media):
     def __init_pipeline(self):
         # Make a copy of the current elements properties
         elements_properties = self.elements.properties()
+
+        # Pipeline is being torn down and rebuilt — any previous arm
+        # state is invalid. Don't emit `disarmed` here; this is an
+        # internal reset, not a user-visible disarm.
+        self.__armed = False
 
         # Call the current media-finalizer, if any
         if self.__finalizer is not None:
@@ -333,6 +419,15 @@ class GstMedia(Media):
             # Set the pipeline to NULL
             self.__pipeline.set_state(Gst.State.NULL)
             self.__pipeline.get_state(Gst.SECOND)
+            # Clear arm state — an Armed pipeline that errors out is no
+            # longer armed; without this the state property would keep
+            # reporting Armed despite the pipeline being NULL.
+            # Note: we deliberately do NOT emit `disarmed` here. The
+            # `disarmed` signal contract is "emitted by disarm()". The
+            # `error` signal (emitted below) is the canonical channel
+            # for "pipeline gone, including any armed state" — adding
+            # `disarmed` would be redundant for `error` subscribers.
+            self.__armed = False
             self.__reset_media()
 
             self.error.emit(self)

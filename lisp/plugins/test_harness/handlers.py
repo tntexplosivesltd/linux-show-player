@@ -15,6 +15,7 @@
 # You should have received a copy of the GNU General Public License
 # along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
+import threading
 import time
 
 from lisp import layout as layout_module
@@ -1183,6 +1184,100 @@ def register_all(dispatcher, app, signal_manager):
             )
         return result
 
+    # --- Pre-arm state ---
+
+    def _serialize_arm_reason(reason):
+        """Serialize an ArmReason flag value to a JSON-friendly string.
+
+        Single-flag values (Preload, Auto) have a `.name` attribute holding
+        the member name. Composite values (Preload | Auto) behave by Python
+        version:
+          - Python 3.14+: `.name` returns the joined name "Auto|Preload".
+          - Python 3.11–3.13: `.name` returns None for composites.
+
+        The fallback below covers the older versions; on 3.14+ it is not
+        reached but kept for cross-version safety.
+        """
+        name = getattr(reason, "name", None)
+        if name is not None:
+            return name
+        # str() yields "ArmReason.Auto|Preload" — strip the class prefix
+        return str(reason).split(".", 1)[-1]
+
+    def handle_pre_arm_status(params):
+        """Return a JSON snapshot of the pre-arm manager state.
+
+        Returns {"armed": {cue_id: reason_str, ...},
+                 "failed": {cue_id: reason_text, ...}}.
+        Returns empty dicts if the manager is not available.
+        """
+        mgr = getattr(app, "pre_arm_manager", None)
+        if mgr is None:
+            return {"armed": {}, "failed": {}}
+        armed = {
+            cue_id: _serialize_arm_reason(reason)
+            for cue_id, reason in mgr._armed.items()
+        }
+        failed = dict(mgr._failed)
+        return {"armed": armed, "failed": failed}
+
+    def handle_pre_arm_wait_for_armed(params):
+        """Block until a cue id appears in the armed set, or timeout.
+
+        Connects to armed_set_changed BEFORE the immediate check to
+        avoid the race where the cue arms between the check and the
+        connect. The connection is always cleaned up on exit.
+
+        NOTE: the test harness server is single-threaded; this handler
+        blocks the dispatch loop for the duration of the wait. This
+        matches the design of signals.wait_for and is acceptable for
+        E2E test use where only one blocking call is in flight at a time.
+
+        Params: {"cue_id": str, "timeout": float (default 5.0)}.
+        Returns: {"armed": bool, "reason": str | None}.
+        """
+        cue_id = params.get("cue_id")
+        if not cue_id:
+            raise AppError("cue_id is required")
+        timeout = float(params.get("timeout", 5.0))
+
+        mgr = getattr(app, "pre_arm_manager", None)
+        if mgr is None:
+            return {"armed": False, "reason": None}
+
+        deadline = time.monotonic() + timeout
+        event = threading.Event()
+
+        def on_change(*_):
+            if cue_id in mgr._armed:
+                event.set()
+
+        # Connect before the immediate check to avoid the arm-between-
+        # check-and-connect race.
+        mgr.armed_set_changed.connect(on_change)
+        try:
+            reason = mgr._armed.get(cue_id)
+            if reason is not None:
+                return {
+                    "armed": True,
+                    "reason": _serialize_arm_reason(reason),
+                }
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                event.wait(remaining)
+            reason = mgr._armed.get(cue_id)
+            if reason is not None:
+                return {
+                    "armed": True,
+                    "reason": _serialize_arm_reason(reason),
+                }
+            return {"armed": False, "reason": None}
+        finally:
+            try:
+                mgr.armed_set_changed.disconnect(on_change)
+            except Exception:
+                pass
+
     # --- Settings ---
 
     def handle_settings_list_cue_pages(params):
@@ -1307,6 +1402,9 @@ def register_all(dispatcher, app, signal_manager):
         "playback_monitor.toggle": handle_playback_monitor_toggle,
         # Settings
         "settings.list_cue_pages": handle_settings_list_cue_pages,
+        # Pre-arm state
+        "pre_arm.status": handle_pre_arm_status,
+        "pre_arm.wait_for_armed": handle_pre_arm_wait_for_armed,
         # Inspector
         "inspector.state": handle_inspector_state,
         "inspector.toggle": handle_inspector_toggle,

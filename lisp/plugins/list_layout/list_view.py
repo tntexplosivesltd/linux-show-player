@@ -15,11 +15,15 @@
 # You should have received a copy of the GNU General Public License
 # along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
+import logging
+
 from PyQt5.QtCore import (
     pyqtSignal,
     Qt,
     QDataStream,
+    QEvent,
     QIODevice,
+    QPoint,
     QRect,
     QT_TRANSLATE_NOOP,
     QTimer,
@@ -32,7 +36,7 @@ from PyQt5.QtGui import (
     QPainter,
     QPen,
 )
-from PyQt5.QtWidgets import QTreeWidget, QHeaderView, QTreeWidgetItem
+from PyQt5.QtWidgets import QToolTip, QTreeWidget, QHeaderView, QTreeWidgetItem
 
 from lisp.application import Application
 from lisp.core.signal import Connection
@@ -52,6 +56,8 @@ from lisp.plugins.list_layout.list_widgets import (
     IndexWidget,
 )
 from lisp.ui.ui_utils import translate, css_to_dict, dict_to_css
+
+logger = logging.getLogger(__name__)
 
 
 class ListColumn:
@@ -79,6 +85,7 @@ class CueTreeWidgetItem(QTreeWidgetItem):
 class CueListView(QTreeWidget):
     keyPressed = pyqtSignal(QKeyEvent)
     contextMenuInvoked = pyqtSignal(QContextMenuEvent)
+    standbyChanged = pyqtSignal(int)
 
     # TODO: add ability to show/hide
     # TODO: implement columns (cue-type / target / etc..)
@@ -119,6 +126,11 @@ class CueListView(QTreeWidget):
         "playlist": GROUP_OUTLINE_PLAYLIST,
     }
 
+    INDICATOR_GREEN = QColor("#3E8A3B")
+    INDICATOR_RED = QColor("#C03A2A")
+    INDICATOR_RADIUS = 4
+    INDICATOR_CX = INDICATOR_RADIUS * 2  # x-offset of dot centre from row's left edge
+
     def __init__(self, listModel, parent=None):
         """
         :type listModel: lisp.plugins.list_layout.models.CueListModel
@@ -135,6 +147,21 @@ class CueListView(QTreeWidget):
         self._model.item_moved.connect(self.__cueMoved)
         self._model.item_removed.connect(self.__cueRemoved)
         self._model.model_reset.connect(self.__modelReset)
+
+        # Subscribe to pre-arm state changes for indicator dot repaints.
+        # Guard with getattr so unit tests that don't set up a real
+        # Application singleton still work cleanly.
+        mgr = getattr(Application(), "pre_arm_manager", None)
+        if mgr is not None:
+            mgr.armed_set_changed.connect(self._on_armed_set_changed)
+            logger.debug(
+                "CueListView: subscribed to pre_arm_manager.armed_set_changed"
+            )
+        else:
+            logger.debug(
+                "CueListView: no pre_arm_manager on Application — "
+                "indicator dots disabled"
+            )
 
         # Setup the columns headers
         self.setHeaderLabels((c.name for c in CueListView.COLUMNS))
@@ -159,6 +186,7 @@ class CueListView(QTreeWidget):
         self.currentItemChanged.connect(
             self.__currentItemChanged, Qt.QueuedConnection
         )
+        self.currentItemChanged.connect(self._on_current_item_changed)
         self.itemCollapsed.connect(self.__itemCollapsed)
         self.itemExpanded.connect(self.__itemExpanded)
 
@@ -245,37 +273,109 @@ class CueListView(QTreeWidget):
         super().resizeEvent(event)
         self.updateHeadersSizes()
 
+    def _on_armed_set_changed(self):
+        """Repaint viewport when the pre-arm set changes."""
+        logger.debug(
+            "CueListView: armed_set_changed — repainting viewport"
+        )
+        self.viewport().update()
+
+    def viewportEvent(self, event):
+        if event.type() == QEvent.ToolTip:
+            mgr = getattr(Application(), "pre_arm_manager", None)
+            if mgr is not None:
+                pos = event.pos()
+                item = self.itemAt(pos)
+                if item is not None:
+                    cue = item.cue
+                    cue_id = cue.id
+                    if (
+                        cue_id in mgr._failed
+                        and getattr(cue, "preload", False)
+                    ):
+                        row_rect = self.visualItemRect(item)
+                        dot_cx = row_rect.left() + self.INDICATOR_CX
+                        dot_cy = row_rect.center().y()
+                        dx = pos.x() - dot_cx
+                        dy = pos.y() - dot_cy
+                        if (
+                            dx * dx + dy * dy
+                            <= self.INDICATOR_RADIUS * self.INDICATOR_RADIUS
+                        ):
+                            QToolTip.showText(
+                                event.globalPos(),
+                                mgr._failed[cue_id],
+                                self,
+                            )
+                            event.accept()
+                            return True
+        return super().viewportEvent(event)
+
     def paintEvent(self, event):
         super().paintEvent(event)
 
-        if not self._group_items:
+        mgr = getattr(Application(), "pre_arm_manager", None)
+        has_groups = bool(self._group_items)
+        has_armed = mgr is not None and bool(mgr._armed or mgr._failed)
+
+        if not has_groups and not has_armed:
             return
 
         painter = QPainter(self.viewport())
         painter.setRenderHint(QPainter.Antialiasing)
-        pen = QPen()
-        pen.setWidth(self.GROUP_OUTLINE_WIDTH)
 
         viewport_rect = self.viewport().rect()
-        for group_item in self._group_items.values():
-            color = self.GROUP_OUTLINE_COLORS.get(
-                group_item.cue.group_mode
-            )
-            if color is None:
-                continue
 
-            rect = self._groupOutlineRect(group_item)
-            if rect is None or not rect.intersects(viewport_rect):
-                continue
+        if has_groups:
+            pen = QPen()
+            pen.setWidth(self.GROUP_OUTLINE_WIDTH)
+            for group_item in self._group_items.values():
+                color = self.GROUP_OUTLINE_COLORS.get(
+                    group_item.cue.group_mode
+                )
+                if color is None:
+                    continue
 
-            pen.setColor(color)
-            painter.setPen(pen)
-            painter.setBrush(Qt.NoBrush)
-            painter.drawRoundedRect(
-                rect,
-                self.GROUP_OUTLINE_RADIUS,
-                self.GROUP_OUTLINE_RADIUS,
-            )
+                rect = self._groupOutlineRect(group_item)
+                if rect is None or not rect.intersects(viewport_rect):
+                    continue
+
+                pen.setColor(color)
+                painter.setPen(pen)
+                painter.setBrush(Qt.NoBrush)
+                painter.drawRoundedRect(
+                    rect,
+                    self.GROUP_OUTLINE_RADIUS,
+                    self.GROUP_OUTLINE_RADIUS,
+                )
+
+        if mgr is not None:
+            painter.setPen(Qt.NoPen)
+            for item in self.iterAllItems():
+                cue = item.cue
+                cue_id = cue.id
+                if cue_id in mgr._armed:
+                    color = self.INDICATOR_GREEN
+                elif (
+                    cue_id in mgr._failed
+                    and getattr(cue, "preload", False)
+                ):
+                    color = self.INDICATOR_RED
+                else:
+                    continue
+
+                row_rect = self.visualItemRect(item)
+                if row_rect.isEmpty():
+                    continue
+
+                cx = row_rect.left() + self.INDICATOR_CX
+                cy = row_rect.center().y()
+                painter.setBrush(QBrush(color))
+                painter.drawEllipse(
+                    QPoint(cx, cy),
+                    self.INDICATOR_RADIUS,
+                    self.INDICATOR_RADIUS,
+                )
 
     def standbyIndex(self):
         return self.cueIndexOf(self.currentItem())
@@ -284,6 +384,13 @@ class CueListView(QTreeWidget):
         item = self.cueItemAt(newIndex)
         if item is not None:
             self.setCurrentItem(item)
+
+    def _on_current_item_changed(self, current, _previous):
+        """Bridge QTreeWidget.currentItemChanged → standbyChanged(index)."""
+        if current is None:
+            self.standbyChanged.emit(-1)
+        else:
+            self.standbyChanged.emit(self.cueIndexOf(current))
 
     def updateHeadersSizes(self):
         """Some hack to have "stretchable" columns with a minimum size

@@ -39,6 +39,12 @@
             "visibleColumns": ["asctime", "name", "message"]
         }
     },
+    "preArm": {
+        "enabled": true,
+        "lookahead": 1,
+        "maxArmed": 16,
+        "failOnCapHit": false
+    },
     "layout": {
         "default": "NoDefault",
         "stopAllFade": false,

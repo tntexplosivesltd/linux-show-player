@@ -54,6 +54,11 @@ _COMMANDS_SIGNALS = {
     "commands.redone",
 }
 
+# Signals available on app.pre_arm_manager
+_PRE_ARM_SIGNALS = {
+    "pre_arm_manager.armed_set_changed",
+}
+
 # Signals available on individual cues
 _CUE_SIGNALS = {
     "started", "stopped", "paused", "interrupted",
@@ -234,7 +239,8 @@ class SignalManager:
     def list_signals(self):
         """Return list of available signal names."""
         signals = sorted(
-            _APP_SIGNALS | _MODEL_SIGNALS | _LAYOUT_SIGNALS | _COMMANDS_SIGNALS
+            _APP_SIGNALS | _MODEL_SIGNALS | _LAYOUT_SIGNALS
+            | _COMMANDS_SIGNALS | _PRE_ARM_SIGNALS
         )
         signals.append("cue.<cue_id>.<signal_name>")
         return signals
@@ -259,6 +265,13 @@ class SignalManager:
             attr = signal_path.split(".", 1)[1]
             return getattr(self._app.commands_stack, attr)
 
+        if signal_path in _PRE_ARM_SIGNALS:
+            mgr = getattr(self._app, "pre_arm_manager", None)
+            if mgr is None:
+                raise ValueError("pre_arm_manager not available")
+            attr = signal_path.split(".", 1)[1]
+            return getattr(mgr, attr)
+
         # Per-cue signals: "cue.<signal_name>" with cue_id param
         if signal_path.startswith("cue."):
             signal_name = signal_path[4:]
@@ -278,7 +291,7 @@ class SignalManager:
 
         available = sorted(
             _APP_SIGNALS | _MODEL_SIGNALS | _LAYOUT_SIGNALS
-            | _COMMANDS_SIGNALS
+            | _COMMANDS_SIGNALS | _PRE_ARM_SIGNALS
         )
         raise ValueError(
             f"Unknown signal: {signal_path}. "

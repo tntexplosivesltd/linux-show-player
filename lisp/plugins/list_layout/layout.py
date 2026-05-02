@@ -103,6 +103,9 @@ class ListLayout(CueLayout):
         self._view.listView.itemSelectionChanged.connect(
             self._selection_emit_timer.start
         )
+        self._view.listView.standbyChanged.connect(
+            self._on_standby_changed_index
+        )
 
         # Layout menu
         layout_menu = self.app.window.menuLayout
@@ -346,6 +349,14 @@ class ListLayout(CueLayout):
             if cue.effective_disabled:
                 continue  # Skip disabled cue
             break
+
+    def _on_standby_changed_index(self, index: int):
+        """Bridge standbyChanged(int) → standby_changed(Cue | None)."""
+        try:
+            cue = self.cue_at(index) if index >= 0 else None
+        except IndexError:
+            cue = None
+        self.standby_changed.emit(cue)
 
     def cue_at(self, index):
         return self._list_model.item(index)
