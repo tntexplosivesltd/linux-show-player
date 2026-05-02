@@ -1187,13 +1187,16 @@ def register_all(dispatcher, app, signal_manager):
     # --- Pre-arm state ---
 
     def _serialize_arm_reason(reason):
-        """Serialize an ArmReason Flag value to a string.
+        """Serialize an ArmReason flag value to a JSON-friendly string.
 
-        ArmReason is a Flag enum with Auto and Preload members.
-        Single-flag values yield their .name ("Auto" or "Preload").
-        Composite values (Auto | Preload) have .name == None on
-        Python 3.11+; for those we strip the class prefix from str()
-        to get "Auto|Preload". The result is always a non-empty string.
+        Single-flag values (Preload, Auto) have a `.name` attribute holding
+        the member name. Composite values (Preload | Auto) behave by Python
+        version:
+          - Python 3.14+: `.name` returns the joined name "Auto|Preload".
+          - Python 3.11–3.13: `.name` returns None for composites.
+
+        The fallback below covers the older versions; on 3.14+ it is not
+        reached but kept for cross-version safety.
         """
         name = getattr(reason, "name", None)
         if name is not None:
@@ -1253,22 +1256,20 @@ def register_all(dispatcher, app, signal_manager):
         # check-and-connect race.
         mgr.armed_set_changed.connect(on_change)
         try:
-            if cue_id in mgr._armed:
+            reason = mgr._armed.get(cue_id)
+            if reason is not None:
                 return {
                     "armed": True,
-                    "reason": _serialize_arm_reason(
-                        mgr._armed[cue_id]
-                    ),
+                    "reason": _serialize_arm_reason(reason),
                 }
             remaining = deadline - time.monotonic()
             if remaining > 0:
                 event.wait(remaining)
-            if cue_id in mgr._armed:
+            reason = mgr._armed.get(cue_id)
+            if reason is not None:
                 return {
                     "armed": True,
-                    "reason": _serialize_arm_reason(
-                        mgr._armed[cue_id]
-                    ),
+                    "reason": _serialize_arm_reason(reason),
                 }
             return {"armed": False, "reason": None}
         finally:

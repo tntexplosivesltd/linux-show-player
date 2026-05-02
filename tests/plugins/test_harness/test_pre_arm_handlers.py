@@ -70,6 +70,19 @@ def _call(dispatcher, method, params=None):
 
 
 # ---------------------------------------------------------------------------
+# Registration
+# ---------------------------------------------------------------------------
+
+def test_methods_registered():
+    """Guard against typos in handlers.py's `methods` dict."""
+    d = Dispatcher()
+    register_all(d, _make_app(), signal_manager=None)
+    methods = d.list_methods()
+    assert "pre_arm.status" in methods
+    assert "pre_arm.wait_for_armed" in methods
+
+
+# ---------------------------------------------------------------------------
 # pre_arm.status tests
 # ---------------------------------------------------------------------------
 
@@ -180,14 +193,16 @@ class TestPreArmWaitForArmed:
             mgr._armed["c1"] = ArmReason.Preload
             mgr.armed_set_changed.emit()
 
-        t = Thread(target=arm_after_delay)
+        t = Thread(target=arm_after_delay, daemon=True)
         t.start()
 
         start = time.monotonic()
-        resp = _call(d, "pre_arm.wait_for_armed",
-                     {"cue_id": "c1", "timeout": 2.0})
-        elapsed = time.monotonic() - start
-        t.join()
+        try:
+            resp = _call(d, "pre_arm.wait_for_armed",
+                         {"cue_id": "c1", "timeout": 2.0})
+            elapsed = time.monotonic() - start
+        finally:
+            t.join(timeout=1.0)
 
         assert resp["result"]["armed"] is True
         assert resp["result"]["reason"] == "Preload"
