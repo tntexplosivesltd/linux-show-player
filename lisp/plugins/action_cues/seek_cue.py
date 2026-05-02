@@ -30,6 +30,7 @@ from PyQt5.QtWidgets import (
 from lisp.application import Application
 from lisp.core.properties import Property
 from lisp.cues.cue import Cue, CueAction
+from lisp.cues.targeting import TargetingCue
 from lisp.cues.media_cue import MediaCue
 from lisp.ui.cuelistdialog import CueSelectDialog
 from lisp.ui.settings.cue_settings import CueSettingsRegistry
@@ -37,7 +38,7 @@ from lisp.ui.settings.pages import SettingsPage
 from lisp.ui.ui_utils import translate
 
 
-class SeekCue(Cue):
+class SeekCue(TargetingCue, Cue):
     Name = QT_TRANSLATE_NOOP("CueName", "Seek Cue")
     Category = QT_TRANSLATE_NOOP("CueCategory", "Action cues")
 

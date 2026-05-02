@@ -29,6 +29,7 @@ from lisp.core.decorators import async_function
 from lisp.core.fade_functions import FadeOutType
 from lisp.core.properties import Property
 from lisp.cues.cue import Cue, CueAction
+from lisp.cues.targeting import TargetingCue
 from lisp.plugins.action_cues._fader_coordinator import (
     build_affected_set,
     collect_live_faders,
@@ -51,7 +52,7 @@ _ActionLike = namedtuple("_ActionLike", ["name", "value"])
 HIBERNATE_ACTION = _ActionLike(name="Hibernate", value="Hibernate")
 
 
-class StopCue(Cue):
+class StopCue(TargetingCue, Cue):
     Name = QT_TRANSLATE_NOOP("CueName", "Fade & Stop")
     Category = QT_TRANSLATE_NOOP("CueCategory", "Action cues")
 

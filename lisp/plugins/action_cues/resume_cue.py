@@ -28,6 +28,7 @@ from lisp.core.fade_functions import FadeInType
 from lisp.core.properties import Property
 from lisp.core.util import rsetattr
 from lisp.cues.cue import Cue, CueAction, CueState
+from lisp.cues.targeting import TargetingCue
 from lisp.plugins.action_cues._fader_coordinator import (
     build_affected_set,
     collect_live_faders,
@@ -43,7 +44,7 @@ from lisp.ui.widgets.fades import FadeComboBox
 logger = logging.getLogger(__name__)
 
 
-class ResumeCue(Cue):
+class ResumeCue(TargetingCue, Cue):
     Name = QT_TRANSLATE_NOOP("CueName", "Fade & Resume")
     Category = QT_TRANSLATE_NOOP("CueCategory", "Action cues")
 

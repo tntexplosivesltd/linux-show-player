@@ -40,6 +40,7 @@ from lisp.core.fade_functions import FadeInType, FadeOutType
 from lisp.core.fader import DummyFader
 from lisp.core.properties import Property
 from lisp.cues.cue import Cue, CueAction
+from lisp.cues.targeting import TargetingCue
 from lisp.cues.media_cue import MediaCue
 from lisp.ui.cuelistdialog import CueSelectDialog
 from lisp.ui.settings.cue_settings import CueSettingsRegistry
@@ -50,7 +51,7 @@ from lisp.ui.widgets import FadeEdit
 logger = logging.getLogger(__name__)
 
 
-class VolumeControl(Cue):
+class VolumeControl(TargetingCue, Cue):
     Name = QT_TRANSLATE_NOOP("CueName", "Volume Control")
     Category = QT_TRANSLATE_NOOP("CueCategory", "Action cues")
 
