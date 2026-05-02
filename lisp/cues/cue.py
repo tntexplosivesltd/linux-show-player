@@ -90,6 +90,9 @@ class Cue(HasProperties):
     :ivar app: The application instance.
     :ivar id: Identify the cue uniquely. Should NEVER change after init.
     :ivar index: Cue position in the view.
+    :ivar cue_number: Static, user-editable identifier
+        (e.g. '1', '1.5', 'Pre-1'). Stable across reorders. Auto-assigned
+        on creation; an empty string means "not yet assigned".
     :ivar name: Cue visualized name.
     :ivar icon: Cue icon file name.
     :ivar description: Cue text description.
@@ -124,6 +127,7 @@ class Cue(HasProperties):
     name = Property(default="Untitled")
     icon = Property(default="led")
     index = Property(default=-1)
+    cue_number = Property(default="")
     description = Property(default="")
     stylesheet = Property(default="")
     duration = Property(default=0)

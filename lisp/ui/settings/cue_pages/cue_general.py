@@ -151,6 +151,23 @@ class CueGeneralSettingsPage(CueSettingsPage):
         grid.addWidget(self.fadeOutGroup, 3, 0)
 
         # ---- Column 1: identity --------------------------------------
+        # Cue number sits in its own flat group. It's hidden entirely
+        # in multi-edit mode (see enableCheck) — applying one value to
+        # several cues would break the uniqueness invariant.
+        self.cueNumberGroup = make_flat_group()
+        self.cueNumberGroup.setLayout(QHBoxLayout())
+        self.cueNumberGroup.layout().setContentsMargins(0, 0, 0, 0)
+
+        self.cueNumberEdit = QLineEdit(self.cueNumberGroup)
+        self.cueNumberEdit.setMaximumWidth(80)
+        self.cueNumberEdit.editingFinished.connect(
+            self.__validateCueNumberUnique
+        )
+        self.cueNumberGroup.layout().addWidget(self.cueNumberEdit)
+        # Captured during loadSettings; the validator uses it to revert
+        # to the previously-loaded value when a collision is detected.
+        self._loadedCueNumber = ""
+
         self.cueNameGroup = make_flat_group()
         self.cueNameGroup.setLayout(QHBoxLayout())
         self.cueNameGroup.layout().setContentsMargins(0, 0, 0, 0)
@@ -170,7 +187,18 @@ class CueGeneralSettingsPage(CueSettingsPage):
         self.cueNameEdit = QLineEdit(self.cueNameGroup)
         self.cueNameGroup.layout().addWidget(self.cueNameEdit, 1)
 
-        grid.addWidget(self.cueNameGroup, 0, 1)
+        # Wrap Q# + Name on a single inspector row so they read as one
+        # identity strip ("Q1  ♫  My Cue") rather than two stacked
+        # fields. Each group keeps its own checkable enable for
+        # multi-edit.
+        identityRow = QWidget()
+        identityLayout = QHBoxLayout(identityRow)
+        identityLayout.setContentsMargins(0, 0, 0, 0)
+        identityLayout.setSpacing(8)
+        identityLayout.addWidget(self.cueNumberGroup)
+        identityLayout.addWidget(self.cueNameGroup, 1)
+
+        grid.addWidget(identityRow, 0, 1)
 
         self.cueDescriptionGroup = make_flat_group()
         self.cueDescriptionGroup.setLayout(QHBoxLayout())
@@ -280,6 +308,16 @@ class CueGeneralSettingsPage(CueSettingsPage):
         layout.addWidget(fadeEdit.fadeTypeCombo, 0, 1)
 
     def retranslateUi(self):
+        self.cueNumberGroup.setTitle(
+            translate("CueAppearanceSettings", "Q#")
+        )
+        self.cueNumberEdit.setToolTip(
+            translate(
+                "CueAppearanceSettings",
+                "Static cue identifier (e.g. '1', '1.5', 'Pre-1'). "
+                "Stable across reorders.",
+            )
+        )
         self.cueNameGroup.setTitle(
             translate("CueAppearanceSettings", "Cue Name and Icon")
         )
@@ -331,6 +369,60 @@ class CueGeneralSettingsPage(CueSettingsPage):
             )
         )
 
+    def __validateCueNumberUnique(self):
+        """Reject a typed value that collides with another cue.
+
+        Reverts the QLineEdit to its previously-loaded value and
+        styles the field briefly to signal the rejection. Empty input
+        and "no change" both pass through without touching anything.
+
+        Lazy import of `Application` avoids a circular import — this
+        page is constructed at module-load time (via the cue settings
+        registry), well before the application singleton exists.
+        """
+        from lisp.application import Application
+        from lisp.cues.cue_number import is_collision
+
+        text = self.cueNumberEdit.text()
+        if not text or text == self._loadedCueNumber:
+            return
+
+        app = Application()
+        if app is None or app.cue_model is None:
+            return
+
+        # The cue we're editing isn't directly accessible from the
+        # page — we identify "us" by matching cue_number against the
+        # value that was loaded into the field. Excluding any cue that
+        # currently holds `_loadedCueNumber` covers the common case
+        # (single cue with the loaded value); on the rare collision-
+        # before-our-edit path, the worst outcome is a false negative
+        # which Application's item_added auto-assign would re-resolve.
+        for cue in app.cue_model:
+            if cue.cue_number == self._loadedCueNumber:
+                # Skip; this is (almost certainly) us.
+                continue
+            if cue.cue_number == text:
+                self.cueNumberEdit.setText(self._loadedCueNumber)
+                self.cueNumberEdit.setToolTip(
+                    translate(
+                        "CueAppearanceSettings",
+                        "Cue number '{}' is already in use",
+                    ).format(text)
+                )
+                return
+
+        # Accepted — adopt the new value as the baseline so subsequent
+        # edits diff against the actually-saved value.
+        self._loadedCueNumber = text
+        self.cueNumberEdit.setToolTip(
+            translate(
+                "CueAppearanceSettings",
+                "Static cue identifier (e.g. '1', '1.5', 'Pre-1'). "
+                "Stable across reorders.",
+            )
+        )
+
     def showIconSelector(self):
         if self.iconSelectorDialog is None:
             self.iconSelectorDialog = IconSelectorDialog(self)
@@ -349,6 +441,11 @@ class CueGeneralSettingsPage(CueSettingsPage):
         self.cueIconButton.setIcon(IconTheme.get(self.iconName))
 
     def enableCheck(self, enabled):
+        # Cue number is intentionally excluded from multi-edit:
+        # applying the same value to N cues would create N-1
+        # duplicates, violating the per-cue uniqueness invariant. Hide
+        # the field so users aren't tempted to tick its group.
+        self.cueNumberGroup.setVisible(not enabled)
         self.setGroupEnabled(self.cueNameGroup, enabled)
         self.setGroupEnabled(self.cueDescriptionGroup, enabled)
         self.setGroupEnabled(self.colorGroup, enabled)
@@ -361,6 +458,9 @@ class CueGeneralSettingsPage(CueSettingsPage):
         self.setGroupEnabled(self.enabledGroup, enabled)
 
     def loadSettings(self, settings):
+        if "cue_number" in settings:
+            self._loadedCueNumber = settings["cue_number"] or ""
+            self.cueNumberEdit.setText(self._loadedCueNumber)
         if "name" in settings:
             self.cueNameEdit.setText(settings["name"])
         if "icon" in settings:
@@ -403,6 +503,12 @@ class CueGeneralSettingsPage(CueSettingsPage):
         settings = {}
         style = {}
 
+        # cue_number is single-edit only: emit it whenever the field
+        # is visible (single-cue mode). Multi-edit hides the group via
+        # enableCheck, so this branch never fires there — guarding
+        # against the uniqueness violation at the source.
+        if self.cueNumberGroup.isVisible():
+            settings["cue_number"] = self.cueNumberEdit.text()
         if self.isGroupEnabled(self.cueNameGroup):
             settings["name"] = self.cueNameEdit.text()
             settings["icon"] = self.iconName

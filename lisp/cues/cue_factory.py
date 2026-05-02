@@ -81,11 +81,17 @@ class CueFactory:
     def clone_cue(self, cue):
         """Return a copy of the given cue. The id is not copied.
 
+        The cloned cue's ``cue_number`` is dropped before the copy is
+        applied, so the auto-assigner (in ``Application``, on
+        ``cue_model.item_added``) gives it a fresh identifier instead
+        of duplicating the original's number.
+
         :param cue: the cue to be copied
         :rtype: lisp.cues.cue.Cue
         """
         properties = deepcopy(cue.properties())
         properties.pop("id")
+        properties.pop("cue_number", None)
 
         cue = self.create_cue(typename(cue))
         cue.update_properties(properties)

@@ -32,6 +32,7 @@ from lisp.core.util import filter_live_properties
 from lisp.cues.cue import Cue
 from lisp.cues.cue_factory import CueFactory
 from lisp.cues.cue_model import CueModel
+from lisp.cues.cue_number import is_collision, next_cue_number
 from lisp.cues.media_cue import MediaCue
 from lisp.layout.cue_layout import CueLayout
 from lisp.plugins import get_plugins
@@ -63,6 +64,7 @@ class Application(metaclass=Singleton):
         self.__conf = app_conf
         self.__cue_factory = CueFactory(self)
         self.__cue_model = CueModel()
+        self.__cue_model.item_added.connect(self.__assign_cue_number)
         self.__exclusive_manager = ExclusiveManager(self)
         self.__session = None
         self.__commands_stack = CommandsStack()
@@ -143,6 +145,23 @@ class Application(metaclass=Singleton):
 
         self.__cue_model = None
         self.__main_window = None
+
+    def __assign_cue_number(self, cue):
+        """Ensure the freshly-added `cue` has a unique `cue_number`.
+
+        Three cases:
+        - Empty: assign the next free integer.
+        - Already unique: leave alone (covers session reload of a
+          previously-numbered cue).
+        - Collides with an existing entry: rewrite the freshly-added
+          cue's number to the next free integer. Defensive against
+          corrupt sessions or programmatic add paths that skip the
+          inspector's per-key uniqueness check.
+        """
+        if not cue.cue_number:
+            cue.cue_number = next_cue_number(self.__cue_model, exclude=cue)
+        elif is_collision(self.__cue_model, cue.cue_number, exclude=cue):
+            cue.cue_number = next_cue_number(self.__cue_model, exclude=cue)
 
     def __new_session_dialog(self):
         """Show the layout-selection dialog"""
