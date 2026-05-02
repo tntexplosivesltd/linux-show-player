@@ -108,6 +108,14 @@ class PreArmManager:
             self._app.session_loaded.connect(self.session_loaded)
         except AttributeError:
             logger.debug("PreArmManager: app.session_loaded missing")
+        try:
+            self._app.session_before_finalize.connect(
+                self.session_before_finalize
+            )
+        except AttributeError:
+            logger.debug(
+                "PreArmManager: app.session_before_finalize missing"
+            )
         cue_model = getattr(self._app, "cue_model", None)
         if cue_model is not None:
             try:
@@ -381,6 +389,41 @@ class PreArmManager:
 
         self._emit_batch_failure_notification(failures)
 
+    @_safe
+    def session_before_finalize(self, *_args) -> None:
+        """Called before a session is torn down. Disarm everything and
+        clear all state so the next session starts clean.
+
+        Without this, _armed/_failed/_mtime_at_arm/_cue_handlers retain
+        stale entries pointing at disposed cues from the previous session,
+        and _armed can carry over against the cap of the new session.
+        """
+        logger.info(
+            "PreArmManager: session_before_finalize — clearing %d armed, "
+            "%d failed",
+            len(self._armed), len(self._failed),
+        )
+        # Disarm in place (don't iterate self._armed while mutating)
+        armed_ids = list(self._armed.keys())
+        for cue_id in armed_ids:
+            cue = self._cue_by_id(cue_id)
+            if cue is not None:
+                try:
+                    self._disarm(cue)
+                except Exception:
+                    logger.exception(
+                        "PreArmManager: error disarming %s on teardown",
+                        cue_id,
+                    )
+        # Hard reset any leftover state (in case _disarm couldn't find
+        # the cue object)
+        self._armed.clear()
+        self._failed.clear()
+        self._mtime_at_arm.clear()
+        self._cue_handlers.clear()
+        self._wired_layout_ids.clear()
+        self.armed_set_changed.emit()
+
     def _emit_batch_failure_notification(self, failures) -> None:
         """Emit one toast summarising preload failures from session_load.
 
@@ -467,9 +510,10 @@ class PreArmManager:
             if cue is not None:
                 self._remove_reason(cue, ArmReason.Auto)
 
-        # Arm the new standby
+        # Arm the new standby — check mtime first if already armed
         if new_cue is not None and self._eligible(new_cue):
             if new_cue.id in self._armed:
+                self.maybe_rearm_for_mtime(new_cue)
                 self._add_reason(new_cue, ArmReason.Auto)
             else:
                 self._try_arm(new_cue, ArmReason.Auto)
@@ -519,9 +563,11 @@ class PreArmManager:
     @_safe
     def on_cue_stopped(self, cue) -> None:
         """Called when a cue stops/ends/is interrupted/errors. If marked
-        preload, re-arm immediately. Otherwise no-op.
+        preload, re-arm immediately (after an mtime check). Otherwise
+        no-op.
         """
         if getattr(cue, "preload", False) and self._eligible(cue):
+            self.maybe_rearm_for_mtime(cue)
             self._try_arm(cue, ArmReason.Preload)
 
     # --- T11: Edit invalidation ---------------------------------------
@@ -600,6 +646,15 @@ class PreArmManager:
         self._disarm(cue)
         self._failed.pop(cue.id, None)
         self._cue_handlers.pop(cue.id, None)
+        # Clear the wiring flag so a re-add of the same Python object
+        # gets fresh signal connections. Without this, an undo of a
+        # remove would leave the cue with _pre_arm_wired=True but no
+        # actual signal connections (confirmed: ModelRemoveItemsCommand
+        # restores the same Python object on undo).
+        try:
+            del cue._pre_arm_wired
+        except AttributeError:
+            pass
 
     @_safe
     def maybe_rearm_for_mtime(self, cue) -> None:

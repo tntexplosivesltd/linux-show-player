@@ -1010,3 +1010,106 @@ def test_cue_added_wires_preload_listener_for_later_toggle(manager, mock_app):
     # added Preload reason and triggered _try_arm.
     assert cue.id in manager._armed
     assert ArmReason.Preload in manager._armed[cue.id]
+
+
+# Critical #1 — maybe_rearm_for_mtime integration -------------------------
+
+
+class TestMTimeIntegration:
+    def test_standby_change_invokes_mtime_check(self, manager, mock_app):
+        """maybe_rearm_for_mtime must be called when standby visits an
+        already-armed cue (the 'standby visit' decision point per spec
+        locked decision #6).
+        """
+        from unittest.mock import patch
+
+        cue = _make_wired_cue("c1", preload=True)
+        cue.media.prearm.return_value = True
+        mock_app.cue_model = MagicMock()
+        mock_app.cue_model.get.side_effect = lambda cid: (
+            cue if cid == "c1" else None
+        )
+        manager._armed[cue.id] = ArmReason.Auto | ArmReason.Preload
+        manager._mtime_at_arm[cue.id] = 1000.0  # stale
+
+        with patch.object(manager, "maybe_rearm_for_mtime") as mock_check:
+            manager.standby_changed(cue)
+            mock_check.assert_called_once_with(cue)
+
+    def test_cue_stopped_invokes_mtime_check(self, manager, mock_app):
+        """maybe_rearm_for_mtime must be called when a preload-marked cue
+        stops (the 'post-stop re-arm' decision point per spec locked
+        decision #6).
+        """
+        from unittest.mock import patch
+
+        cue = _make_wired_cue("c1", preload=True)
+        with patch.object(manager, "maybe_rearm_for_mtime") as mock_check:
+            manager.on_cue_stopped(cue)
+            mock_check.assert_called_once_with(cue)
+
+
+# Critical #2 — Session teardown ------------------------------------------
+
+
+class TestSessionTeardown:
+    def test_session_before_finalize_clears_all_state(
+        self, manager, mock_app
+    ):
+        """All state dicts cleared on session teardown so the next
+        session starts clean.
+        """
+        cue = _make_wired_cue("c1", preload=True)
+        manager._armed[cue.id] = ArmReason.Preload
+        manager._failed["c2"] = "fail"
+        manager._mtime_at_arm[cue.id] = 1000.0
+        # Populate _cue_handlers to verify it is also cleared
+        manager._cue_handlers["c3"] = []
+
+        manager.session_before_finalize()
+
+        assert manager._armed == {}
+        assert manager._failed == {}
+        assert manager._mtime_at_arm == {}
+        assert manager._cue_handlers == {}
+
+    def test_session_before_finalize_emits_armed_set_changed(
+        self, manager, mock_app
+    ):
+        """View must repaint after teardown to clear stale indicator dots."""
+        from unittest.mock import MagicMock as MM
+
+        manager._armed["c1"] = ArmReason.Preload
+        listener = MM()
+        manager.armed_set_changed.connect(listener)
+        manager.session_before_finalize()
+        listener.assert_called()
+
+    def test_session_before_finalize_wires_via_app_signal(
+        self, manager_factory, mock_app
+    ):
+        """Constructor must connect to app.session_before_finalize when
+        that signal is present.
+        """
+        mock_app.session_before_finalize = MagicMock()
+        manager_factory()
+        mock_app.session_before_finalize.connect.assert_called()
+
+
+# High — _pre_arm_wired flag persistence on cue_removed -------------------
+
+
+class TestCueRemovedClearsWiringFlag:
+    def test_cue_removed_clears_pre_arm_wired_flag(self, manager, mock_app):
+        """cue_removed must del _pre_arm_wired so that an undo of remove
+        (which restores the same Python object) gets fresh signal
+        connections instead of being skipped as already-wired.
+
+        Confirmed: ModelRemoveItemsCommand.undo() re-adds the same Python
+        object, so object-identity IS preserved across undo — the bug is
+        real.
+        """
+        cue = _make_wired_cue("c1", preload=True)
+        cue._pre_arm_wired = True  # simulate already-wired state
+        manager.cue_removed(cue)
+        assert getattr(cue, "_pre_arm_wired", False) is False
