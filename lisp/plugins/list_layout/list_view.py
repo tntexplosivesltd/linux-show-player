@@ -755,21 +755,36 @@ class CueListView(QTreeWidget):
             cue.started.disconnect(self.__groupStarted)
             group_item = self._group_items.pop(cue.id, None)
 
-            # Reparent children to top-level before removing group
+            # Reparent children to the dissolved group's parent.
+            # If the group was nested, that's the surviving
+            # grandparent QTreeWidgetItem; if it was top-level,
+            # that's None and children rejoin the top of the tree.
             if group_item is not None:
+                dest_parent = self._group_items.get(cue.group_id)
                 while group_item.childCount() > 0:
                     child = group_item.takeChild(0)
-                    # Find correct top-level position by index
-                    pos = 0
-                    for i in range(self.topLevelItemCount()):
-                        if (
-                            self.topLevelItem(i).cue.index
-                            < child.cue.index
-                        ):
-                            pos = i + 1
-                        else:
-                            break
-                    self.insertTopLevelItem(pos, child)
+                    if dest_parent is not None:
+                        pos = 0
+                        for j in range(dest_parent.childCount()):
+                            if (
+                                dest_parent.child(j).cue.index
+                                < child.cue.index
+                            ):
+                                pos = j + 1
+                            else:
+                                break
+                        dest_parent.insertChild(pos, child)
+                    else:
+                        pos = 0
+                        for i in range(self.topLevelItemCount()):
+                            if (
+                                self.topLevelItem(i).cue.index
+                                < child.cue.index
+                            ):
+                                pos = i + 1
+                            else:
+                                break
+                        self.insertTopLevelItem(pos, child)
                     self.__setupItemWidgets(child)
 
         item = self.cueItemAt(cue.index)
