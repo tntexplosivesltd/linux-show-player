@@ -22,7 +22,16 @@ running LiSP, but we can pin the *contract* that ``cue_background_hex``
 behaves correctly when called with real ``Cue`` instances — the same
 contract the render path now depends on."""
 
+from unittest.mock import MagicMock, patch
+
+import pytest
+from PyQt5.QtGui import QColor
+
 from lisp.cues.cue import Cue
+from lisp.cues.cue_model import CueModel
+from lisp.plugins.list_layout.list_view import CueListView
+from lisp.plugins.list_layout.models import CueListModel
+from lisp.ui.icons import IconTheme
 from lisp.ui.themes import cue_background_hex
 from lisp.ui.themes.base import DEFAULT_CUE_PALETTE
 
@@ -53,3 +62,105 @@ class TestListViewColorResolution:
     def test_no_color_returns_empty(self, mock_app):
         cue = Cue(mock_app)
         assert cue_background_hex(cue) == ""
+
+
+@pytest.fixture(autouse=True)
+def _icon_theme():
+    """List-column widgets pull icons via IconTheme.get at construction
+    time. Ensure a theme is set so CueListView can be instantiated."""
+    if IconTheme._GlobalTheme is None:
+        IconTheme.set_theme_name("lisp")
+    yield
+
+
+def _build_view_with_cue(mock_app):
+    """Build a CueListView containing one Cue and return (view, item)."""
+    cue_model = CueModel()
+    list_model = CueListModel(cue_model)
+    mock_app.cue_model = cue_model
+
+    fake_app = MagicMock()
+    fake_app.pre_arm_manager = None
+
+    with patch(
+        "lisp.plugins.list_layout.list_view.Application",
+        return_value=fake_app,
+    ):
+        view = CueListView(list_model)
+
+    cue = Cue(id="c1", app=mock_app)
+    cue_model.add(cue)
+    item = view.topLevelItem(0)
+    return view, item
+
+
+class TestStandbyBrushFromTheme:
+    """The standby cue's row brush must be sourced from
+    ``themes.standby_indicator()`` so each theme can override it.
+    Phase-2 contract: ``CueListView`` no longer carries a hardcoded
+    yellow class constant."""
+
+    def setup_method(self):
+        from lisp.ui import themes
+        themes._active = None  # reset between tests
+
+    def test_class_constant_removed(self):
+        """The legacy ``ITEM_CURRENT_BG`` class constant must be gone.
+        If it's still present, paint code is reading the hardcoded
+        value and Solarized themes won't take effect."""
+        assert not hasattr(CueListView, "ITEM_CURRENT_BG"), (
+            "CueListView.ITEM_CURRENT_BG must be removed; the standby "
+            "brush is now sourced from themes.standby_indicator()."
+        )
+
+    def test_standby_brush_uses_default_when_no_theme(
+        self, qapp, mock_app
+    ):
+        """No active theme → standby brush is the legacy yellow."""
+        from lisp.ui.themes import DEFAULT_STANDBY_INDICATOR
+
+        view, item = _build_view_with_cue(mock_app)
+        view.setCurrentItem(item)
+        qapp.processEvents()
+
+        assert item.background(0).color() == DEFAULT_STANDBY_INDICATOR
+
+    def test_standby_brush_uses_active_theme_indicator(
+        self, qapp, mock_app
+    ):
+        """Active theme with custom standby_indicator → that hex wins."""
+        from lisp.ui.themes.base import BaseTheme, ThemeColors
+
+        magenta = QColor(211, 54, 130, 100)
+
+        class _FakeSolarized(BaseTheme):
+            Colors = ThemeColors(
+                background=QColor(0, 43, 54),
+                foreground=QColor(7, 54, 66),
+                text=QColor(131, 148, 150),
+                highlight=QColor(42, 161, 152),
+                standby_indicator=magenta,
+            )
+
+        _FakeSolarized().apply(qapp)
+
+        view, item = _build_view_with_cue(mock_app)
+        view.setCurrentItem(item)
+        qapp.processEvents()
+
+        assert item.background(0).color() == magenta
+
+    def test_standby_brush_overrides_cue_color(
+        self, qapp, mock_app
+    ):
+        """A coloured cue that becomes standby paints the standby
+        brush, not the cue colour. This locks in the existing override
+        behaviour at ``__updateItemStyle`` line 506-508."""
+        from lisp.ui.themes import DEFAULT_STANDBY_INDICATOR
+
+        view, item = _build_view_with_cue(mock_app)
+        item.cue.color_name = "Red"
+        view.setCurrentItem(item)
+        qapp.processEvents()
+
+        assert item.background(0).color() == DEFAULT_STANDBY_INDICATOR
