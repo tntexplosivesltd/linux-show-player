@@ -7,13 +7,13 @@ from lisp.core.loading import load_classes
 from lisp.ui.themes.base import DEFAULT_CUE_PALETTE
 from lisp.ui.ui_utils import css_to_dict
 
-# Default standby cue band — warm yellow (250, 220, 0) at α 180.
-# Bumped from the historical α 100 (used while
-# ``CueListView.ITEM_CURRENT_BG`` was a hardcoded class constant) so
-# the standby cursor reads clearly above coloured cue washes. Themes
-# can still override ``standby_indicator`` per-theme; this is what
-# Dark and Light fall through to.
-DEFAULT_STANDBY_INDICATOR = QColor(250, 220, 0, 180)
+# Default standby cue band — warm yellow at α 100. Yellow's natural
+# luminance carries the band even at low alpha, so Dark/Light don't
+# need a higher value here; themes whose standby_indicator hue is
+# darker (e.g. Solarized magenta) override to a brighter alpha to
+# compensate. Byte-equal to the value previously hardcoded in
+# ``CueListView.ITEM_CURRENT_BG`` before the helper refactor.
+DEFAULT_STANDBY_INDICATOR = QColor(250, 220, 0, 100)
 
 _THEMES = {}
 _active = None

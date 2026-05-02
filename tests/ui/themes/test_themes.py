@@ -448,9 +448,12 @@ class TestStandbyIndicator:
     """The list-layout standby cue band colour is theme-controlled.
 
     Dark and Light inherit ``DEFAULT_STANDBY_INDICATOR`` (warm yellow
-    α 180); Solarized themes override to a palette-faithful magenta.
-    Themes that don't set the field fall through to the default —
-    never raising or returning ``None``.
+    α 100 — yellow's luminance carries the band even at low alpha);
+    Solarized themes override to a palette-faithful magenta at higher
+    alpha, since magenta is darker than yellow and needs more α to
+    read at the same perceptual intensity. Themes that don't set the
+    field fall through to the default — never raising or returning
+    ``None``.
     """
 
     def setup_method(self):
@@ -477,12 +480,12 @@ class TestStandbyIndicator:
         assert c.standby_indicator == QColor(211, 54, 130, 100)
 
     def test_default_value(self):
-        """``DEFAULT_STANDBY_INDICATOR`` is warm yellow at α 180 —
-        bright enough to read clearly above coloured cue washes
-        on both Dark and Light themes (which both fall through to
-        this default)."""
+        """``DEFAULT_STANDBY_INDICATOR`` is warm yellow at α 100. The
+        legacy ``CueListView.ITEM_CURRENT_BG`` shipped this exact
+        value; preserving it keeps Dark/Light visually unchanged
+        while still allowing Solarized themes to override."""
         from lisp.ui.themes import DEFAULT_STANDBY_INDICATOR
-        assert DEFAULT_STANDBY_INDICATOR == QColor(250, 220, 0, 180)
+        assert DEFAULT_STANDBY_INDICATOR == QColor(250, 220, 0, 100)
 
     def test_helper_no_active_theme_returns_default(self):
         from lisp.ui.themes import (
@@ -518,7 +521,7 @@ class TestStandbyIndicator:
 
     def test_light_theme_inherits_default(self, qapp):
         """Light deliberately does not override standby_indicator; it
-        falls through to the warm-yellow α 180 default."""
+        falls through to the warm-yellow α 100 default."""
         from lisp.ui.themes import (
             DEFAULT_STANDBY_INDICATOR,
             standby_indicator,
