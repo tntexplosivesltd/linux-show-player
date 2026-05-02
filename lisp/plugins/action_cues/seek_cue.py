@@ -36,6 +36,7 @@ from lisp.ui.cuelistdialog import CueSelectDialog
 from lisp.ui.settings.cue_settings import CueSettingsRegistry
 from lisp.ui.settings.pages import SettingsPage
 from lisp.ui.ui_utils import translate
+from lisp.ui.widgets.target_warning import TargetWarningRow
 
 
 class SeekCue(TargetingCue, Cue):
@@ -94,6 +95,9 @@ class SeekCueSettings(SettingsPage):
         self.cueLabel.setAlignment(QtCore.Qt.AlignCenter)
         self.cueGroup.layout().addWidget(self.cueLabel)
 
+        self.targetWarning = TargetWarningRow(self.cueGroup)
+        self.cueGroup.layout().addWidget(self.targetWarning)
+
         self.seekGroup = QGroupBox(self)
         self.seekGroup.setLayout(QHBoxLayout())
         self.layout().addWidget(self.seekGroup)
@@ -108,6 +112,7 @@ class SeekCueSettings(SettingsPage):
         self.seekGroup.layout().addWidget(self.seekLabel)
 
         self.retranslateUi()
+        self._refresh_target_warning()
 
     def retranslateUi(self):
         self.cueGroup.setTitle(translate("SeekCue", "Cue"))
@@ -115,6 +120,17 @@ class SeekCueSettings(SettingsPage):
         self.cueLabel.setText(translate("SeekCue", "Not selected"))
         self.seekGroup.setTitle(translate("SeekCue", "Seek"))
         self.seekLabel.setText(translate("SeekCue", "Time to reach"))
+
+    def _refresh_target_warning(self):
+        """Recompute warning state from current targetCueId and the model."""
+        cue_id = self.targetCueId
+        if not isinstance(cue_id, str) or not cue_id:
+            self.targetWarning.update_state(self.cueButton, "empty")
+            return
+        if Application().cue_model.get(cue_id) is None:
+            self.targetWarning.update_state(self.cueButton, "dangling")
+            return
+        self.targetWarning.update_state(self.cueButton, "ok")
 
     def select_cue(self):
         if self.cueDialog.exec() == self.cueDialog.Accepted:
@@ -126,6 +142,7 @@ class SeekCueSettings(SettingsPage):
                     QTime.fromMSecsSinceStartOfDay(cue.media.duration)
                 )
                 self.cueLabel.setText(cue.name)
+                self._refresh_target_warning()
 
     def enableCheck(self, enabled):
         self.setGroupEnabled(self.cueGroup, enabled)
@@ -154,6 +171,8 @@ class SeekCueSettings(SettingsPage):
             self.seekEdit.setTime(
                 QTime.fromMSecsSinceStartOfDay(settings.get("time", 0))
             )
+
+        self._refresh_target_warning()
 
 
 CueSettingsRegistry().add(SeekCueSettings, SeekCue)
