@@ -658,6 +658,63 @@ class TestNestedGroupRuntime:
             "outer -> inner -> leaf"
         )
 
+    def test_outer_stop_cascades_through_inner_to_leaf(
+        self, mock_app
+    ):
+        """outer.__stop__() must reach a leaf inside an already-
+        running inner GroupCue. GroupCue.__stop__ filters by
+        `state & IsRunning`, so this pins that the inner group's
+        Running state isn't accidentally treated as inert."""
+        import time
+        from lisp.cues.cue import CueState
+        from lisp.plugins.action_cues.group_cue import GroupCue
+
+        mock_app.exclusive_manager.is_start_blocked.return_value = (
+            False
+        )
+        mock_app.video_exclusive_manager.is_start_blocked.return_value = (
+            False
+        )
+
+        outer = GroupCue(app=mock_app)
+        inner = GroupCue(app=mock_app)
+        inner.group_id = outer.id
+        # Skip the start cascade — set inner directly to Running so
+        # outer's __stop__ filter sees it as a stop target.
+        inner._state = CueState.Running
+
+        leaf = MagicMock()
+        leaf.id = "leaf"
+        leaf.group_id = inner.id
+        leaf.effective_disabled = False
+        leaf.state = CueState.Running
+        leaf.execute = MagicMock()
+
+        mock_app.cue_model.get.side_effect = lambda i: {
+            outer.id: outer,
+            inner.id: inner,
+            leaf.id: leaf,
+        }.get(i)
+
+        outer.children = [inner.id]
+        inner.children = [leaf.id]
+        outer.group_mode = "parallel"
+        inner.group_mode = "parallel"
+
+        outer.__stop__(False)
+
+        # inner.execute(CueAction.Stop) routes through the
+        # @async_function decorator to a worker thread. Poll
+        # for cascade completion.
+        deadline = time.monotonic() + 1.0
+        while not leaf.execute.called and time.monotonic() < deadline:
+            time.sleep(0.005)
+
+        assert leaf.execute.called, (
+            "leaf.execute should have been called via stop "
+            "cascade outer -> inner -> leaf"
+        )
+
     def test_effective_disabled_propagates_two_levels(
         self, mock_app
     ):
