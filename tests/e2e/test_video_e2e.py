@@ -73,6 +73,38 @@ def make_test_video(filename, duration_s=10):
     return True
 
 
+def make_video_only_mp4(filename, duration_s=3):
+    """Generate an MP4 with ONE video stream and no audio.
+
+    This is the regression case for the no-more-pads orphan
+    handling: qtdemux exposes a single video pad and uridecodebin
+    never emits an audio pad-added. The audio side of the cue
+    pipeline must still preroll on EOS so the pipeline can
+    transition PAUSED→PLAYING.
+    """
+    video_frames = int(duration_s * 30)
+    cmd = [
+        "gst-launch-1.0", "-e",
+        "videotestsrc", f"num-buffers={video_frames}", "!",
+        "video/x-raw,width=320,height=240,framerate=30/1", "!",
+        "videoconvert", "!",
+        "x264enc", "tune=zerolatency", "speed-preset=ultrafast",
+        "!",
+        "h264parse", "!",
+        "mp4mux", "!",
+        "filesink", f"location={filename}",
+    ]
+    result = subprocess.run(cmd, capture_output=True, timeout=60)
+    if result.returncode != 0:
+        print(
+            f"WARNING: Failed to generate video-only mp4: "
+            f"{result.stderr.decode()}",
+            file=sys.stderr,
+        )
+        return False
+    return True
+
+
 def create_test_media():
     """Create test audio and video files."""
     os.makedirs(MEDIA_DIR, exist_ok=True)
@@ -94,6 +126,15 @@ def create_test_media():
     if not os.path.exists(short_path):
         if not make_test_video(short_path, duration_s=2):
             print("ERROR: Cannot generate short test video",
+                  file=sys.stderr)
+            sys.exit(2)
+
+    # 3-second video-only MP4 (no audio track) for the
+    # no-more-pads orphan-branch regression test.
+    video_only_path = os.path.join(MEDIA_DIR, "video_only.mp4")
+    if not os.path.exists(video_only_path):
+        if not make_video_only_mp4(video_only_path, duration_s=3):
+            print("ERROR: Cannot generate video-only mp4",
                   file=sys.stderr)
             sys.exit(2)
 
@@ -392,6 +433,52 @@ def test_7_loop(t):
 
 # ── Main ─────────────────────────────────────────────────────
 
+def test_8_video_only_no_audio(t):
+    """Play a video-only MP4 (no audio track).
+
+    Regression: when uridecodebin emits no audio pad,
+    UriAvInput.__on_no_more_pads must splice an audiotestsrc
+    num-buffers=0 upstream of the orphaned audio branch so the
+    downstream audio sink prerolls on EOS. Without this, the
+    pipeline wedges in PAUSED, the cue stays at 00:00, and
+    qtdemux eventually aborts with "not-linked".
+
+    Verifies:
+      - cue.started fires (pipeline reached PLAYING)
+      - current_time advances past 0
+      - cue.end fires on natural EOS (both sinks EOSed)
+    """
+    print("\n=== Test 8: Video-only MP4 (no audio track) ===")
+    clear_cues()
+
+    video_only_path = os.path.join(MEDIA_DIR, "video_only.mp4")
+    cue = _add_video(video_only_path)
+    t.check("8a: Video-only cue added", cue is not None)
+    cue_id = cue["id"]
+
+    with cue_signal(cue_id, "started") as start_sub, \
+            cue_signal(cue_id, "end") as end_sub:
+        call("cue.start", {"id": cue_id})
+        t.check(
+            "8b: Cue reaches Running",
+            wait_for_signal(start_sub, timeout=5) is not None,
+        )
+
+        # Pre-fix symptom was current_time stuck at 0.
+        time.sleep(0.8)
+        state = call("cue.state", {"id": cue_id})
+        t.check(
+            f"8c: current_time advances past 0 "
+            f"(got {state['current_time']} ms)",
+            state["current_time"] > 0,
+        )
+
+        t.check(
+            "8d: cue.end fires on natural EOS",
+            wait_for_signal(end_sub, timeout=6) is not None,
+        )
+
+
 def run_tests(t):
     create_test_media()
 
@@ -408,6 +495,8 @@ def run_tests(t):
     test_6_seek(t)
     stop_all()
     test_7_loop(t)
+    stop_all()
+    test_8_video_only_no_audio(t)
     stop_all()
 
 

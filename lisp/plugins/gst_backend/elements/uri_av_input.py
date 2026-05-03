@@ -72,6 +72,11 @@ class UriAvInput(GstSrcElement):
         self._audio_linked = False
         self._video_linked = False
 
+        # Filler sources we splice in when uridecodebin reports a
+        # missing audio or video stream — see __on_no_more_pads.
+        self._silence_src = None
+        self._video_filler_src = None
+
         self._pad_handler = self.decoder.connect(
             "pad-added", self.__on_pad_added
         )
@@ -101,9 +106,23 @@ class UriAvInput(GstSrcElement):
         When the pipeline goes to READY, uridecodebin removes its
         dynamic pads.  On the next PAUSED transition it creates
         new pads, so we must allow __on_pad_added to link them.
+
+        Also tear down any filler sources we spliced in for missing
+        streams — the next play() will reattach them via
+        __on_no_more_pads if still needed, and leaving stale fillers
+        attached would compete with a real pad on a different file.
         """
         self._audio_linked = False
         self._video_linked = False
+
+        if self._silence_src is not None:
+            self._silence_src.set_state(Gst.State.NULL)
+            self.pipeline.remove(self._silence_src)
+            self._silence_src = None
+        if self._video_filler_src is not None:
+            self._video_filler_src.set_state(Gst.State.NULL)
+            self.pipeline.remove(self._video_filler_src)
+            self._video_filler_src = None
 
     def dispose(self):
         self.decoder.disconnect(self._pad_handler)
@@ -153,24 +172,50 @@ class UriAvInput(GstSrcElement):
     def __on_no_more_pads(self, decodebin):
         """Called when uridecodebin has emitted all pads.
 
-        Remove unused branches so GStreamer doesn't hang waiting
-        for data on unlinked elements.
+        For files missing an audio or video stream, splice a
+        num-buffers=0 testsrc upstream of the orphaned branch.
+        The testsrc emits stream-start + caps + segment + EOS
+        immediately, which lets the orphaned sink (audio_sink
+        / video_sink) preroll on EOS and the pipeline transition
+        to PLAYING.
+
+        We can't simply *remove* the orphaned branch: the sink
+        elements live further downstream (Volume → DbMeter →
+        audio_sink for the audio side; video_tee + projection +
+        monitor branches for the video side) and removing only
+        the input-side queue + converter leaves those sinks
+        waiting for preroll data that never arrives — which
+        wedges PAUSED→PLAYING and surfaces as qtdemux aborting
+        with "not-linked" once it tries to push more data than
+        the orphaned branch can absorb. Filler EOS prerolls the
+        sink without requiring downstream coordination.
         """
         if not self._audio_linked:
             logger.info(
-                "UriAvInput: no audio stream found, removing "
-                "audio branch"
+                "UriAvInput: no audio stream found, feeding silent "
+                "EOS into audio branch"
             )
-            self.pipeline.remove(self.audio_queue)
-            self.pipeline.remove(self.audio_convert)
+            self._silence_src = Gst.ElementFactory.make(
+                "audiotestsrc", None
+            )
+            self._silence_src.set_property("num-buffers", 0)
+            self._silence_src.set_property("is-live", False)
+            self.pipeline.add(self._silence_src)
+            self._silence_src.link(self.audio_queue)
+            self._silence_src.sync_state_with_parent()
         if not self._video_linked:
             logger.info(
-                "UriAvInput: no video stream found, removing "
-                "video branch"
+                "UriAvInput: no video stream found, feeding empty "
+                "EOS into video branch"
             )
-            self.pipeline.remove(self.video_queue)
-            self.pipeline.remove(self.video_convert)
-            self.pipeline.remove(self.video_scale)
+            self._video_filler_src = Gst.ElementFactory.make(
+                "videotestsrc", None
+            )
+            self._video_filler_src.set_property("num-buffers", 0)
+            self._video_filler_src.set_property("is-live", False)
+            self.pipeline.add(self._video_filler_src)
+            self._video_filler_src.link(self.video_queue)
+            self._video_filler_src.sync_state_with_parent()
 
     def __uri_changed(self, uri):
         uri = SessionURI(uri)

@@ -177,12 +177,38 @@ class GstBackend(Plugin, BaseBackend):
         return extensions
 
     def media_waveform(self, media):
-        # Skip waveform for media without audio (e.g. image cues)
+        # Skip waveform for media without audio (e.g. image cues —
+        # ImageInput.src() returns None, so the linear chain never
+        # connected an audio source to begin with).
         try:
             if media.elements[0].src() is None:
                 return None
         except (IndexError, AttributeError):
             pass
+
+        # Skip waveform for files whose container has no audio
+        # stream (e.g. video-only MP4s loaded into a video cue).
+        # UriAvInput.src() returns audio_convert unconditionally,
+        # so the check above can't catch this case — Discoverer
+        # is the only way to know for sure before we spin up the
+        # waveform pipeline (which is audio-rigid and would fail
+        # with qtdemux "not-linked", surfacing as a spurious
+        # operator notification).
+        try:
+            uri = media.input_uri()
+            if uri is not None:
+                metadata = gst_uri_metadata(uri)
+                if (
+                    metadata is not None
+                    and not metadata.get_audio_streams()
+                ):
+                    return None
+        except Exception:
+            # Discoverer failures shouldn't break cue widget
+            # construction — fall through to the normal path,
+            # which has its own error handling.
+            pass
+
         return super().media_waveform(media)
 
     def uri_waveform(self, uri, duration=None):

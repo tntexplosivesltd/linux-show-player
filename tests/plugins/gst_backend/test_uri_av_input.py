@@ -142,14 +142,22 @@ class TestOnPadAdded:
 
 
 class TestNoMorePads:
-    """Test the __on_no_more_pads callback."""
+    """Test the __on_no_more_pads callback.
+
+    When uridecodebin reports no audio or no video stream, the
+    handler splices a num-buffers=0 testsrc upstream of the
+    orphaned branch so its downstream sink prerolls on EOS. The
+    branches themselves stay in the pipeline — see the docstring
+    on __on_no_more_pads for why removing them caused qtdemux
+    not-linked aborts.
+    """
 
     def _pipeline_has(self, pipeline, element):
         """Check if a GStreamer element is in the pipeline."""
         name = element.get_name()
         return pipeline.get_by_name(name) is not None
 
-    def test_removes_video_branch_when_no_video(self):
+    def test_inserts_video_filler_when_no_video(self):
         pipeline = Gst.Pipeline()
         element = UriAvInput(pipeline)
         element._audio_linked = True
@@ -158,11 +166,14 @@ class TestNoMorePads:
         element._UriAvInput__on_no_more_pads(element.decoder)
 
         assert self._pipeline_has(pipeline, element.audio_queue)
-        assert not self._pipeline_has(
-            pipeline, element.video_queue
+        assert self._pipeline_has(pipeline, element.video_queue)
+        assert element._silence_src is None
+        assert element._video_filler_src is not None
+        assert self._pipeline_has(
+            pipeline, element._video_filler_src
         )
 
-    def test_removes_audio_branch_when_no_audio(self):
+    def test_inserts_silence_src_when_no_audio(self):
         pipeline = Gst.Pipeline()
         element = UriAvInput(pipeline)
         element._audio_linked = False
@@ -170,10 +181,11 @@ class TestNoMorePads:
 
         element._UriAvInput__on_no_more_pads(element.decoder)
 
-        assert not self._pipeline_has(
-            pipeline, element.audio_queue
-        )
+        assert self._pipeline_has(pipeline, element.audio_queue)
         assert self._pipeline_has(pipeline, element.video_queue)
+        assert element._silence_src is not None
+        assert self._pipeline_has(pipeline, element._silence_src)
+        assert element._video_filler_src is None
 
     def test_keeps_both_when_both_linked(self):
         pipeline = Gst.Pipeline()
@@ -185,3 +197,25 @@ class TestNoMorePads:
 
         assert self._pipeline_has(pipeline, element.audio_queue)
         assert self._pipeline_has(pipeline, element.video_queue)
+        assert element._silence_src is None
+        assert element._video_filler_src is None
+
+    def test_stop_tears_down_filler_sources(self):
+        pipeline = Gst.Pipeline()
+        element = UriAvInput(pipeline)
+        element._audio_linked = False
+        element._video_linked = False
+
+        element._UriAvInput__on_no_more_pads(element.decoder)
+        silence = element._silence_src
+        video_filler = element._video_filler_src
+        assert silence is not None and video_filler is not None
+        assert self._pipeline_has(pipeline, silence)
+        assert self._pipeline_has(pipeline, video_filler)
+
+        element.stop()
+
+        assert element._silence_src is None
+        assert element._video_filler_src is None
+        assert not self._pipeline_has(pipeline, silence)
+        assert not self._pipeline_has(pipeline, video_filler)
