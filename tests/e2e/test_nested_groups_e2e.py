@@ -128,6 +128,57 @@ def run_tests(t):
             cue_prop(inner_group["id"], "group_id") == outer_group["id"],
         )
 
+    # 7. Ungroup the inner group. B and C must remain under
+    # outer_group, not be promoted to top-level (Phase 2 fix).
+    call("layout.context_action", {
+        "action": "Ungroup",
+        "cue_ids": [inner_group["id"]],
+    })
+    time.sleep(0.3)
+
+    t.check(
+        "B promoted to outer (not top-level) after ungroup",
+        cue_prop(B, "group_id") == outer_group["id"],
+    )
+    t.check(
+        "C promoted to outer (not top-level) after ungroup",
+        cue_prop(C, "group_id") == outer_group["id"],
+    )
+    inner_present = any(
+        c["id"] == inner_group["id"] for c in call("cue.list")
+    )
+    t.check("inner_group dissolved by ungroup", not inner_present)
+
+    # 8. Restore the nested structure from the on-disk save and
+    # exercise the delete path: cue.remove on the inner group
+    # must leave B and C inside outer_group (Phase 3 fix).
+    call("session.load", {"path": save_path})
+    time.sleep(0.5)
+
+    t.check(
+        "inner restored after reload (pre-delete)",
+        cue_prop(inner_group["id"], "group_id") == outer_group["id"],
+    )
+
+    call("cue.remove", {"id": inner_group["id"]})
+    time.sleep(0.3)
+
+    t.check(
+        "B retained outer parentage after inner deletion",
+        cue_prop(B, "group_id") == outer_group["id"],
+    )
+    t.check(
+        "C retained outer parentage after inner deletion",
+        cue_prop(C, "group_id") == outer_group["id"],
+    )
+    inner_present_2 = any(
+        c["id"] == inner_group["id"] for c in call("cue.list")
+    )
+    t.check(
+        "inner_group removed by cue.remove",
+        not inner_present_2,
+    )
+
 
 if __name__ == "__main__":
     run_suite("Nested Groups E2E", run_tests)
