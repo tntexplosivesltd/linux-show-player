@@ -149,6 +149,89 @@ class TestGroupOutlineRect:
         assert rect is not None
         assert abs(rect.height() - header_rect.height()) <= 5
 
+    def test_nested_expanded_outer_spans_to_grandchild(
+        self, qapp, qtbot, mock_app,
+    ):
+        """An expanded outer group containing an expanded inner
+        group must span all the way down to the inner group's
+        last visible leaf, not stop at the inner group's header.
+        Otherwise the outer outline visibly cuts off mid-tree."""
+        cue_model = CueModel()
+        list_model = CueListModel(cue_model)
+        mock_app.cue_model = cue_model
+
+        view = CueListView(list_model)
+
+        outer = GroupCue(id="outer", app=mock_app)
+        cue_model.add(outer)
+        inner = GroupCue(id="inner", app=mock_app)
+        inner.group_id = "outer"
+        cue_model.add(inner)
+        leaf = Cue(id="leaf", app=mock_app)
+        leaf.group_id = "inner"
+        cue_model.add(leaf)
+
+        outer_item = view._group_items["outer"]
+        inner_item = view._group_items["inner"]
+        outer_item.setExpanded(True)
+        inner_item.setExpanded(True)
+
+        view.resize(600, 400)
+        qtbot.addWidget(view)
+        view.show()
+        qtbot.waitExposed(view)
+
+        rect = view._groupOutlineRect(outer_item)
+        leaf_item = inner_item.child(0)
+        leaf_rect = view.visualItemRect(leaf_item)
+
+        assert rect is not None
+        # The outer outline's bottom must align with the deepest
+        # visible leaf, not with the inner group's header.
+        assert abs(rect.bottom() - leaf_rect.bottom()) <= 3, (
+            f"outer rect bottom {rect.bottom()} should align with "
+            f"leaf bottom {leaf_rect.bottom()}, not with inner "
+            f"header bottom {view.visualItemRect(inner_item).bottom()}"
+        )
+
+    def test_nested_collapsed_inner_stops_at_inner_header(
+        self, qapp, qtbot, mock_app,
+    ):
+        """When the inner group is collapsed, the outer outline
+        should extend only to the inner group's header — the
+        inner's children aren't visible, so neither should the
+        outer's box include their (hidden) rows."""
+        cue_model = CueModel()
+        list_model = CueListModel(cue_model)
+        mock_app.cue_model = cue_model
+
+        view = CueListView(list_model)
+
+        outer = GroupCue(id="outer", app=mock_app)
+        cue_model.add(outer)
+        inner = GroupCue(id="inner", app=mock_app)
+        inner.group_id = "outer"
+        cue_model.add(inner)
+        leaf = Cue(id="leaf", app=mock_app)
+        leaf.group_id = "inner"
+        cue_model.add(leaf)
+
+        outer_item = view._group_items["outer"]
+        inner_item = view._group_items["inner"]
+        outer_item.setExpanded(True)
+        inner_item.setExpanded(False)
+
+        view.resize(600, 400)
+        qtbot.addWidget(view)
+        view.show()
+        qtbot.waitExposed(view)
+
+        rect = view._groupOutlineRect(outer_item)
+        inner_rect = view.visualItemRect(inner_item)
+
+        assert rect is not None
+        assert abs(rect.bottom() - inner_rect.bottom()) <= 3
+
 
 class TestGroupOutlinePaint:
     """paintEvent must not raise when a group is visible."""

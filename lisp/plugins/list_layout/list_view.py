@@ -92,7 +92,12 @@ class CueListView(QTreeWidget):
     # TODO: add ability to show/hide
     # TODO: implement columns (cue-type / target / etc..)
     COLUMNS = [
-        ListColumn("", CueStatusIcons, QHeaderView.Fixed, width=75),
+        # Status-icon column is sized manually by
+        # _resize_status_column() — Qt's ResizeToContents
+        # ignores the per-row indent and branch gutter on
+        # column 0, so we compute the width ourselves to keep
+        # icons visible at any nesting depth.
+        ListColumn("", CueStatusIcons, QHeaderView.Fixed),
         ListColumn("#", IndexWidget, QHeaderView.ResizeToContents),
         ListColumn(
             QT_TRANSLATE_NOOP("ListLayoutHeader", "Q#"),
@@ -420,18 +425,22 @@ class CueListView(QTreeWidget):
     def cueItemAt(self, index):
         """Return the QTreeWidgetItem for a flat model index.
 
-        Walks the tree in visual order (top-level items and
-        their children) to find the item whose cue.index
-        matches the requested index.
+        Walks the tree depth-first to support arbitrarily nested
+        GroupCue hierarchies.
         """
+        def _search(item):
+            if item.cue.index == index:
+                return item
+            for j in range(item.childCount()):
+                found = _search(item.child(j))
+                if found is not None:
+                    return found
+            return None
+
         for i in range(self.topLevelItemCount()):
-            top = self.topLevelItem(i)
-            if top.cue.index == index:
-                return top
-            for j in range(top.childCount()):
-                child = top.child(j)
-                if child.cue.index == index:
-                    return child
+            found = _search(self.topLevelItem(i))
+            if found is not None:
+                return found
         return None
 
     def cueIndexOf(self, item):
@@ -454,23 +463,35 @@ class CueListView(QTreeWidget):
 
         rect = QRect(header)
         if group_item.isExpanded() and group_item.childCount() > 0:
-            last_child = group_item.child(group_item.childCount() - 1)
-            child_rect = self.visualItemRect(last_child)
-            if not child_rect.isEmpty():
-                rect = rect.united(child_rect)
+            # Descend through the chain of last children while
+            # they are themselves expanded groups, so the outline
+            # encloses any nested expanded groups all the way
+            # down to their deepest visible leaf.
+            last_visible = group_item
+            while (
+                last_visible.isExpanded()
+                and last_visible.childCount() > 0
+            ):
+                last_visible = last_visible.child(
+                    last_visible.childCount() - 1
+                )
+            last_rect = self.visualItemRect(last_visible)
+            if not last_rect.isEmpty():
+                rect = rect.united(last_rect)
 
         inset = self.GROUP_OUTLINE_WIDTH // 2 + 1
         rect.adjust(inset, inset, -inset, -inset)
         return rect
 
     def iterAllItems(self):
-        """Yield all items in visual order (groups then children
-        interleaved)."""
+        """Yield all items in visual order, depth-first."""
+        def _walk(item):
+            yield item
+            for j in range(item.childCount()):
+                yield from _walk(item.child(j))
+
         for i in range(self.topLevelItemCount()):
-            top = self.topLevelItem(i)
-            yield top
-            for j in range(top.childCount()):
-                yield top.child(j)
+            yield from _walk(self.topLevelItem(i))
 
     def setAutoExpand(self, enabled):
         self._auto_expand = enabled
@@ -495,12 +516,71 @@ class CueListView(QTreeWidget):
     def __itemCollapsed(self, item):
         if isinstance(item.cue, GroupCue):
             item.cue.collapsed = True
+        self._resize_status_column()
         self.viewport().update()
 
     def __itemExpanded(self, item):
         if isinstance(item.cue, GroupCue):
             item.cue.collapsed = False
+        # Column 0 must grow with the deepest visible row so the
+        # cue-icon widget retains enough cell width after Qt eats
+        # the indent + branch chevron from its left edge.
+        self._resize_status_column()
         self.viewport().update()
+
+    def _resize_status_column(self):
+        """Size column 0 to fit the cue-icon widget at the deepest
+        currently-visible row.
+
+        Qt's QHeaderView.ResizeToContents on column 0 returns the
+        widget sizeHint *without* adding the per-row indent or the
+        branch-chevron gutter — so at depth N the cell area shrinks
+        to ``column_width - branch_gutter - N * indentation()``,
+        and the cue-status icons clip from the right. Compute the
+        column width ourselves: widest sizeHint + branch gutter +
+        deepest visible depth * indent.
+        """
+        max_depth = 0
+
+        def walk(item, depth):
+            nonlocal max_depth
+            if depth > max_depth:
+                max_depth = depth
+            if item.isExpanded():
+                for j in range(item.childCount()):
+                    walk(item.child(j), depth + 1)
+
+        for i in range(self.topLevelItemCount()):
+            walk(self.topLevelItem(i), 0)
+
+        # Estimate the branch-chevron gutter from a known row's
+        # geometry: column_width - widget_width - depth*indent.
+        # Falls back to a sensible default if no rows exist yet.
+        gutter = 16
+        if self.topLevelItemCount() > 0:
+            top = self.topLevelItem(0)
+            widget = self.itemWidget(top, 0)
+            if widget is not None:
+                gutter = max(
+                    0,
+                    self.columnWidth(0) - widget.width(),
+                )
+                # Constrain to a sane range — visualItemRect math
+                # can produce stale values mid-layout.
+                if not (8 <= gutter <= 32):
+                    gutter = 16
+
+        # Use the cue-status widget's own sizeHint as the content
+        # baseline. All rows share the same widget class, so any
+        # row's sizeHint is representative.
+        from lisp.plugins.list_layout.list_widgets import (
+            CueStatusIcons,
+        )
+        content = CueStatusIcons.SIZE_HINT_WIDTH
+
+        target = content + gutter + max_depth * self.indentation()
+        if self.columnWidth(0) != target:
+            self.setColumnWidth(0, target)
 
     def _on_theme_changed(self):
         for item in self.iterAllItems():
@@ -544,12 +624,14 @@ class CueListView(QTreeWidget):
                 item.setBackground(column, brush)
 
     def _iter_all_items(self):
-        """Yield every QTreeWidgetItem in the tree (top-level + children)."""
+        """Yield every QTreeWidgetItem in the tree, depth-first."""
+        def _walk(item):
+            yield item
+            for j in range(item.childCount()):
+                yield from _walk(item.child(j))
+
         for i in range(self.topLevelItemCount()):
-            top = self.topLevelItem(i)
-            yield top
-            for j in range(top.childCount()):
-                yield top.child(j)
+            yield from _walk(self.topLevelItem(i))
 
     def __cuePropChanged(self, cue, property_name, _):
         if property_name == "stylesheet":
@@ -624,6 +706,7 @@ class CueListView(QTreeWidget):
 
         self.__setupItemWidgetsRecursive(item)
         self.__updateItemStyle(item)
+        self._resize_status_column()
 
     def __cueAdded(self, cue):
         item = CueTreeWidgetItem(cue)
@@ -636,16 +719,32 @@ class CueListView(QTreeWidget):
         self.blockSignals(True)
         try:
             if isinstance(cue, GroupCue):
-                pos = 0
-                for i in range(self.topLevelItemCount()):
-                    if (
-                        self.topLevelItem(i).cue.index
-                        < cue.index
-                    ):
-                        pos = i + 1
-                    else:
-                        break
-                self.insertTopLevelItem(pos, item)
+                if (
+                    cue.group_id
+                    and cue.group_id in self._group_items
+                ):
+                    parent = self._group_items[cue.group_id]
+                    child_pos = 0
+                    for j in range(parent.childCount()):
+                        if (
+                            parent.child(j).cue.index
+                            < cue.index
+                        ):
+                            child_pos = j + 1
+                        else:
+                            break
+                    parent.insertChild(child_pos, item)
+                else:
+                    pos = 0
+                    for i in range(self.topLevelItemCount()):
+                        if (
+                            self.topLevelItem(i).cue.index
+                            < cue.index
+                        ):
+                            pos = i + 1
+                        else:
+                            break
+                    self.insertTopLevelItem(pos, item)
                 self._group_items[cue.id] = item
                 item.setExpanded(not cue.collapsed)
                 cue.started.connect(
@@ -682,6 +781,7 @@ class CueListView(QTreeWidget):
 
         self.__setupItemWidgets(item)
         self.__updateItemStyle(item)
+        self._resize_status_column()
 
         total = sum(
             1 + self.topLevelItem(i).childCount()
@@ -755,21 +855,36 @@ class CueListView(QTreeWidget):
             cue.started.disconnect(self.__groupStarted)
             group_item = self._group_items.pop(cue.id, None)
 
-            # Reparent children to top-level before removing group
+            # Reparent children to the dissolved group's parent.
+            # If the group was nested, that's the surviving
+            # grandparent QTreeWidgetItem; if it was top-level,
+            # that's None and children rejoin the top of the tree.
             if group_item is not None:
+                dest_parent = self._group_items.get(cue.group_id)
                 while group_item.childCount() > 0:
                     child = group_item.takeChild(0)
-                    # Find correct top-level position by index
-                    pos = 0
-                    for i in range(self.topLevelItemCount()):
-                        if (
-                            self.topLevelItem(i).cue.index
-                            < child.cue.index
-                        ):
-                            pos = i + 1
-                        else:
-                            break
-                    self.insertTopLevelItem(pos, child)
+                    if dest_parent is not None:
+                        pos = 0
+                        for j in range(dest_parent.childCount()):
+                            if (
+                                dest_parent.child(j).cue.index
+                                < child.cue.index
+                            ):
+                                pos = j + 1
+                            else:
+                                break
+                        dest_parent.insertChild(pos, child)
+                    else:
+                        pos = 0
+                        for i in range(self.topLevelItemCount()):
+                            if (
+                                self.topLevelItem(i).cue.index
+                                < child.cue.index
+                            ):
+                                pos = i + 1
+                            else:
+                                break
+                        self.insertTopLevelItem(pos, child)
                     self.__setupItemWidgets(child)
 
         item = self.cueItemAt(cue.index)
@@ -784,10 +899,13 @@ class CueListView(QTreeWidget):
             if idx >= 0:
                 self.takeTopLevelItem(idx)
 
+        self._resize_status_column()
+
     def __modelReset(self):
         self._group_items.clear()
         self.reset()
         self.clear()
+        self._resize_status_column()
 
     def __setupItemWidgets(self, item):
         for i, column in enumerate(CueListView.COLUMNS):

@@ -69,7 +69,13 @@ class GroupCuesCommand(Command):
 
 
 class UngroupCuesCommand(Command):
-    """Dissolve a GroupCue, promoting its children to top-level."""
+    """Dissolve a GroupCue, promoting children to its parent.
+
+    For top-level groups the parent is "" (top-level), preserving
+    legacy behavior. For nested inner groups the parent is the
+    grandparent's id, so the surviving hierarchy collapses by
+    exactly one level.
+    """
 
     def __init__(self, app, list_model, group_cue):
         """
@@ -82,13 +88,21 @@ class UngroupCuesCommand(Command):
         self._group_cue = group_cue
         self._child_ids = list(group_cue.children)
         self._group_index = group_cue.index
+        # Captured at construction so undo/redo cycles are
+        # deterministic — the dissolved group's own group_id
+        # is never mutated by do(), but the grandparent could
+        # in principle be retargeted between cycles by some
+        # other command, so we freeze the value we promote to.
+        self._parent_group_id = group_cue.group_id
 
     def do(self):
-        # Clear group_id on all children
+        # Promote children to the dissolved group's parent. For
+        # top-level groups this is "" (legacy behavior); for
+        # nested inner groups this is the grandparent's id.
         for child_id in self._child_ids:
             cue = self._app.cue_model.get(child_id)
             if cue is not None:
-                cue.group_id = ""
+                cue.group_id = self._parent_group_id
 
         # Remove the group cue
         self._app.cue_model.remove(self._group_cue)
