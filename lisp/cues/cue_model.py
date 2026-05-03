@@ -52,6 +52,19 @@ class CueModel(Model):
 
         self.item_removed.emit(cue)
 
+        # Promote children of the removed cue to its parent group,
+        # so dissolving an inner group doesn't leave its children
+        # holding a dangling group_id (which survives session
+        # save/load and silently breaks the nested hierarchy on
+        # the next reload). Mirrors UngroupCuesCommand's promotion
+        # — UngroupCuesCommand pre-sets group_ids before calling
+        # remove, so this loop no-ops on that path; it's the
+        # safety net for direct cue_model.remove callers.
+        parent_group_id = cue.group_id
+        for other in self.__cues.values():
+            if other.group_id == cue_id:
+                other.group_id = parent_group_id
+
         return cue
 
     def get(self, cue_id, default=None):
