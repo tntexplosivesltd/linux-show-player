@@ -92,11 +92,12 @@ class CueListView(QTreeWidget):
     # TODO: add ability to show/hide
     # TODO: implement columns (cue-type / target / etc..)
     COLUMNS = [
-        # Status-icon column auto-resizes so the icons stay
-        # visible as nesting depth pushes column 0's contents
-        # right (QTreeWidget adds setIndentation() pixels per
-        # depth level to the first column).
-        ListColumn("", CueStatusIcons, QHeaderView.ResizeToContents),
+        # Status-icon column is sized manually by
+        # _resize_status_column() — Qt's ResizeToContents
+        # ignores the per-row indent and branch gutter on
+        # column 0, so we compute the width ourselves to keep
+        # icons visible at any nesting depth.
+        ListColumn("", CueStatusIcons, QHeaderView.Fixed),
         ListColumn("#", IndexWidget, QHeaderView.ResizeToContents),
         ListColumn(
             QT_TRANSLATE_NOOP("ListLayoutHeader", "Q#"),
@@ -515,19 +516,71 @@ class CueListView(QTreeWidget):
     def __itemCollapsed(self, item):
         if isinstance(item.cue, GroupCue):
             item.cue.collapsed = True
-        self.resizeColumnToContents(0)
+        self._resize_status_column()
         self.viewport().update()
 
     def __itemExpanded(self, item):
         if isinstance(item.cue, GroupCue):
             item.cue.collapsed = False
-        # ResizeToContents on column 0 doesn't recompute when
-        # rows become visible via expansion — only on model
-        # changes. A nested expansion exposes deeper rows whose
-        # indent eats into column 0; force a re-measure here so
-        # the cue-icon column grows to accommodate them.
-        self.resizeColumnToContents(0)
+        # Column 0 must grow with the deepest visible row so the
+        # cue-icon widget retains enough cell width after Qt eats
+        # the indent + branch chevron from its left edge.
+        self._resize_status_column()
         self.viewport().update()
+
+    def _resize_status_column(self):
+        """Size column 0 to fit the cue-icon widget at the deepest
+        currently-visible row.
+
+        Qt's QHeaderView.ResizeToContents on column 0 returns the
+        widget sizeHint *without* adding the per-row indent or the
+        branch-chevron gutter — so at depth N the cell area shrinks
+        to ``column_width - branch_gutter - N * indentation()``,
+        and the cue-status icons clip from the right. Compute the
+        column width ourselves: widest sizeHint + branch gutter +
+        deepest visible depth * indent.
+        """
+        max_depth = 0
+
+        def walk(item, depth):
+            nonlocal max_depth
+            if depth > max_depth:
+                max_depth = depth
+            if item.isExpanded():
+                for j in range(item.childCount()):
+                    walk(item.child(j), depth + 1)
+
+        for i in range(self.topLevelItemCount()):
+            walk(self.topLevelItem(i), 0)
+
+        # Estimate the branch-chevron gutter from a known row's
+        # geometry: column_width - widget_width - depth*indent.
+        # Falls back to a sensible default if no rows exist yet.
+        gutter = 16
+        if self.topLevelItemCount() > 0:
+            top = self.topLevelItem(0)
+            widget = self.itemWidget(top, 0)
+            if widget is not None:
+                gutter = max(
+                    0,
+                    self.columnWidth(0) - widget.width(),
+                )
+                # Constrain to a sane range — visualItemRect math
+                # can produce stale values mid-layout.
+                if not (8 <= gutter <= 32):
+                    gutter = 16
+
+        # Use the cue-status widget's own sizeHint as the content
+        # baseline. All rows share the same widget class, so any
+        # row's sizeHint is representative.
+        from lisp.plugins.list_layout.list_widgets import (
+            CueStatusIcons,
+        )
+        content = CueStatusIcons.SIZE_HINT_WIDTH
+
+        target = content + gutter + max_depth * self.indentation()
+        if self.columnWidth(0) != target:
+            self.setColumnWidth(0, target)
 
     def _on_theme_changed(self):
         for item in self.iterAllItems():
@@ -653,6 +706,7 @@ class CueListView(QTreeWidget):
 
         self.__setupItemWidgetsRecursive(item)
         self.__updateItemStyle(item)
+        self._resize_status_column()
 
     def __cueAdded(self, cue):
         item = CueTreeWidgetItem(cue)
@@ -727,6 +781,7 @@ class CueListView(QTreeWidget):
 
         self.__setupItemWidgets(item)
         self.__updateItemStyle(item)
+        self._resize_status_column()
 
         total = sum(
             1 + self.topLevelItem(i).childCount()
@@ -844,10 +899,13 @@ class CueListView(QTreeWidget):
             if idx >= 0:
                 self.takeTopLevelItem(idx)
 
+        self._resize_status_column()
+
     def __modelReset(self):
         self._group_items.clear()
         self.reset()
         self.clear()
+        self._resize_status_column()
 
     def __setupItemWidgets(self, item):
         for i, column in enumerate(CueListView.COLUMNS):
