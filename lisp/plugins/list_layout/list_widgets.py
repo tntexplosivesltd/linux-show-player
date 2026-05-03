@@ -122,6 +122,25 @@ class NameWidget(QLabel):
 class CueStatusIcons(QWidget):
     MARGIN = 5
 
+    # Width budget for the painted content. paintEvent draws a
+    # left "current" wedge (width = h/2) + MARGIN + a cue icon
+    # (width = h - 2*MARGIN), so total content needs roughly
+    # 1.5 × row_height. Sized for row heights up to ~48 px so
+    # the column fits typical, larger-font, and high-DPI themes
+    # without dialing past the icons. Static rather than computed
+    # from self.height() because that triggers a layout feedback
+    # loop with the row geometry our hint helps determine.
+    SIZE_HINT_WIDTH = 80
+
+    def sizeHint(self):
+        # Width-only hint — leave height at QWidget's default
+        # ("no preference") so this widget doesn't drive row
+        # height up via a self-referential calculation.
+        return QSize(
+            CueStatusIcons.SIZE_HINT_WIDTH,
+            super().sizeHint().height(),
+        )
+
     def __init__(self, item, *args):
         super().__init__(*args)
         self.setAttribute(Qt.WA_TranslucentBackground)
