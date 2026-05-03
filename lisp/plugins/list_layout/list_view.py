@@ -515,11 +515,18 @@ class CueListView(QTreeWidget):
     def __itemCollapsed(self, item):
         if isinstance(item.cue, GroupCue):
             item.cue.collapsed = True
+        self.resizeColumnToContents(0)
         self.viewport().update()
 
     def __itemExpanded(self, item):
         if isinstance(item.cue, GroupCue):
             item.cue.collapsed = False
+        # ResizeToContents on column 0 doesn't recompute when
+        # rows become visible via expansion — only on model
+        # changes. A nested expansion exposes deeper rows whose
+        # indent eats into column 0; force a re-measure here so
+        # the cue-icon column grows to accommodate them.
+        self.resizeColumnToContents(0)
         self.viewport().update()
 
     def _on_theme_changed(self):
