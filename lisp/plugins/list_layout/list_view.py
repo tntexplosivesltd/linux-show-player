@@ -458,10 +458,21 @@ class CueListView(QTreeWidget):
 
         rect = QRect(header)
         if group_item.isExpanded() and group_item.childCount() > 0:
-            last_child = group_item.child(group_item.childCount() - 1)
-            child_rect = self.visualItemRect(last_child)
-            if not child_rect.isEmpty():
-                rect = rect.united(child_rect)
+            # Descend through the chain of last children while
+            # they are themselves expanded groups, so the outline
+            # encloses any nested expanded groups all the way
+            # down to their deepest visible leaf.
+            last_visible = group_item
+            while (
+                last_visible.isExpanded()
+                and last_visible.childCount() > 0
+            ):
+                last_visible = last_visible.child(
+                    last_visible.childCount() - 1
+                )
+            last_rect = self.visualItemRect(last_visible)
+            if not last_rect.isEmpty():
+                rect = rect.united(last_rect)
 
         inset = self.GROUP_OUTLINE_WIDTH // 2 + 1
         rect.adjust(inset, inset, -inset, -inset)
