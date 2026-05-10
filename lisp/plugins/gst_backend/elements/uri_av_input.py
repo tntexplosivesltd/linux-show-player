@@ -240,7 +240,8 @@ class UriAvInput(GstSrcElement):
         Real uridecodebin pads carry negotiated current caps once
         pad-added has completed at the C level; ``query_caps`` is
         the fallback for unit tests that build pads from
-        templates without negotiation.
+        templates without negotiation, and a safety net if a pad
+        shows up before its caps are negotiated.
         """
         has_audio = False
         has_video = False
@@ -259,11 +260,24 @@ class UriAvInput(GstSrcElement):
                 elif name.startswith("video/"):
                     has_video = True
             elif result == Gst.IteratorResult.RESYNC:
+                # Pad list changed under us — discard partial
+                # state and restart, otherwise a removed-then-
+                # re-added pad would either be missed or
+                # double-counted.
                 iterator.resync()
                 has_audio = False
                 has_video = False
+            elif result == Gst.IteratorResult.ERROR:
+                logger.warning(
+                    "UriAvInput: src pad iteration errored — "
+                    "splice decision uses partial state "
+                    "(has_audio=%s has_video=%s)",
+                    has_audio,
+                    has_video,
+                )
+                break
             else:
-                # DONE or ERROR — both terminate iteration.
+                # DONE — terminate iteration normally.
                 break
         return has_audio, has_video
 

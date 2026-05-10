@@ -54,7 +54,11 @@ from helpers import (
 
 MEDIA_DIR = "/tmp/lisp_test_video"
 LOG_PATH = "/tmp/lisp_silent_eos_race_e2e.log"
-ITERATIONS = 5
+# 20 default keeps the suite under a minute on developer machines
+# while giving the timing-sensitive race a real chance to fire if
+# regressed.  The bug doc's verification-path target was 100×; a
+# CI nightly run can override via RACE_E2E_ITERATIONS=100.
+ITERATIONS = int(os.environ.get("RACE_E2E_ITERATIONS", 20))
 
 _SMOKING_GUN_AUDIO = re.compile(
     r"UriAvInput: no audio stream found"
@@ -157,7 +161,14 @@ def _build_canonical_structure(audio_path, video_path):
 
 
 def _read_log_since(offset):
-    """Read /tmp log from byte ``offset`` to current end."""
+    """Read /tmp log from byte ``offset`` to current end.
+
+    The log file is opened in ``w`` mode by ``start_lisp`` and
+    written append-only by the LiSP subprocess for the rest of
+    its lifetime, so byte offsets remain stable across iterations
+    — there is no rotation or truncation between iterations to
+    invalidate the offset.
+    """
     if not os.path.exists(LOG_PATH):
         return ""
     with open(LOG_PATH) as f:

@@ -355,3 +355,120 @@ class TestNoMorePadsRaceFix:
 
         assert element._silence_src is not None
         assert element._video_filler_src is not None
+
+    def test_no_splice_after_stop_replay(self):
+        """A looping cue calls ``stop()`` then re-plays.  The
+        second ``no-more-pads`` walk must still see the bin's
+        audio pad and skip the splice.
+
+        ``stop()`` resets ``_audio_linked``/``_video_linked`` to
+        False (so a fresh ``pad-added`` can re-link); under the
+        old flag-driven logic, the second ``no-more-pads`` would
+        race exactly the same way as the first start.  Under the
+        new pad-driven logic, the bin's pads are still attached
+        (``stop()`` doesn't touch decoder pads — uridecodebin
+        removes them only on the READY transition, which happens
+        below this layer), so the decision is stable.
+        """
+        pipeline = Gst.Pipeline()
+        element = UriAvInput(pipeline)
+        decoder = _make_fake_decoder(audio=True, video=True)
+
+        element._UriAvInput__on_no_more_pads(decoder)
+        assert element._silence_src is None
+        assert element._video_filler_src is None
+
+        element.stop()
+        # stop() resets the flags as part of teardown; mimic
+        # the "pad-added hasn't run yet on this play" race.
+        assert element._audio_linked is False
+        assert element._video_linked is False
+
+        element._UriAvInput__on_no_more_pads(decoder)
+
+        assert element._silence_src is None, (
+            "Second-play race: splice fired even though the bin "
+            "still has the audio pad.  Same root cause as the "
+            "first-play race; flag state must not drive the "
+            "splice decision."
+        )
+        assert element._video_filler_src is None
+
+    def test_uses_current_caps_when_present(self):
+        """Production path: real ``uridecodebin`` pads carry
+        negotiated caps in ``get_current_caps()`` once
+        ``pad-added`` has completed at the C level.  The fake
+        decoder built by ``_make_fake_decoder`` returns caps via
+        ``query_caps`` (no negotiation), so the other tests in
+        this class only exercise the fallback branch.  This test
+        constructs a pad whose ``get_current_caps`` returns real
+        caps and asserts the splice decision honours them
+        without consulting ``query_caps``.
+        """
+        pipeline = Gst.Pipeline()
+        element = UriAvInput(pipeline)
+
+        audio_caps = Gst.Caps.from_string("audio/x-raw")
+        pad = MagicMock()
+        pad.get_current_caps.return_value = audio_caps
+        # query_caps must NOT be consulted on the success path.
+        pad.query_caps.side_effect = AssertionError(
+            "query_caps called despite get_current_caps returning"
+        )
+
+        decoder = MagicMock()
+        iterator = MagicMock()
+        iterator.next.side_effect = [
+            (Gst.IteratorResult.OK, pad),
+            (Gst.IteratorResult.DONE, None),
+        ]
+        decoder.iterate_src_pads.return_value = iterator
+
+        element._UriAvInput__on_no_more_pads(decoder)
+
+        assert element._silence_src is None
+        # No video pad on this decoder → video filler still fires.
+        assert element._video_filler_src is not None
+        pad.get_current_caps.assert_called()
+
+    def test_resync_discards_partial_state(self):
+        """``Gst.IteratorResult.RESYNC`` means the pad list
+        changed mid-walk.  The handler must call ``resync()`` and
+        restart accumulation; otherwise a removed-then-re-added
+        pad could be missed or counted twice.
+
+        Sequence: RESYNC after a tentative audio observation,
+        then a clean walk that yields only a video pad.  Final
+        decision: no audio (splice silence), has video (no video
+        filler).
+        """
+        pipeline = Gst.Pipeline()
+        element = UriAvInput(pipeline)
+
+        audio_caps = Gst.Caps.from_string("audio/x-raw")
+        video_caps = Gst.Caps.from_string("video/x-raw")
+        pad_audio = MagicMock()
+        pad_audio.get_current_caps.return_value = audio_caps
+        pad_video = MagicMock()
+        pad_video.get_current_caps.return_value = video_caps
+
+        iterator = MagicMock()
+        iterator.next.side_effect = [
+            # First walk: see audio, then list changes under us.
+            (Gst.IteratorResult.OK, pad_audio),
+            (Gst.IteratorResult.RESYNC, None),
+            # Restarted walk: only video survives.
+            (Gst.IteratorResult.OK, pad_video),
+            (Gst.IteratorResult.DONE, None),
+        ]
+        decoder = MagicMock()
+        decoder.iterate_src_pads.return_value = iterator
+
+        element._UriAvInput__on_no_more_pads(decoder)
+
+        iterator.resync.assert_called_once()
+        assert element._silence_src is not None, (
+            "RESYNC didn't reset state — stale audio observation "
+            "leaked through and suppressed the splice."
+        )
+        assert element._video_filler_src is None
