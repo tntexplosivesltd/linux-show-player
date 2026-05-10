@@ -70,20 +70,35 @@ def _create_empty_session(layout="ListLayout"):
     return path
 
 
-def start_lisp(layout="ListLayout"):
-    """Start LiSP with the given layout and wait for the harness."""
+def start_lisp(layout="ListLayout", log_level="warning", log_file=None):
+    """Start LiSP with the given layout and wait for the harness.
+
+    ``log_level`` overrides the default ``warning`` (e.g. ``info``
+    surfaces ``UriAvInput: no audio stream found`` lines).
+
+    ``log_file`` redirects the subprocess' stderr (where Python
+    logging and GStreamer-CRITICAL warnings both land) to the
+    given path.  Use this when a test needs to assert on log
+    lines.  ``None`` (default) discards output as before.
+    """
     global _lisp_proc
 
     session_path = _create_empty_session(layout)
 
+    if log_file is None:
+        stderr = subprocess.DEVNULL
+    else:
+        # Truncate and open for append-only by the child.
+        stderr = open(log_file, "w")
+
     _lisp_proc = subprocess.Popen(
         [
             sys.executable, "-m", "lisp.main",
-            "-l", "warning",
+            "-l", log_level,
             "-f", session_path,
         ],
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stderr=stderr,
     )
     atexit.register(stop_lisp)
 
@@ -363,12 +378,21 @@ def parse_args(description):
     return parser.parse_args()
 
 
-def run_suite(description, test_fn, layout="ListLayout"):
+def run_suite(
+    description,
+    test_fn,
+    layout="ListLayout",
+    log_level="warning",
+    log_file=None,
+):
     """Full lifecycle: parse args, start LiSP, run test_fn, exit.
 
     Parses --host/--port/--no-launch, generates test audio, starts
     (or attaches to) LiSP, calls test_fn(tracker), prints summary,
     and exits with code 0 (all passed) or 1 (any failures).
+
+    ``log_level`` / ``log_file`` are forwarded to ``start_lisp``
+    for tests that need to assert on log content.
 
     test_fn receives a single TestTracker argument.
     """
@@ -391,7 +415,7 @@ def run_suite(description, test_fn, layout="ListLayout"):
             sys.exit(2)
     else:
         print("Starting LiSP...")
-        start_lisp(layout)
+        start_lisp(layout, log_level=log_level, log_file=log_file)
         print("LiSP ready.")
 
     t = TestTracker()

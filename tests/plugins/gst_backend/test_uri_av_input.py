@@ -141,6 +141,40 @@ class TestOnPadAdded:
         assert element._audio_linked is False
 
 
+def _make_fake_decoder(*, audio=False, video=False):
+    """Build a ``Gst.Bin`` that mimics uridecodebin's
+    no-more-pads state for splice-decision tests.
+
+    ``audio`` / ``video`` toggle whether a corresponding src pad
+    is attached.  Pads are created from templates so they carry
+    only template caps; ``UriAvInput.__streams_present`` falls
+    back to ``query_caps`` for that case.  Real uridecodebin
+    pads carry negotiated current caps at no-more-pads time.
+    """
+    bin_ = Gst.Bin.new(None)
+    index = 0
+    if audio:
+        caps = Gst.Caps.from_string("audio/x-raw")
+        tmpl = Gst.PadTemplate.new(
+            f"src_{index}",
+            Gst.PadDirection.SRC,
+            Gst.PadPresence.ALWAYS,
+            caps,
+        )
+        bin_.add_pad(Gst.Pad.new_from_template(tmpl, f"src_{index}"))
+        index += 1
+    if video:
+        caps = Gst.Caps.from_string("video/x-raw")
+        tmpl = Gst.PadTemplate.new(
+            f"src_{index}",
+            Gst.PadDirection.SRC,
+            Gst.PadPresence.ALWAYS,
+            caps,
+        )
+        bin_.add_pad(Gst.Pad.new_from_template(tmpl, f"src_{index}"))
+    return bin_
+
+
 class TestNoMorePads:
     """Test the __on_no_more_pads callback.
 
@@ -150,6 +184,14 @@ class TestNoMorePads:
     branches themselves stay in the pipeline — see the docstring
     on __on_no_more_pads for why removing them caused qtdemux
     not-linked aborts.
+
+    The splice decision is driven by which source pads exist on
+    decodebin at no-more-pads time.  Tests therefore construct a
+    fake decoder via ``_make_fake_decoder`` rather than relying
+    on the ``_audio_linked`` / ``_video_linked`` flags, which
+    only guard duplicate-link in ``__on_pad_added`` after the
+    race fix in ``__on_no_more_pads`` (see
+    ``TestNoMorePadsRaceFix``).
     """
 
     def _pipeline_has(self, pipeline, element):
@@ -160,10 +202,9 @@ class TestNoMorePads:
     def test_inserts_video_filler_when_no_video(self):
         pipeline = Gst.Pipeline()
         element = UriAvInput(pipeline)
-        element._audio_linked = True
-        element._video_linked = False
+        decoder = _make_fake_decoder(audio=True)
 
-        element._UriAvInput__on_no_more_pads(element.decoder)
+        element._UriAvInput__on_no_more_pads(decoder)
 
         assert self._pipeline_has(pipeline, element.audio_queue)
         assert self._pipeline_has(pipeline, element.video_queue)
@@ -176,10 +217,9 @@ class TestNoMorePads:
     def test_inserts_silence_src_when_no_audio(self):
         pipeline = Gst.Pipeline()
         element = UriAvInput(pipeline)
-        element._audio_linked = False
-        element._video_linked = True
+        decoder = _make_fake_decoder(video=True)
 
-        element._UriAvInput__on_no_more_pads(element.decoder)
+        element._UriAvInput__on_no_more_pads(decoder)
 
         assert self._pipeline_has(pipeline, element.audio_queue)
         assert self._pipeline_has(pipeline, element.video_queue)
@@ -190,10 +230,9 @@ class TestNoMorePads:
     def test_keeps_both_when_both_linked(self):
         pipeline = Gst.Pipeline()
         element = UriAvInput(pipeline)
-        element._audio_linked = True
-        element._video_linked = True
+        decoder = _make_fake_decoder(audio=True, video=True)
 
-        element._UriAvInput__on_no_more_pads(element.decoder)
+        element._UriAvInput__on_no_more_pads(decoder)
 
         assert self._pipeline_has(pipeline, element.audio_queue)
         assert self._pipeline_has(pipeline, element.video_queue)
@@ -203,10 +242,9 @@ class TestNoMorePads:
     def test_stop_tears_down_filler_sources(self):
         pipeline = Gst.Pipeline()
         element = UriAvInput(pipeline)
-        element._audio_linked = False
-        element._video_linked = False
+        decoder = _make_fake_decoder()  # no streams
 
-        element._UriAvInput__on_no_more_pads(element.decoder)
+        element._UriAvInput__on_no_more_pads(decoder)
         silence = element._silence_src
         video_filler = element._video_filler_src
         assert silence is not None and video_filler is not None
@@ -219,3 +257,218 @@ class TestNoMorePads:
         assert element._video_filler_src is None
         assert not self._pipeline_has(pipeline, silence)
         assert not self._pipeline_has(pipeline, video_filler)
+
+
+class TestNoMorePadsRaceFix:
+    """Regression: silent-EOS splice mis-fires when uridecodebin's
+    `pad-added` and `no-more-pads` Python callbacks race.
+
+    Both signals are emitted from streaming threads and contend for
+    the GIL.  Under load the interpreter can schedule
+    `__on_no_more_pads` first, see `_audio_linked == False`, and
+    splice an `audiotestsrc num-buffers=0` upstream of an audio
+    queue that DOES have a real audio pad about to be linked by
+    the still-pending `__on_pad_added` callback.  The result is
+    a cue that stalls at 00:00.00 with two
+    `gst_segment_to_running_time` GStreamer-CRITICAL warnings.
+
+    Fix: ignore the `_audio_linked` / `_video_linked` flags for
+    the splice decision.  Inspect the decodebin's source pads
+    directly — by the GStreamer contract, when `no-more-pads`
+    fires, all pads are physically attached at the C level
+    (only their Python notifications may be queued).
+
+    See docs/bugs/2026-05-03-uri-av-input-silent-eos-false-positive.md
+    """
+
+    def test_audio_pad_present_no_splice_despite_flag_false(self):
+        """The race state: audio pad attached at C level, but
+        `_audio_linked` is still False because `__on_pad_added`'s
+        Python callback hasn't run.  The handler must inspect the
+        decodebin and see the audio pad — no silence splice.
+        """
+        pipeline = Gst.Pipeline()
+        element = UriAvInput(pipeline)
+        decoder = _make_fake_decoder(audio=True)
+        element._audio_linked = False
+        element._video_linked = False
+
+        element._UriAvInput__on_no_more_pads(decoder)
+
+        assert element._silence_src is None, (
+            "Silent-EOS splice mis-fired: the file has an audio "
+            "pad on decodebin; the flag is only stale because "
+            "pad-added's Python callback hadn't run yet."
+        )
+        # Video filler is correct here — decoder has no video pad.
+        assert element._video_filler_src is not None
+
+    def test_video_pad_present_no_splice_despite_flag_false(self):
+        """Mirror of the audio race: video pad present, flag
+        still False because `__on_pad_added` hadn't run.  No
+        video filler should be spliced.
+        """
+        pipeline = Gst.Pipeline()
+        element = UriAvInput(pipeline)
+        decoder = _make_fake_decoder(video=True)
+        element._audio_linked = False
+        element._video_linked = False
+
+        element._UriAvInput__on_no_more_pads(decoder)
+
+        assert element._video_filler_src is None, (
+            "Video filler splice mis-fired: the file has a "
+            "video pad on decodebin; the flag is only stale "
+            "because pad-added's Python callback hadn't run yet."
+        )
+        assert element._silence_src is not None
+
+    def test_both_pads_present_no_splices(self):
+        """Healthy file with both streams: no splices regardless
+        of flag state.
+        """
+        pipeline = Gst.Pipeline()
+        element = UriAvInput(pipeline)
+        decoder = _make_fake_decoder(audio=True, video=True)
+        # Worst-case race: NEITHER pad-added callback has run.
+        element._audio_linked = False
+        element._video_linked = False
+
+        element._UriAvInput__on_no_more_pads(decoder)
+
+        assert element._silence_src is None
+        assert element._video_filler_src is None
+
+    def test_no_pads_both_splices(self):
+        """Genuinely-empty decodebin: both fillers spliced.  This
+        is the case `91519a16` originally introduced the splice
+        for.
+        """
+        pipeline = Gst.Pipeline()
+        element = UriAvInput(pipeline)
+        decoder = _make_fake_decoder()  # no pads
+        # Flags True here — proves splice decision ignores them.
+        element._audio_linked = True
+        element._video_linked = True
+
+        element._UriAvInput__on_no_more_pads(decoder)
+
+        assert element._silence_src is not None
+        assert element._video_filler_src is not None
+
+    def test_no_splice_after_stop_replay(self):
+        """A looping cue calls ``stop()`` then re-plays.  The
+        second ``no-more-pads`` walk must still see the bin's
+        audio pad and skip the splice.
+
+        ``stop()`` resets ``_audio_linked``/``_video_linked`` to
+        False (so a fresh ``pad-added`` can re-link); under the
+        old flag-driven logic, the second ``no-more-pads`` would
+        race exactly the same way as the first start.  Under the
+        new pad-driven logic, the bin's pads are still attached
+        (``stop()`` doesn't touch decoder pads — uridecodebin
+        removes them only on the READY transition, which happens
+        below this layer), so the decision is stable.
+        """
+        pipeline = Gst.Pipeline()
+        element = UriAvInput(pipeline)
+        decoder = _make_fake_decoder(audio=True, video=True)
+
+        element._UriAvInput__on_no_more_pads(decoder)
+        assert element._silence_src is None
+        assert element._video_filler_src is None
+
+        element.stop()
+        # stop() resets the flags as part of teardown; mimic
+        # the "pad-added hasn't run yet on this play" race.
+        assert element._audio_linked is False
+        assert element._video_linked is False
+
+        element._UriAvInput__on_no_more_pads(decoder)
+
+        assert element._silence_src is None, (
+            "Second-play race: splice fired even though the bin "
+            "still has the audio pad.  Same root cause as the "
+            "first-play race; flag state must not drive the "
+            "splice decision."
+        )
+        assert element._video_filler_src is None
+
+    def test_uses_current_caps_when_present(self):
+        """Production path: real ``uridecodebin`` pads carry
+        negotiated caps in ``get_current_caps()`` once
+        ``pad-added`` has completed at the C level.  The fake
+        decoder built by ``_make_fake_decoder`` returns caps via
+        ``query_caps`` (no negotiation), so the other tests in
+        this class only exercise the fallback branch.  This test
+        constructs a pad whose ``get_current_caps`` returns real
+        caps and asserts the splice decision honours them
+        without consulting ``query_caps``.
+        """
+        pipeline = Gst.Pipeline()
+        element = UriAvInput(pipeline)
+
+        audio_caps = Gst.Caps.from_string("audio/x-raw")
+        pad = MagicMock()
+        pad.get_current_caps.return_value = audio_caps
+        # query_caps must NOT be consulted on the success path.
+        pad.query_caps.side_effect = AssertionError(
+            "query_caps called despite get_current_caps returning"
+        )
+
+        decoder = MagicMock()
+        iterator = MagicMock()
+        iterator.next.side_effect = [
+            (Gst.IteratorResult.OK, pad),
+            (Gst.IteratorResult.DONE, None),
+        ]
+        decoder.iterate_src_pads.return_value = iterator
+
+        element._UriAvInput__on_no_more_pads(decoder)
+
+        assert element._silence_src is None
+        # No video pad on this decoder → video filler still fires.
+        assert element._video_filler_src is not None
+        pad.get_current_caps.assert_called()
+
+    def test_resync_discards_partial_state(self):
+        """``Gst.IteratorResult.RESYNC`` means the pad list
+        changed mid-walk.  The handler must call ``resync()`` and
+        restart accumulation; otherwise a removed-then-re-added
+        pad could be missed or counted twice.
+
+        Sequence: RESYNC after a tentative audio observation,
+        then a clean walk that yields only a video pad.  Final
+        decision: no audio (splice silence), has video (no video
+        filler).
+        """
+        pipeline = Gst.Pipeline()
+        element = UriAvInput(pipeline)
+
+        audio_caps = Gst.Caps.from_string("audio/x-raw")
+        video_caps = Gst.Caps.from_string("video/x-raw")
+        pad_audio = MagicMock()
+        pad_audio.get_current_caps.return_value = audio_caps
+        pad_video = MagicMock()
+        pad_video.get_current_caps.return_value = video_caps
+
+        iterator = MagicMock()
+        iterator.next.side_effect = [
+            # First walk: see audio, then list changes under us.
+            (Gst.IteratorResult.OK, pad_audio),
+            (Gst.IteratorResult.RESYNC, None),
+            # Restarted walk: only video survives.
+            (Gst.IteratorResult.OK, pad_video),
+            (Gst.IteratorResult.DONE, None),
+        ]
+        decoder = MagicMock()
+        decoder.iterate_src_pads.return_value = iterator
+
+        element._UriAvInput__on_no_more_pads(decoder)
+
+        iterator.resync.assert_called_once()
+        assert element._silence_src is not None, (
+            "RESYNC didn't reset state — stale audio observation "
+            "leaked through and suppressed the splice."
+        )
+        assert element._video_filler_src is None
