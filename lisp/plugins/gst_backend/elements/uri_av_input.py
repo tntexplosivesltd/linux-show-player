@@ -189,8 +189,23 @@ class UriAvInput(GstSrcElement):
         with "not-linked" once it tries to push more data than
         the orphaned branch can absorb. Filler EOS prerolls the
         sink without requiring downstream coordination.
+
+        The splice decision inspects ``decodebin``'s source pads
+        rather than the ``_audio_linked`` / ``_video_linked``
+        flags.  The flags are written by ``__on_pad_added``'s
+        Python callback, which can race with this callback under
+        GIL contention: GStreamer emits both signals from
+        streaming threads, and the interpreter can schedule us
+        first while the audio pad's notification is still queued.
+        At the C level, the GStreamer ``no-more-pads`` contract
+        guarantees that all pads are physically present on the
+        bin by the time we run, so iterating ``iterate_src_pads``
+        is race-free.  See
+        ``docs/bugs/2026-05-03-uri-av-input-silent-eos-false-positive.md``.
         """
-        if not self._audio_linked:
+        has_audio, has_video = self.__streams_present(decodebin)
+
+        if not has_audio:
             logger.info(
                 "UriAvInput: no audio stream found, feeding silent "
                 "EOS into audio branch"
@@ -203,7 +218,7 @@ class UriAvInput(GstSrcElement):
             self.pipeline.add(self._silence_src)
             self._silence_src.link(self.audio_queue)
             self._silence_src.sync_state_with_parent()
-        if not self._video_linked:
+        if not has_video:
             logger.info(
                 "UriAvInput: no video stream found, feeding empty "
                 "EOS into video branch"
@@ -216,6 +231,41 @@ class UriAvInput(GstSrcElement):
             self.pipeline.add(self._video_filler_src)
             self._video_filler_src.link(self.video_queue)
             self._video_filler_src.sync_state_with_parent()
+
+    @staticmethod
+    def __streams_present(decodebin):
+        """Return ``(has_audio, has_video)`` by walking the bin's
+        source pads.  Race-free at ``no-more-pads`` time.
+
+        Real uridecodebin pads carry negotiated current caps once
+        pad-added has completed at the C level; ``query_caps`` is
+        the fallback for unit tests that build pads from
+        templates without negotiation.
+        """
+        has_audio = False
+        has_video = False
+        iterator = decodebin.iterate_src_pads()
+        while True:
+            result, pad = iterator.next()
+            if result == Gst.IteratorResult.OK:
+                caps = pad.get_current_caps()
+                if caps is None:
+                    caps = pad.query_caps(None)
+                if caps is None or caps.get_size() == 0:
+                    continue
+                name = caps.get_structure(0).get_name()
+                if name.startswith("audio/"):
+                    has_audio = True
+                elif name.startswith("video/"):
+                    has_video = True
+            elif result == Gst.IteratorResult.RESYNC:
+                iterator.resync()
+                has_audio = False
+                has_video = False
+            else:
+                # DONE or ERROR — both terminate iteration.
+                break
+        return has_audio, has_video
 
     def __uri_changed(self, uri):
         uri = SessionURI(uri)
