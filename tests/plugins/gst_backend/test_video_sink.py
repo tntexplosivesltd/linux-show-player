@@ -218,7 +218,12 @@ class TestVideoSinkClearDisplay:
 
         mock_window.clear_display.assert_called_once()
 
-    def test_play_calls_show_display(self):
+    def test_show_displays_calls_show_on_window(self):
+        """_show_displays is the deferred-show entry point.
+
+        Invoked from the first-buffer pad probe (cold-start) or
+        directly from play() when the pipeline already holds a
+        prerolled buffer (Armed / Paused resume)."""
         pipeline = Gst.Pipeline()
         sink = VideoSink(pipeline)
 
@@ -230,12 +235,11 @@ class TestVideoSinkClearDisplay:
             VideoSink, "_monitor_window",
             return_value=None,
         ):
-            sink.play()
+            sink._show_displays()
 
         mock_window.show_display.assert_called_once()
-        VideoSink._previous_sink = None
 
-    def test_play_calls_monitor_show_display(self):
+    def test_show_displays_calls_show_on_visible_monitor(self):
         pipeline = Gst.Pipeline()
         sink = VideoSink(pipeline)
 
@@ -248,10 +252,26 @@ class TestVideoSinkClearDisplay:
             VideoSink, "_monitor_window",
             return_value=mock_monitor,
         ):
-            sink.play()
+            sink._show_displays()
 
         mock_monitor.show_display.assert_called_once()
-        VideoSink._previous_sink = None
+
+    def test_show_displays_skips_hidden_monitor(self):
+        pipeline = Gst.Pipeline()
+        sink = VideoSink(pipeline)
+
+        mock_monitor = MagicMock()
+        mock_monitor.isVisible.return_value = False
+        with patch.object(
+            VideoSink, "_video_window",
+            return_value=MagicMock(),
+        ), patch.object(
+            VideoSink, "_monitor_window",
+            return_value=mock_monitor,
+        ):
+            sink._show_displays()
+
+        mock_monitor.show_display.assert_not_called()
 
     def test_stop_calls_monitor_clear_display(self):
         pipeline = Gst.Pipeline()
@@ -266,28 +286,152 @@ class TestVideoSinkClearDisplay:
             VideoSink, "_monitor_window",
             return_value=mock_monitor,
         ):
-            sink.play()
+            sink._show_displays()
             sink.stop()
 
         mock_monitor.clear_display.assert_called_once()
 
-    def test_play_skips_hidden_monitor(self):
+
+class TestVideoSinkDeferredShow:
+    """Verify the stale-frame bleed-through fix: play() must not show
+    the projection surface synchronously when the pipeline is in READY
+    (cold start), or the previous cue's last frame remains composited
+    until the new sink prerolls its first buffer.
+
+    See docs/bugs/2026-05-23-video-sink-stale-frame-bleedthrough.md"""
+
+    def teardown_method(self):
+        VideoSink._previous_sink = None
+
+    def test_play_defers_show_display_in_ready_state(self):
+        """Cold-start path: pipeline is in READY when play() runs.
+        show_display must wait for the first-buffer probe."""
         pipeline = Gst.Pipeline()
         sink = VideoSink(pipeline)
+        # Pipeline starts in NULL by default; that's fine — we just
+        # need it to not be in PAUSED so the deferred path is taken.
 
+        mock_window = MagicMock()
         mock_monitor = MagicMock()
-        mock_monitor.isVisible.return_value = False
+        mock_monitor.isVisible.return_value = True
         with patch.object(
             VideoSink, "_video_window",
-            return_value=MagicMock(),
+            return_value=mock_window,
         ), patch.object(
             VideoSink, "_monitor_window",
             return_value=mock_monitor,
         ):
             sink.play()
 
+        mock_window.show_display.assert_not_called()
         mock_monitor.show_display.assert_not_called()
-        VideoSink._previous_sink = None
+
+    def test_play_installs_first_buffer_probe_in_ready_state(self):
+        """Cold-start path must register a buffer probe on
+        proj_queue.src so the deferred show fires on first buffer."""
+        pipeline = Gst.Pipeline()
+        sink = VideoSink(pipeline)
+
+        mock_window = MagicMock()
+        with patch.object(
+            VideoSink, "_video_window",
+            return_value=mock_window,
+        ), patch.object(
+            VideoSink, "_monitor_window",
+            return_value=None,
+        ):
+            sink.play()
+
+        assert sink._first_buffer_probe is not None
+
+    def test_play_calls_show_display_when_pipeline_already_paused(self):
+        """Pre-armed / resume-from-pause path: the sink already holds
+        a prerolled buffer when play() runs, so showing immediately is
+        safe and avoids adding latency.
+
+        Real preroll requires a working video sink which CI can't
+        guarantee, so we stub pipeline.get_state to report PAUSED
+        directly — what matters here is the decision branch."""
+        pipeline = Gst.Pipeline()
+        sink = VideoSink(pipeline)
+
+        mock_window = MagicMock()
+        with patch.object(
+            VideoSink, "_video_window",
+            return_value=mock_window,
+        ), patch.object(
+            VideoSink, "_monitor_window",
+            return_value=None,
+        ), patch.object(
+            sink.pipeline, "get_state",
+            return_value=(Gst.StateChangeReturn.SUCCESS,
+                          Gst.State.PAUSED, Gst.State.PAUSED),
+        ):
+            sink.play()
+
+        mock_window.show_display.assert_called_once()
+        # Fast path must not also install a probe.
+        assert sink._first_buffer_probe is None
+
+    def test_stop_removes_pending_first_buffer_probe(self):
+        """A cue stopped before its first buffer arrives must clean
+        up the installed probe, or the probe leaks past pipeline
+        teardown."""
+        pipeline = Gst.Pipeline()
+        sink = VideoSink(pipeline)
+
+        mock_window = MagicMock()
+        with patch.object(
+            VideoSink, "_video_window",
+            return_value=mock_window,
+        ), patch.object(
+            VideoSink, "_monitor_window",
+            return_value=None,
+        ):
+            sink.play()
+            assert sink._first_buffer_probe is not None
+            sink.stop()
+            assert sink._first_buffer_probe is None
+
+    def test_dispose_removes_pending_first_buffer_probe(self):
+        """dispose() may run without a preceding stop() (e.g. cue
+        removed mid-play); it must clean up the probe too."""
+        pipeline = Gst.Pipeline()
+        sink = VideoSink(pipeline)
+
+        mock_window = MagicMock()
+        with patch.object(
+            VideoSink, "_video_window",
+            return_value=mock_window,
+        ), patch.object(
+            VideoSink, "_monitor_window",
+            return_value=None,
+        ):
+            sink.play()
+            assert sink._first_buffer_probe is not None
+            sink.dispose()
+            assert sink._first_buffer_probe is None
+
+    def test_first_buffer_callback_clears_probe_handle(self):
+        """When the probe fires once it is consumed; subsequent
+        buffers must not retrigger show_display."""
+        pipeline = Gst.Pipeline()
+        sink = VideoSink(pipeline)
+
+        mock_window = MagicMock()
+        with patch.object(
+            VideoSink, "_video_window",
+            return_value=mock_window,
+        ), patch.object(
+            VideoSink, "_monitor_window",
+            return_value=None,
+        ):
+            sink.play()
+            assert sink._first_buffer_probe is not None
+            # Simulate the probe firing without needing the streaming
+            # thread to push a real buffer.
+            sink._consume_first_buffer_probe()
+            assert sink._first_buffer_probe is None
 
 
 class TestVideoSinkOverlay:
