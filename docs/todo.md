@@ -73,12 +73,22 @@ exploratory — decide scope before starting.
 
 ## Video pipeline
 
-- Stale-frame bleed-through bug: when a new video / image cue starts,
-  the projection surface briefly shows a frame or two from the
-  *previous* cue before the new content takes over. Likely a sink /
-  overlay buffer that isn't being cleared between cues; investigate
-  the `VideoSink` swap path and whether the overlay surface needs an
-  explicit clear before the next pipeline preroll completes.
+- **First-cue-transition flicker in playlist groups.** The first
+  hand-off between two videos in a playlist `GroupCue` shows a brief
+  flicker; subsequent transitions in the same playlist (e.g. loop
+  iteration 2+) flow cleanly. Suggests something is one-time-cold on
+  the very first inter-cue boundary — candidates to investigate:
+  GL context first-init on the new `glimagesink`, X11/compositor
+  warm-up of the singleton render widget, or an asymmetry in the
+  100ms deferred-clear window when the first cue's pipeline hasn't
+  been reused before. The deferred-clear / deferred-show fix in
+  `docs/bugs/2026-05-23-video-sink-stale-frame-bleedthrough.md` is
+  the right architecture; this is a residual on top of it.
+- Verify image-stop-then-video transition under the new deferred-
+  clear behaviour. Original failure mode: image cue's 5-second
+  duration expires, projection should clear to black after ~100ms,
+  next video plays cleanly with no bleed of the image's last frame.
+  The fix targets this case but it needs an operator-level pass.
 - Multiple video cues at once / video mixing — compose more than one
   video stream onto the projection output (compositor element, alpha,
   positioning).
