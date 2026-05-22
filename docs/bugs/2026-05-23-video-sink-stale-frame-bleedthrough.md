@@ -1,6 +1,6 @@
 # Bug: `VideoSink.play()` maps the projection surface before the new sink prerolls, briefly bleeding the previous cue's last frame
 
-**Status:** Fixed on `fix/video-sink-stale-frame-bleedthrough` (2026-05-23) — `play()` now defers `show_display()` until the new sink's first buffer arrives via a pad probe on `proj_queue.src`. See [Fix](#fix-2026-05-23) below.
+**Status:** Fixed on `fix/video-sink-stale-frame-bleedthrough` (2026-05-23). The fix has two halves: `play()` defers `show_display()` until the new sink's first buffer arrives via a pad probe on `proj_queue.src`; `stop()` defers `clear_display()` by 100 ms with cancellation on the next `VideoSink.play()`, so playlist `GroupCue` auto-advance produces seamless flow while standalone stops still produce a clean clear-to-black (matching QLab/SCS default behaviour). See [Fix](#fix-2026-05-23) below.
 **Severity:** Medium — visible, brief artifact at every video/image cue transition. Not a playback failure, but cosmetically jarring under projection.
 **Component:** `lisp/plugins/gst_backend/elements/video_sink.py`, `lisp/plugins/gst_backend/gst_video_window.py`
 **Introduced by:** Inherent to the original video output design (`2ebafdb5` — "Add video output window with VideoOverlay and GL context management").
@@ -56,6 +56,19 @@ Between steps 1 and 4 there is a window of typically 16–33 ms during which the
 
 ## Fix (2026-05-23)
 
+### Half 1: deferred `clear_display()` on stop
+
+`VideoSink.stop()` no longer clears the projection synchronously. It sets a class-level `_pending_clear` flag and routes through a `Connection.QtQueued` signal (so the QTimer is always created on the main thread) which schedules `QTimer.singleShot(_DEFERRED_CLEAR_MS=100, _maybe_do_clear)`. If any `VideoSink.play()` runs before the timer fires, it resets `_pending_clear = False`; the eventual `_maybe_do_clear` then no-ops.
+
+Why this works for both shapes of stop:
+
+- **Playlist `GroupCue` auto-advance** — Cue A's stopped signal is connected with `Connection.QtQueued`; the slot that calls `_play_child_at(next, ...)` runs on the very next Qt event-loop tick. That's effectively zero ms; well inside the 100 ms defer window, so the pending clear is cancelled and A's last frame stays visible right up until B's first buffer (the other half of this fix) replaces it.
+- **Standalone stop** (manual Stop button; image cue's 5-second timer expiring with no follow-up) — no `play()` arrives, the timer fires, `_pending_clear` is still `True`, the surface clears to black. Matches QLab's "Hold at end unchecked → output goes black" default behaviour.
+
+The 100 ms constant is well above the playlist auto-advance latency (sub-ms in measurement) and well below the threshold of operator perception when standalone stops do clear.
+
+### Half 2: deferred `show_display()` on play (cold start)
+
 Two-path `play()`:
 
 - **Fast path** (pipeline already in `Gst.State.PAUSED`): the sink already holds a prerolled buffer (pre-armed cue, or resume-from-pause). Call `show_display()` immediately — no bleed risk, and showing immediately avoids one preroll cycle of added latency.
@@ -85,6 +98,15 @@ Pre-existing master-side bug. Per project policy (see `feedback_bug_fix_branchin
 - `test_stop_removes_pending_first_buffer_probe` — `stop()` before first buffer cleans up.
 - `test_dispose_removes_pending_first_buffer_probe` — `dispose()` before first buffer cleans up (covers the cue-removed-mid-play path).
 - `test_first_buffer_callback_clears_probe_handle` — the consume helper is idempotent and clears the stored probe id.
+
+`tests/plugins/gst_backend/test_video_sink.py::TestVideoSinkDeferredClear`:
+
+- `test_play_cancels_pending_clear` — back-to-back `stop()` → `play()` cancels the pending clear flag.
+- `test_playlist_handoff_keeps_surface_alive` — full sequence: `stop()` → `play()` → `_maybe_do_clear()` fires, the timer no-ops because the flag was cleared; `clear_display` is never called. This is the property that produces seamless playlist flow.
+- `test_standalone_stop_eventually_clears` — counter-test: `stop()` → no `play()` → `_maybe_do_clear()` performs the clear. QLab/SCS default behaviour for standalone cues.
+- `TestVideoSinkClearDisplay::test_stop_does_not_clear_immediately` — `stop()` no longer calls `clear_display` synchronously.
+- `TestVideoSinkClearDisplay::test_stop_marks_pending_clear` — the flag is set after stop.
+- `TestVideoSinkClearDisplay::test_maybe_do_clear_*` — the timer callback respects the flag.
 
 The visual symptom itself cannot be unit-tested without a real X server + compositor; manual verification confirmed the fix end-to-end (operator running a sequence of video/image cues sees the projection surface stay black between cues until the new sink draws).
 

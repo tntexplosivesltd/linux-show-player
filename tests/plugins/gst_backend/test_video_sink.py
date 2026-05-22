@@ -202,7 +202,15 @@ class TestVideoSinkFactory:
 
 
 class TestVideoSinkClearDisplay:
-    def test_stop_calls_clear_display(self):
+    def teardown_method(self):
+        # Don't leak the class-level pending-clear flag into the
+        # next test.
+        VideoSink._pending_clear = False
+
+    def test_stop_does_not_clear_immediately(self):
+        """stop() defers the clear so playlist auto-advance has a
+        chance to cancel it.  The clear only fires after the defer
+        timer expires (see _maybe_do_clear)."""
         pipeline = Gst.Pipeline()
         sink = VideoSink(pipeline)
 
@@ -216,7 +224,14 @@ class TestVideoSinkClearDisplay:
         ):
             sink.stop()
 
-        mock_window.clear_display.assert_called_once()
+        mock_window.clear_display.assert_not_called()
+
+    def test_stop_marks_pending_clear(self):
+        pipeline = Gst.Pipeline()
+        sink = VideoSink(pipeline)
+        assert VideoSink._pending_clear is False
+        sink.stop()
+        assert VideoSink._pending_clear is True
 
     def test_show_displays_calls_show_on_window(self):
         """_show_displays is the deferred-show entry point.
@@ -273,23 +288,161 @@ class TestVideoSinkClearDisplay:
 
         mock_monitor.show_display.assert_not_called()
 
-    def test_stop_calls_monitor_clear_display(self):
+    def test_maybe_do_clear_calls_clear_when_pending(self):
+        """The QTimer callback path: when _pending_clear is True
+        (set by a prior stop()), invoking _maybe_do_clear performs
+        the clear and resets the flag."""
         pipeline = Gst.Pipeline()
         sink = VideoSink(pipeline)
 
+        VideoSink._pending_clear = True
+
+        mock_window = MagicMock()
         mock_monitor = MagicMock()
         mock_monitor.isVisible.return_value = True
-        with patch.object(
-            VideoSink, "_video_window",
-            return_value=MagicMock(),
-        ), patch.object(
-            VideoSink, "_monitor_window",
+
+        # _maybe_do_clear does a lazy import of GstBackend; patch the
+        # class methods it calls.
+        with patch(
+            "lisp.plugins.gst_backend.gst_backend"
+            ".GstBackend.video_window",
+            return_value=mock_window,
+        ), patch(
+            "lisp.plugins.gst_backend.gst_backend"
+            ".GstBackend.monitor_window",
             return_value=mock_monitor,
         ):
-            sink._show_displays()
-            sink.stop()
+            VideoSink._maybe_do_clear()
 
+        mock_window.clear_display.assert_called_once()
         mock_monitor.clear_display.assert_called_once()
+        assert VideoSink._pending_clear is False
+        del sink
+
+    def test_maybe_do_clear_noop_when_not_pending(self):
+        """If a play() cancelled the pending clear, _maybe_do_clear
+        (firing later from the original timer) must not clear."""
+        pipeline = Gst.Pipeline()
+        sink = VideoSink(pipeline)
+
+        VideoSink._pending_clear = False
+
+        mock_window = MagicMock()
+        with patch(
+            "lisp.plugins.gst_backend.gst_backend"
+            ".GstBackend.video_window",
+            return_value=mock_window,
+        ), patch(
+            "lisp.plugins.gst_backend.gst_backend"
+            ".GstBackend.monitor_window",
+            return_value=None,
+        ):
+            VideoSink._maybe_do_clear()
+
+        mock_window.clear_display.assert_not_called()
+        del sink
+
+
+class TestVideoSinkDeferredClear:
+    """Verify the deferred-clear cancellation that produces seamless
+    transitions in playlist GroupCues.
+
+    Reasoning: QLab/SCS default behaviour is "clear the projection
+    when a video cue stops" (a black gap appears between cues).
+    Playlist mode in SCS is seamless because it's one cue, not many.
+    Our playlist GroupCue chains independent cues, so we approximate
+    seamlessness by deferring the clear briefly and cancelling it on
+    the next cue's play().  See
+    docs/bugs/2026-05-23-video-sink-stale-frame-bleedthrough.md."""
+
+    def teardown_method(self):
+        VideoSink._previous_sink = None
+        VideoSink._pending_clear = False
+
+    def test_play_cancels_pending_clear(self):
+        """stop() schedules a clear; an immediate play() (as happens
+        in playlist auto-advance) must clear the pending flag so the
+        timer fires harmlessly."""
+        pipeline = Gst.Pipeline()
+        sink_a = VideoSink(pipeline)
+        pipeline_b = Gst.Pipeline()
+        sink_b = VideoSink(pipeline_b)
+
+        mock_window = MagicMock()
+        with patch.object(
+            VideoSink, "_video_window",
+            return_value=mock_window,
+        ), patch.object(
+            VideoSink, "_monitor_window",
+            return_value=None,
+        ):
+            sink_a.stop()
+            assert VideoSink._pending_clear is True
+            sink_b.play()
+            assert VideoSink._pending_clear is False
+
+    def test_playlist_handoff_keeps_surface_alive(self):
+        """End-to-end: stop A, immediately play B, then fire the
+        deferred-clear timer.  The clear must NOT execute because B
+        cancelled it.  This is the property that makes a playlist of
+        videos in a GroupCue flow seamlessly."""
+        pipeline_a = Gst.Pipeline()
+        sink_a = VideoSink(pipeline_a)
+        pipeline_b = Gst.Pipeline()
+        sink_b = VideoSink(pipeline_b)
+
+        mock_window = MagicMock()
+        with patch.object(
+            VideoSink, "_video_window",
+            return_value=mock_window,
+        ), patch.object(
+            VideoSink, "_monitor_window",
+            return_value=None,
+        ), patch(
+            "lisp.plugins.gst_backend.gst_backend"
+            ".GstBackend.video_window",
+            return_value=mock_window,
+        ), patch(
+            "lisp.plugins.gst_backend.gst_backend"
+            ".GstBackend.monitor_window",
+            return_value=None,
+        ):
+            sink_a.stop()
+            sink_b.play()
+            # Simulate the deferred timer firing now.
+            VideoSink._maybe_do_clear()
+
+        mock_window.clear_display.assert_not_called()
+
+    def test_standalone_stop_eventually_clears(self):
+        """The counter-test: when no follow-up play() happens, the
+        timer firing actually performs the clear.  This is the
+        QLab/SCS "clear on stop" default behaviour for cues that
+        aren't part of a chain."""
+        pipeline = Gst.Pipeline()
+        sink = VideoSink(pipeline)
+
+        mock_window = MagicMock()
+        with patch.object(
+            VideoSink, "_video_window",
+            return_value=mock_window,
+        ), patch.object(
+            VideoSink, "_monitor_window",
+            return_value=None,
+        ), patch(
+            "lisp.plugins.gst_backend.gst_backend"
+            ".GstBackend.video_window",
+            return_value=mock_window,
+        ), patch(
+            "lisp.plugins.gst_backend.gst_backend"
+            ".GstBackend.monitor_window",
+            return_value=None,
+        ):
+            sink.stop()
+            # Timer fires — no intervening play().
+            VideoSink._maybe_do_clear()
+
+        mock_window.clear_display.assert_called_once()
 
 
 class TestVideoSinkDeferredShow:
