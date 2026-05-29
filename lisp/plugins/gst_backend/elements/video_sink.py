@@ -20,6 +20,7 @@ import logging
 from PyQt5.QtCore import QT_TRANSLATE_NOOP
 
 from lisp.backend.media_element import ElementType, MediaType
+from lisp.core.signal import Connection, Signal
 from lisp.plugins.gst_backend.gi_repository import Gst
 from lisp.plugins.gst_backend.gst_element import GstMediaElement
 
@@ -29,6 +30,14 @@ logger = logging.getLogger(__name__)
 # glimagesink: OpenGL-based, good quality, works on X11 + XWayland.
 # xvimagesink: X11 XVideo extension, lower overhead, X11 only.
 _VIDEO_SINK_FACTORIES = ("glimagesink", "xvimagesink")
+
+# How long stop() waits before actually clearing the projection
+# surface.  Playlist auto-advance and similar back-to-back triggers
+# call VideoSink.play() within one Qt event-loop tick (sub-ms in
+# practice); any value comfortably above that window produces seamless
+# transitions while staying below the threshold of operator
+# perception when no follow-up cue arrives.  Tuned conservatively.
+_DEFERRED_CLEAR_MS = 100
 
 
 def _create_video_sink():
@@ -58,6 +67,14 @@ class VideoSink(GstMediaElement):
     # Track the last VideoSink that rendered, so we can release
     # its GL context before a different sink takes over.
     _previous_sink = None
+
+    # Class-level coordination for the deferred clear.  stop() sets
+    # _pending_clear = True and schedules a delayed clear; any
+    # VideoSink.play() within the defer window resets the flag,
+    # cancelling the clear.  This produces QLab-style "clear on stop"
+    # for standalone cues while keeping playlist transitions seamless
+    # (because auto-advance fires play() within a Qt tick).
+    _pending_clear = False
 
     def __init__(self, pipeline):
         super().__init__(pipeline)
@@ -99,6 +116,33 @@ class VideoSink(GstMediaElement):
         self._audio_removed = False
         self._video_removed = False
 
+        # Stale-frame bleed-through guard.  The projection window's
+        # native child widget is a process-wide singleton: cue A's
+        # last frame remains cached by the X11 compositor after A's
+        # sink is torn down.  When cue B's render widget is re-mapped
+        # we must not show it until B's sink has actually rendered a
+        # buffer, or the compositor briefly composites A's content.
+        #
+        # _first_buffer_probe holds the GstPad probe id while we are
+        # waiting for B's first buffer through proj_queue.src.  The
+        # probe fires on the GStreamer streaming thread, so it routes
+        # through _first_buffer_signal (QtQueued) to invoke
+        # _show_displays on the Qt main thread.
+        self._first_buffer_probe = None
+        self._first_buffer_signal = Signal()
+        self._first_buffer_signal.connect(
+            self._show_displays, Connection.QtQueued
+        )
+
+        # Deferred-clear bridge.  stop() may be called from a bus
+        # EOS handler whose thread isn't guaranteed to be the Qt main
+        # thread; route the timer-scheduling through QtQueued so the
+        # QTimer is always created on the main thread.
+        self._deferred_clear_signal = Signal()
+        self._deferred_clear_signal.connect(
+            self._on_deferred_clear_scheduled, Connection.QtQueued
+        )
+
         # Install a synchronous bus handler so we can set the
         # window handle before each sink opens its own window.
         bus = self.pipeline.get_bus()
@@ -108,8 +152,48 @@ class VideoSink(GstMediaElement):
         )
 
     def play(self):
+        # Cancel any clear that an immediately-preceding stop() may
+        # have scheduled.  In a playlist GroupCue the auto-advance
+        # path runs us within one Qt tick of the previous child's
+        # stop(), well inside the defer window — cancelling here is
+        # how playlists keep their flow seamless.
+        VideoSink._pending_clear = False
+
         VideoSink._previous_sink = self
 
+        # Fast path: pipeline already holds a prerolled buffer
+        # (pre-armed cue, or resume from pause).  The sink can render
+        # immediately on map, so showing now is safe and avoids one
+        # preroll cycle of added latency.
+        _, state, _ = self.pipeline.get_state(0)
+        if state == Gst.State.PAUSED:
+            self._show_displays()
+            return
+
+        # Cold-start path: pipeline is in READY/Null.  Defer the
+        # show until proj_queue.src emits its first buffer (preroll
+        # of the new sink), or the singleton render widget would
+        # briefly composite the previous cue's last frame.
+        pad = self.proj_queue.get_static_pad("src")
+        if pad is None or self._first_buffer_probe is not None:
+            # No pad, or a probe is somehow already installed —
+            # fall back to immediate show.  Should not happen in
+            # normal flow.
+            self._show_displays()
+            return
+
+        self._first_buffer_probe = pad.add_probe(
+            Gst.PadProbeType.BUFFER,
+            self.__on_first_buffer,
+        )
+
+    def _show_displays(self):
+        """Map the projection (and monitor) render surfaces.
+
+        Called either directly from play() on the fast path, or via
+        _first_buffer_signal once the new sink's first buffer has
+        passed proj_queue.src.
+        """
         window = self._video_window()
         if window is not None:
             window.show_display()
@@ -118,15 +202,88 @@ class VideoSink(GstMediaElement):
         if monitor is not None and monitor.isVisible():
             monitor.show_display()
 
+    def __on_first_buffer(self, pad, info):
+        """Pad probe — fires on the streaming thread.
+
+        Marks the probe consumed and hands off to the main thread
+        for the Qt show() call.  Returning REMOVE uninstalls the
+        probe atomically; subsequent buffers must not re-trigger.
+        """
+        self._first_buffer_probe = None
+        self._first_buffer_signal.emit()
+        return Gst.PadProbeReturn.REMOVE
+
+    def _consume_first_buffer_probe(self):
+        """Remove a pending first-buffer probe, if any.
+
+        Called from stop()/dispose() to clean up when a cue is torn
+        down before its first buffer arrives — the probe would
+        otherwise outlive the proj_queue element.
+        """
+        if self._first_buffer_probe is None:
+            return
+        probe_id = self._first_buffer_probe
+        self._first_buffer_probe = None
+        pad = self.proj_queue.get_static_pad("src")
+        if pad is not None:
+            try:
+                pad.remove_probe(probe_id)
+            except Exception:
+                # Pad already gone (pipeline tear-down race) —
+                # losing the probe with the pad is benign.
+                pass
+
     def stop(self):
+        self._consume_first_buffer_probe()
+
         if VideoSink._previous_sink is self:
             VideoSink._previous_sink = None
 
-        window = self._video_window()
+        # Defer the projection clear by _DEFERRED_CLEAR_MS.  An
+        # immediate clear here would race the playlist GroupCue's
+        # auto-advance: A's stopped → queued slot → B's play() runs
+        # all within a Qt tick, but the X11 unmap/remap between them
+        # is visible to the compositor as a black gap.  By deferring,
+        # the outgoing cue's last frame stays visible until either
+        # the next cue's first buffer overwrites it (seamless flow)
+        # or the timer expires (standalone stop → black, matching
+        # QLab/SCS default behaviour).
+        VideoSink._pending_clear = True
+        self._deferred_clear_signal.emit()
+
+    def _on_deferred_clear_scheduled(self):
+        """Main thread: arm the QTimer that performs the clear.
+
+        Invoked via _deferred_clear_signal (QtQueued) so the QTimer
+        is always created on the main thread, regardless of the
+        thread that called stop().
+        """
+        from PyQt5.QtCore import QTimer
+        QTimer.singleShot(
+            _DEFERRED_CLEAR_MS, VideoSink._maybe_do_clear,
+        )
+
+    @classmethod
+    def _maybe_do_clear(cls):
+        """QTimer callback (main thread).
+
+        Performs the clear only if a subsequent play() hasn't reset
+        the pending flag.  Idempotent across multiple in-flight
+        timers: the first one through clears and resets; later ones
+        no-op.
+        """
+        if not cls._pending_clear:
+            return
+        cls._pending_clear = False
+
+        # Lazy import to avoid the circular gst_backend ↔ video_sink
+        # import that would happen at module load time.
+        from lisp.plugins.gst_backend.gst_backend import GstBackend
+        window = GstBackend.video_window()
         if window is not None:
             window.clear_display()
 
-        monitor = self._monitor_window()
+        monitor = GstBackend.monitor_window()
         if monitor is not None and monitor.isVisible():
             monitor.clear_display()
 
@@ -202,6 +359,10 @@ class VideoSink(GstMediaElement):
             self._audio_removed = True
 
     def dispose(self):
+        # Clean up before tearing the pipeline down — proj_queue may
+        # be removed below, after which the probe id can't be revoked.
+        self._consume_first_buffer_probe()
+
         bus = self.pipeline.get_bus()
         if bus is not None and self._sync_handler is not None:
             bus.disconnect(self._sync_handler)
