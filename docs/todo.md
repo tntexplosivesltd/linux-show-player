@@ -162,6 +162,21 @@ exploratory — decide scope before starting.
   thread when its owning Signal goes away). Track down the offender
   and fix the teardown ordering, or move the cleanup into a
   main-thread `deleteLater()`.
+- E2E sample-timing flakes — two assertions sample state at a
+  hard-coded moment with `time.sleep()` and fail under sweep-run
+  load while passing reliably in isolation:
+  - `tests/e2e/test_video_e2e.py::test_7_loop` 7b
+    ("Still Running during second iteration") — sleeps 2.5s then
+    asserts `cue_state == "Running"`. Catches the cue in a
+    momentary non-Running state across the loop seek. Fix: poll
+    over a window (e.g. expect "Running" at any point between
+    t=2.0s and t=3.0s) rather than sampling at exactly 2.5s.
+  - `tests/e2e/test_uri_av_input_silent_eos_race_e2e.py` iter 0
+    and iter 1 ("audio current_time advanced (got 0 ms)") — the
+    first two iterations occasionally read `current_time == 0` on
+    a cue that's transitioning to Running; iterations 2-19 are
+    stable. Fix: gate the read on `current_time > 0` with a
+    short polling window, or skip iter 0 as a warmup.
 
 ## Accessibility
 
