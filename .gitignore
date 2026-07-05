@@ -26,3 +26,6 @@ eggs/
 
 plans/
 .superpowers/
+
+# Test harness per-worktree port discovery file
+.lisp-test-harness-port
