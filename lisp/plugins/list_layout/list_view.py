@@ -200,6 +200,11 @@ class CueListView(QTreeWidget):
         # cue/standby brushes pick up the new palette without restart.
         themes.theme_changed.connect(self._on_theme_changed)
 
+        # Find & jump: rows whose cue.id is NOT in this set are dimmed
+        # while a search is active. Empty set + inactive = normal.
+        self._search_active = False
+        self._search_match_ids = set()
+
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
             if all([x.isLocalFile() for x in event.mimeData().urls()]):
@@ -587,6 +592,18 @@ class CueListView(QTreeWidget):
             self.__updateItemStyle(item)
         self.viewport().update()
 
+    def set_search_dim(self, matching_cue_ids, active):
+        """Dim rows whose cue.id is not in ``matching_cue_ids``.
+
+        Reuses the disabled-cue dim treatment in ``__updateItemStyle``.
+        ``active=False`` clears the dim and restores normal rendering.
+        """
+        self._search_active = bool(active)
+        self._search_match_ids = set(matching_cue_ids)
+        for item in self.iterAllItems():
+            self.__updateItemStyle(item)
+        self.viewport().update()
+
     def __updateItemStyle(self, item):
         if item.treeWidget() is not None:
             css = css_to_dict(item.cue.stylesheet)
@@ -603,11 +620,15 @@ class CueListView(QTreeWidget):
                     color.setAlpha(cue_color_alpha())
                     brush = QBrush(color)
 
-            # Dim disabled cues so they remain readable but visibly
-            # de-emphasised. The foreground colour is muted grey;
-            # any background-brush alpha is multiplied by 0.4 so
-            # coloured rows stay recognisable but muted.
-            if item.cue.effective_disabled:
+            # Dim disabled cues AND, while a find is active, any row that
+            # is not a current match — so matches stand out. Muted grey
+            # foreground; any background-brush alpha is multiplied by 0.4
+            # so coloured rows stay recognisable but muted.
+            search_dimmed = (
+                self._search_active
+                and item.cue.id not in self._search_match_ids
+            )
+            if item.cue.effective_disabled or search_dimmed:
                 widget_css["color"] = "rgba(160, 160, 160, 0.5)"
                 if brush.color().alpha() > 0:
                     dimmed = QColor(brush.color())
