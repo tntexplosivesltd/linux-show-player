@@ -34,6 +34,11 @@ from lisp.layout.cue_menu import (
 from lisp.plugins.list_layout.list_view import CueListView
 from lisp.plugins.list_layout.models import CueListModel, RunningCueModel
 from lisp.plugins.list_layout.view import ListLayoutView
+from lisp.plugins.list_layout.find import (
+    advance_match,
+    find_matches,
+    first_match_at_or_after,
+)
 from lisp.ui.ui_utils import translate
 from lisp.ui.widgets.hotkeyedit import keyEventKeySequence
 
@@ -107,6 +112,19 @@ class ListLayout(CueLayout):
             self._on_standby_changed_index
         )
 
+        # Find & jump bar
+        self._find_matches = []
+        self._find_pos = -1
+        self._view.findBar.queryChanged.connect(self._on_find_input_changed)
+        self._view.findBar.colorChanged.connect(self._on_find_input_changed)
+        self._view.findBar.findNext.connect(self._find_next)
+        self._view.findBar.findPrev.connect(self._find_prev)
+        self._view.findBar.closed.connect(self._close_find)
+        # Keep matches/dimming coherent while the bar is open.
+        self._list_model.item_added.connect(self._on_model_changed_find)
+        self._list_model.item_moved.connect(self._on_model_changed_find)
+        self._list_model.item_removed.connect(self._on_model_changed_find)
+
         # Layout menu
         layout_menu = self.app.window.menuLayout
 
@@ -172,6 +190,11 @@ class ListLayout(CueLayout):
             self._expand_all_groups
         )
         layout_menu.addAction(self.expand_all_action)
+
+        self.find_action = QAction(layout_menu)
+        self.find_action.setShortcut(QKeySequence("Ctrl+F"))
+        self.find_action.triggered.connect(self._toggle_find)
+        layout_menu.addAction(self.find_action)
 
         layout_menu.addSeparator()
 
@@ -284,6 +307,7 @@ class ListLayout(CueLayout):
         self.expand_all_action.setText(
             translate("ListLayout", "Expand all groups")
         )
+        self.find_action.setText(translate("ListLayout", "Find cue…"))
 
     @property
     def model(self):
@@ -534,6 +558,90 @@ class ListLayout(CueLayout):
         finally:
             self._view.listView.blockSignals(False)
 
+    def _on_find_input_changed(self, _value=None):
+        self._recompute_find()
+
+    def _on_model_changed_find(self, *_args):
+        if self._view.findBar.isVisible():
+            self._recompute_find()
+
+    def _recompute_find(self):
+        bar = self._view.findBar
+        text = bar.query()
+        color = bar.color()
+        self._find_matches = find_matches(self._list_model, text, color)
+        active = bool(text or color)
+
+        match_ids = set()
+        for index in self._find_matches:
+            cue = self.cue_at(index)
+            if cue is not None:
+                match_ids.add(cue.id)
+        self._view.listView.set_search_dim(match_ids, active)
+
+        if self._find_matches:
+            self._find_pos = first_match_at_or_after(
+                self._find_matches, self.standby_index()
+            )
+        else:
+            self._find_pos = -1
+        self._update_find_counter()
+
+    def _update_find_counter(self):
+        total = len(self._find_matches)
+        current = self._find_pos + 1 if self._find_pos >= 0 else 0
+        self._view.findBar.setMatchCounter(current, total)
+
+    def _find_next(self):
+        self._find_step(1)
+
+    def _find_prev(self):
+        self._find_step(-1)
+
+    def _find_step(self, step):
+        if not self._find_matches:
+            return
+        self._find_pos = advance_match(
+            self._find_pos, len(self._find_matches), step
+        )
+        index = self._find_matches[self._find_pos]
+        self._expand_find_ancestors(index)
+        self.set_standby_index(index)
+        self._update_find_counter()
+
+    def _expand_find_ancestors(self, index):
+        """Expand any collapsed groups that contain the target cue so
+        the jumped-to row is actually visible."""
+        cue = self.cue_at(index)
+        if cue is None:
+            return
+        gid = cue.group_id
+        seen = set()
+        while gid and gid not in seen:
+            seen.add(gid)
+            group = self.app.cue_model.get(gid)
+            if group is None:
+                break
+            item = self._view.listView.cueItemAt(group.index)
+            if item is not None:
+                item.setExpanded(True)
+            gid = group.group_id
+
+    def _toggle_find(self):
+        bar = self._view.findBar
+        if bar.isVisible():
+            self._close_find()
+        else:
+            bar.show()
+            bar.focusQuery()
+            self._recompute_find()
+
+    def _close_find(self):
+        self._view.findBar.hide()
+        self._view.listView.set_search_dim(set(), False)
+        self._find_matches = []
+        self._find_pos = -1
+        self._view.listView.setFocus()
 
     def _context_invoked(self, event):
         # This is called in response to CueListView context-events

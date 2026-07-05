@@ -19,6 +19,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QWidget, QSizePolicy, QSplitter, QVBoxLayout
 
 from lisp.plugins.list_layout.list_view import CueListView
+from lisp.plugins.list_layout.find_bar import FindBar
 from lisp.plugins.list_layout.playing_view import RunningCuesListWidget
 from lisp.ui.widgets.dynamicfontsize import DynamicFontSizePushButton
 from .control_buttons import ShowControlButtons
@@ -70,11 +71,21 @@ class ListLayoutView(QWidget):
         )
         self.topSplitter.addWidget(self.controlButtons)
 
-        # CUE VIEW (center-left)
+        # CUE VIEW (center-left) — a hidden find bar sits above the list.
         self.listView = CueListView(listModel, self)
         self.listView.setMinimumWidth(200)
         self.listView.currentItemChanged.connect(self.__listViewCurrentChanged)
-        self.centralSplitter.addWidget(self.listView)
+
+        self.findBar = FindBar(self)
+
+        listContainer = QWidget(self)
+        listContainerLayout = QVBoxLayout(listContainer)
+        listContainerLayout.setContentsMargins(0, 0, 0, 0)
+        listContainerLayout.setSpacing(0)
+        listContainerLayout.addWidget(self.findBar)
+        listContainerLayout.addWidget(self.listView)
+
+        self.centralSplitter.addWidget(listContainer)
         self.centralSplitter.setCollapsible(0, False)
 
         # PLAYING VIEW (center-right)
