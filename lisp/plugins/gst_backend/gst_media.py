@@ -443,6 +443,19 @@ class GstMedia(Media):
 
         self.elements_changed.emit(self)
 
+    def __is_image_fronted(self):
+        """True if this media's source is a still image (imagefreeze).
+
+        Used by the EOS handler to decide whether the pipeline must be
+        driven all the way to NULL (releasing the shared GL surface)
+        rather than parked in READY.  Matched by class name to avoid a
+        circular import of the dynamically-loaded element classes.
+        """
+        return any(
+            type(element).__name__ == "ImageInput"
+            for element in self.elements
+        )
+
     def __on_message(self, bus, message):
         if message.src == self.__pipeline:
             if message.type == Gst.MessageType.SEGMENT_DONE:
@@ -457,8 +470,36 @@ class GstMedia(Media):
                     self.__seek(self.__segment_stop_position(), flush=False)
 
             elif message.type == Gst.MessageType.EOS:
+                logger.debug(
+                    "[FLICKER-DIAG] GstMedia EOS pipeline=%s "
+                    "→ READY",
+                    self.__pipeline.get_name(),
+                )
                 self.__pipeline.set_state(Gst.State.READY)
                 self.__pipeline.get_state(Gst.SECOND)
+
+                # Image-fronted pipelines must release their GL surface
+                # FULLY on EOS, not just park in READY.  The projection
+                # window's X11 surface is shared process-wide; an
+                # imagefreeze sink left alive in READY keeps owning the
+                # surface's GL context, and the next cue's video then
+                # wedges on the still-displayed image on the first cold
+                # handoff.  Re-binding the window handle does NOT
+                # transfer ownership between two live sinks — only
+                # destroying the outgoing GL context does (set NULL).
+                # Images are cheap to rebuild (single decoded frame, no
+                # demuxer/codec), so the lost warm-restart is
+                # negligible; video pipelines stay in READY so playlist
+                # loops keep their seamless hot restart.
+                # See docs/bugs/2026-05-29-video-cross-sink-gl-surface-wedge.md.
+                if self.__is_image_fronted():
+                    logger.debug(
+                        "[FLICKER-DIAG] image-fronted EOS pipeline=%s "
+                        "→ NULL (release GL surface)",
+                        self.__pipeline.get_name(),
+                    )
+                    self.__pipeline.set_state(Gst.State.NULL)
+                    self.__pipeline.get_state(Gst.SECOND)
 
                 for element in self.elements:
                     element.eos()
