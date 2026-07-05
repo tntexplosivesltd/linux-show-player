@@ -17,6 +17,7 @@
 
 import json
 import logging
+import socket
 import socketserver
 from threading import Thread
 
@@ -34,7 +35,22 @@ class JsonRpcServer(socketserver.TCPServer):
 
     def __init__(self, host, port, dispatcher):
         self.dispatcher = dispatcher
-        super().__init__((host, port), JsonRpcHandler)
+        super().__init__(
+            (host, port), JsonRpcHandler, bind_and_activate=False
+        )
+        try:
+            self.server_bind()
+            self.server_activate()
+        except OSError:
+            # Desired port is busy (e.g. another worktree's LiSP).
+            # Fall back to an OS-assigned free port.
+            self.server_close()
+            self.socket = socket.socket(
+                self.address_family, self.socket_type
+            )
+            self.server_address = (host, 0)
+            self.server_bind()
+            self.server_activate()
 
 
 class JsonRpcHandler(socketserver.StreamRequestHandler):
