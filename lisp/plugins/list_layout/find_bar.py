@@ -98,8 +98,14 @@ class FindBar(QWidget):
 
     def setMatchCounter(self, current, total):
         if total == 0:
-            self.counterLabel.setText("")
-            self._set_invalid(bool(self.queryEdit.text()))
+            # Distinguish an active-but-fruitless search from an idle bar:
+            # a search is active whenever there's query text OR a colour
+            # filter. Active + zero matches shows "0/0" and tints the field
+            # invalid (covering colour-only searches, where the text box is
+            # empty); an idle bar stays blank and untinted.
+            active = bool(self.query() or self.color())
+            self.counterLabel.setText("0/0" if active else "")
+            self._set_invalid(active)
         else:
             self.counterLabel.setText(f"{current}/{total}")
             self._set_invalid(False)

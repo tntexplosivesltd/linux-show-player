@@ -589,7 +589,12 @@ class ListLayout(CueLayout):
             cue = self.cue_at(index)
             if cue is not None:
                 match_ids.add(cue.id)
-        self._view.listView.set_search_dim(match_ids, active)
+        # Only dim when there is at least one match to highlight: a query
+        # (or colour) that matches nothing must leave the list fully
+        # readable rather than greying every row.
+        self._view.listView.set_search_dim(
+            match_ids, active and bool(self._find_matches)
+        )
 
         if self._find_matches:
             self._find_pos = first_match_at_or_after(
@@ -780,7 +785,12 @@ class ListLayout(CueLayout):
         cue.next.connect(self.__cue_next, Connection.QtQueued)
         # Keep an open find coherent when a cue's searchable properties
         # are edited in place (e.g. renamed/recoloured via the inspector).
-        cue.property_changed.connect(self._on_cue_prop_changed_find)
+        # Queued so the recompute (which touches Qt widgets) always runs on
+        # the main thread, even if a property is mutated from a worker
+        # thread (e.g. an OSC/MIDI controller renaming a cue).
+        cue.property_changed.connect(
+            self._on_cue_prop_changed_find, Connection.QtQueued
+        )
 
     def __cue_next(self, cue):
         try:
