@@ -86,9 +86,11 @@ def start_lisp(layout="ListLayout", log_level="warning", log_file=None):
     global _lisp_proc, PORT
 
     session_path = _create_empty_session(layout)
-    repo_root = os.path.dirname(_PORTFILE) \
-        if not os.environ.get(portfile.PORTFILE_ENV) \
-        else os.getcwd()
+    # cwd must be this worktree's repo root so the child loads this
+    # worktree's `lisp` (poetry venvs are shared by Python version).
+    # Derive it from helpers' own location — not from _PORTFILE (which
+    # may be an out-of-repo env override) or the caller's cwd.
+    repo_root = portfile.find_repo_root(__file__) or os.getcwd()
 
     if log_file is None:
         stderr = subprocess.DEVNULL

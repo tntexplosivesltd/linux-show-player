@@ -73,7 +73,7 @@ def read_port(path):
     try:
         with open(path) as f:
             return int(f.read().strip())
-    except (FileNotFoundError, ValueError):
+    except (OSError, ValueError):
         return None
 
 

@@ -48,7 +48,15 @@ def _find_repo_root(anchor):
 
 
 def _read_portfile(anchor):
-    """Return the port from env/repo-root discovery file, or None."""
+    """Return the port from env/repo-root discovery file, or None.
+
+    Mirrors ``lisp.plugins.test_harness.portfile`` deliberately to keep
+    this CLI stdlib-only. One intentional difference: with no repo root
+    found this returns None (→ DEFAULT_PORT), whereas the server-side
+    ``resolve_portfile_path`` falls back to cwd — a reader has no port to
+    guess, so defaulting is correct here. Both anchors live inside the
+    repo in practice, so this branch is unreachable in normal use.
+    """
     override = os.environ.get(PORTFILE_ENV)
     if override:
         path = override
@@ -60,7 +68,7 @@ def _read_portfile(anchor):
     try:
         with open(path) as f:
             return int(f.read().strip())
-    except (FileNotFoundError, ValueError):
+    except (OSError, ValueError):
         return None
 
 
