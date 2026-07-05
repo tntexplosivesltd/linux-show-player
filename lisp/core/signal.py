@@ -192,7 +192,12 @@ class Signal:
         :type mode: Connection
         :raise ValueError: if mode not in Connection enum
         """
-        if mode not in Connection:
+        # NB: use isinstance rather than `mode not in Connection`. On
+        # Python < 3.12, `x in <Enum>` raises TypeError when x is not an
+        # Enum member instead of returning False, which would mask the
+        # documented ValueError. isinstance behaves identically across
+        # 3.10-3.13+.
+        if not isinstance(mode, Connection):
             raise ValueError(f"invalid mode value: {mode}")
 
         with self.__lock:

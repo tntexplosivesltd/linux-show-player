@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [master, develop]
+  pull_request:
+
+# Cancel superseded runs on the same branch/PR to save runner minutes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Ruff
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Ruff is a standalone binary with no dependency on the app's native
+      # stack, so we install just it — no need for the full Poetry env here.
+      # pyproject pins `ruff = "*"`, so there is no locked version to match.
+      - name: Install Ruff
+        run: pipx install ruff
+
+      - name: Ruff lint
+        run: ruff check --output-format=github lisp/
+
+      - name: Ruff format check
+        run: ruff format --check lisp/
+        continue-on-error: true
+
+  test:
+    name: Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+
+    env:
+      # PyQt5 needs a platform plugin; "offscreen" avoids a full X server.
+      QT_QPA_PLATFORM: offscreen
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Native build/runtime dependencies. PyGObject 3.52 builds against
+      # girepository-2.0 + cairo; pyalsa/python-rtmidi/JACK-Client compile
+      # against ALSA/JACK headers; GStreamer + GL/xkb libs back the runtime.
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            libgirepository-2.0-dev \
+            libcairo2-dev \
+            libglib2.0-dev \
+            libasound2-dev \
+            libjack-jackd2-dev \
+            libgl1 \
+            libegl1 \
+            libxkbcommon0 \
+            libdbus-1-3 \
+            libfontconfig1 \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good \
+            gir1.2-gstreamer-1.0 \
+            gir1.2-gst-plugins-base-1.0
+
+      - name: Install Poetry
+        run: pipx install poetry
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: poetry
+
+      # Install exactly what poetry.lock pins (reproducible). The docs group
+      # is optional and intentionally excluded.
+      - name: Install dependencies
+        run: poetry install --no-interaction --with dev
+
+      - name: Run tests
+        run: poetry run pytest --cov=lisp --cov-report=term-missing --cov-report=xml -v
