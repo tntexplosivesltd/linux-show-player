@@ -18,9 +18,12 @@ exploratory — decide scope before starting.
   inside the cue list (cf. QLab memo cues).
 - Timeline view — alternative layout showing cues against time, in
   addition to the list and cart layouts.
-- Cue search / filter bar — locate by name, `cue_number`, or colour
-  in shows with hundreds of cues without scrolling. Builds on the
-  existing `cue_number` infrastructure.
+- Cue find & jump bar — SHIPPED (list layout). Ctrl+F opens a bar
+  that locates cues by name or `cue_number`, optionally narrowed by
+  colour, dims non-matches, and jumps the standby cursor through
+  matches with wrap-around. A filter/hide mode (collapse the list to
+  matches only) and saved searches / regex remain possible future
+  extensions.
 - Goto-cue action / hotkey — jump the standby cursor to a numbered
   or labelled cue (e.g. `Q12.5`). The static `cue_number` is already
   assigned and collision-checked; this just needs UI + a layout
