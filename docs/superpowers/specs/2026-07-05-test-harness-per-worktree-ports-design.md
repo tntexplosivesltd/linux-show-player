@@ -64,6 +64,20 @@ the port — they read it. The port *value* is always the file's
 contents, so the two sides can never disagree on the number even after
 a fallback.
 
+- **Format: a single line holding the integer port** (e.g. `41287`).
+  Host is *not* stored — the harness binds localhost-only, so the port
+  is the only thing that varies per worktree. Keeping it a bare integer
+  lets `client.py`'s reader stay `int(path.read_text().strip())` with
+  no JSON parsing (preserving its zero-LiSP-dep contract). If host ever
+  becomes configurable, that's a cheap format bump later.
+- **Atomic write.** The E2E helper polls for the file *while* the server
+  may be writing it, so a naive write risks a torn read. The server
+  writes to a temp file and `os.replace()`s it into place (atomic
+  rename on POSIX): a reader sees the old file, no file, or the complete
+  new one — never a partial.
+- **Validating read.** Readers parse with a guarded `int(...)`; a
+  stale/garbage/half-migrated file degrades to "port not found yet"
+  rather than crashing.
 - Default path: `<repo_root>/.lisp-test-harness-port`, where
   `repo_root` is found by walking up from the writer/reader's own
   `__file__` for `pyproject.toml`.
