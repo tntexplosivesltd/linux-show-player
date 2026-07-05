@@ -39,12 +39,14 @@ sys.path.insert(
     ),
 )
 from client import send_request  # noqa: E402
+import portfile  # noqa: E402  (from the test_harness dir on sys.path)
 
 # ── Connection config ──────────────────────────────────────────
 
 HOST = "127.0.0.1"
-PORT = 8070
+PORT = None  # resolved at startup from the discovery file
 STARTUP_TIMEOUT = 15
+_PORTFILE = portfile.resolve_portfile_path(__file__)
 
 # ── Audio config ───────────────────────────────────────────────
 
@@ -81,15 +83,23 @@ def start_lisp(layout="ListLayout", log_level="warning", log_file=None):
     given path.  Use this when a test needs to assert on log
     lines.  ``None`` (default) discards output as before.
     """
-    global _lisp_proc
+    global _lisp_proc, PORT
 
     session_path = _create_empty_session(layout)
+    repo_root = os.path.dirname(_PORTFILE) \
+        if not os.environ.get(portfile.PORTFILE_ENV) \
+        else os.getcwd()
 
     if log_file is None:
         stderr = subprocess.DEVNULL
     else:
         # Truncate and open for append-only by the child.
         stderr = open(log_file, "w")
+
+    portfile.remove_portfile(_PORTFILE)  # clear any stale file
+
+    child_env = dict(os.environ)
+    child_env[portfile.PORTFILE_ENV] = _PORTFILE
 
     _lisp_proc = subprocess.Popen(
         [
@@ -99,31 +109,31 @@ def start_lisp(layout="ListLayout", log_level="warning", log_file=None):
         ],
         stdout=subprocess.DEVNULL,
         stderr=stderr,
+        cwd=repo_root,
+        env=child_env,
     )
     atexit.register(stop_lisp)
 
     deadline = time.time() + STARTUP_TIMEOUT
     while time.time() < deadline:
-        try:
-            resp = send_request(HOST, PORT, "ping")
-            if "result" in resp:
-                # Wait for session to fully load before proceeding.
-                # session.info returns {"has_session": False} before
-                # the session file loads — the harness registers
-                # before the session is attached, so a successful
-                # JSON-RPC result is not enough.
-                try:
-                    info = send_request(
-                        HOST, PORT, "session.info"
-                    )
+        found = portfile.read_port(_PORTFILE)
+        if found is not None:
+            PORT = found
+            try:
+                resp = send_request(HOST, PORT, "ping")
+                if "result" in resp:
+                    # Wait for session to fully load before proceeding.
+                    # session.info returns {"has_session": False}
+                    # before the session file loads — the harness
+                    # registers before the session is attached, so a
+                    # successful JSON-RPC result is not enough.
+                    info = send_request(HOST, PORT, "session.info")
                     result = info.get("result") or {}
                     if result.get("has_session"):
                         os.unlink(session_path)
                         return
-                except Exception:
-                    pass
-        except (ConnectionRefusedError, ConnectionError, OSError):
-            pass
+            except (ConnectionRefusedError, ConnectionError, OSError):
+                pass
         time.sleep(0.5)
 
     stop_lisp()
@@ -370,7 +380,7 @@ def parse_args(description):
     """Parse --host, --port, --no-launch args. Return args namespace."""
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--host", default=HOST)
-    parser.add_argument("--port", type=int, default=PORT)
+    parser.add_argument("--port", type=int, default=None)
     parser.add_argument(
         "--no-launch", action="store_true",
         help="Don't start/stop LiSP (attach to existing)",
@@ -400,7 +410,18 @@ def run_suite(
 
     args = parse_args(description)
     HOST = args.host
-    PORT = args.port
+    if args.port is not None:
+        PORT = args.port
+    elif args.no_launch:
+        # Attaching to an already-running LiSP: read its portfile.
+        PORT = portfile.read_port(_PORTFILE)
+        if PORT is None:
+            print(
+                "ERROR: --no-launch but no discovery file at "
+                f"{_PORTFILE}; is LiSP running in this worktree?",
+                file=sys.stderr,
+            )
+            sys.exit(2)
 
     print("Generating test audio files...")
     create_test_audio()
