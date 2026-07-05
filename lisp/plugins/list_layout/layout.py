@@ -115,6 +115,10 @@ class ListLayout(CueLayout):
         # Find & jump bar
         self._find_matches = []
         self._find_pos = -1
+        # After a recompute the pointer is *positioned* on the first
+        # match at/after standby but has not yet jumped there. The first
+        # next/prev lands on that match; only subsequent presses advance.
+        self._find_landed = False
         self._view.findBar.queryChanged.connect(self._on_find_input_changed)
         self._view.findBar.colorChanged.connect(self._on_find_input_changed)
         self._view.findBar.findNext.connect(self._find_next)
@@ -585,6 +589,8 @@ class ListLayout(CueLayout):
             )
         else:
             self._find_pos = -1
+        # Pointer is positioned but no jump has happened yet.
+        self._find_landed = False
         self._update_find_counter()
 
     def _update_find_counter(self):
@@ -601,9 +607,17 @@ class ListLayout(CueLayout):
     def _find_step(self, step):
         if not self._find_matches:
             return
-        self._find_pos = advance_match(
-            self._find_pos, len(self._find_matches), step
-        )
+        count = len(self._find_matches)
+        if not self._find_landed:
+            # First jump after a recompute: land on the already-seeded
+            # position (the first match at/after standby) for "next";
+            # for "prev" step one back so we land on the match before
+            # the cursor. Only later presses advance from there.
+            self._find_landed = True
+            if step < 0:
+                self._find_pos = advance_match(self._find_pos, count, step)
+        else:
+            self._find_pos = advance_match(self._find_pos, count, step)
         index = self._find_matches[self._find_pos]
         self._expand_find_ancestors(index)
         self.set_standby_index(index)
@@ -641,6 +655,7 @@ class ListLayout(CueLayout):
         self._view.listView.set_search_dim(set(), False)
         self._find_matches = []
         self._find_pos = -1
+        self._find_landed = False
         self._view.listView.setFocus()
 
     def _context_invoked(self, event):
