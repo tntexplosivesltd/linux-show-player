@@ -15,6 +15,7 @@
 # You should have received a copy of the GNU General Public License
 # along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
+import errno
 import json
 import logging
 import socket
@@ -41,16 +42,26 @@ class JsonRpcServer(socketserver.TCPServer):
         try:
             self.server_bind()
             self.server_activate()
-        except OSError:
-            # Desired port is busy (e.g. another worktree's LiSP).
+        except OSError as e:
+            # Only fall back when the desired port is genuinely taken
+            # (e.g. another worktree's LiSP). Other errors — EACCES on a
+            # privileged port, EADDRNOTAVAIL on a bad host — are real
+            # misconfigurations and must surface, not be masked.
+            if e.errno != errno.EADDRINUSE:
+                raise
             # Fall back to an OS-assigned free port.
             self.server_close()
             self.socket = socket.socket(
                 self.address_family, self.socket_type
             )
             self.server_address = (host, 0)
-            self.server_bind()
-            self.server_activate()
+            try:
+                self.server_bind()
+                self.server_activate()
+            except BaseException:
+                # Don't leak the replacement socket if the rebind fails.
+                self.server_close()
+                raise
 
 
 class JsonRpcHandler(socketserver.StreamRequestHandler):

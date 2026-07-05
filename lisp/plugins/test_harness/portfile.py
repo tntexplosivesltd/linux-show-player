@@ -52,34 +52,45 @@ def resolve_portfile_path(anchor):
     return os.path.join(root, PORTFILE_NAME)
 
 
+def _unlink_quiet(path):
+    """Unlink ``path``, ignoring absence."""
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+
+
 def write_port(path, port):
     """Atomically write ``port`` (temp file + os.replace)."""
     directory = os.path.dirname(path) or "."
     fd, tmp = tempfile.mkstemp(dir=directory, prefix=".portfile-")
     try:
-        with os.fdopen(fd, "w") as f:
+        f = os.fdopen(fd, "w")
+    except BaseException:
+        # os.fdopen only takes ownership of fd once it returns; if it
+        # raised, close the raw descriptor ourselves to avoid a leak.
+        os.close(fd)
+        _unlink_quiet(tmp)
+        raise
+    try:
+        with f:
             f.write(f"{port}\n")
         os.replace(tmp, path)
     except BaseException:
-        try:
-            os.unlink(tmp)
-        except FileNotFoundError:
-            pass
+        _unlink_quiet(tmp)
         raise
 
 
 def read_port(path):
-    """Return the int port, or None if missing/empty/unparseable."""
+    """Return the int port, or None if missing/empty/out of range."""
     try:
         with open(path) as f:
-            return int(f.read().strip())
+            port = int(f.read().strip())
     except (OSError, ValueError):
         return None
+    return port if 0 <= port <= 65535 else None
 
 
 def remove_portfile(path):
     """Unlink the discovery file, ignoring absence."""
-    try:
-        os.unlink(path)
-    except FileNotFoundError:
-        pass
+    _unlink_quiet(path)

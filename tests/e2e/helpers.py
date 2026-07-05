@@ -134,7 +134,15 @@ def start_lisp(layout="ListLayout", log_level="warning", log_file=None):
                     if result.get("has_session"):
                         os.unlink(session_path)
                         return
-            except (ConnectionRefusedError, ConnectionError, OSError):
+            except (
+                ConnectionRefusedError,
+                ConnectionError,
+                OSError,
+                json.JSONDecodeError,
+            ):
+                # All transient during the startup window: connection
+                # refused/reset before the socket is up, or a partial
+                # response that doesn't parse yet. Retry to the deadline.
                 pass
         time.sleep(0.5)
 
@@ -390,6 +398,38 @@ def parse_args(description):
     return parser.parse_args()
 
 
+def resolve_suite_port(args):
+    """Resolve the port for ``run_suite`` from parsed args.
+
+    Attach mode (``--no-launch``): an explicit ``--port`` wins,
+    otherwise the discovery file is read (exit 2 if absent).
+
+    Launch mode: the child LiSP auto-selects its own port and
+    ``start_lisp`` reads it back from the discovery file, so an
+    explicit ``--port`` cannot take effect on this path — warn and
+    ignore it, returning ``None`` so ``start_lisp`` does the resolving.
+    """
+    if args.no_launch:
+        if args.port is not None:
+            return args.port
+        found = portfile.read_port(_PORTFILE)
+        if found is None:
+            print(
+                "ERROR: --no-launch but no discovery file at "
+                f"{_PORTFILE}; is LiSP running in this worktree?",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        return found
+    if args.port is not None:
+        print(
+            "WARNING: --port is ignored when launching LiSP; the child "
+            "auto-selects its port. Pass --port only with --no-launch.",
+            file=sys.stderr,
+        )
+    return None
+
+
 def run_suite(
     description,
     test_fn,
@@ -412,18 +452,9 @@ def run_suite(
 
     args = parse_args(description)
     HOST = args.host
-    if args.port is not None:
-        PORT = args.port
-    elif args.no_launch:
-        # Attaching to an already-running LiSP: read its portfile.
-        PORT = portfile.read_port(_PORTFILE)
-        if PORT is None:
-            print(
-                "ERROR: --no-launch but no discovery file at "
-                f"{_PORTFILE}; is LiSP running in this worktree?",
-                file=sys.stderr,
-            )
-            sys.exit(2)
+    resolved = resolve_suite_port(args)
+    if resolved is not None:
+        PORT = resolved
 
     print("Generating test audio files...")
     create_test_audio()

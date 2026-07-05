@@ -67,9 +67,10 @@ def _read_portfile(anchor):
         path = os.path.join(root, PORTFILE_NAME)
     try:
         with open(path) as f:
-            return int(f.read().strip())
+            port = int(f.read().strip())
     except (OSError, ValueError):
         return None
+    return port if 0 <= port <= 65535 else None
 
 
 def resolve_port(explicit, anchor=__file__):
