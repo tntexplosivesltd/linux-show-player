@@ -569,6 +569,14 @@ class ListLayout(CueLayout):
         if self._view.findBar.isVisible():
             self._recompute_find()
 
+    def _on_cue_prop_changed_find(self, _cue, property_name, _value):
+        # Only the properties a search can match on matter; ignore the
+        # flood of other property_changed emissions (position, volume…).
+        if property_name in ("name", "cue_number", "color_name") and (
+            self._view.findBar.isVisible()
+        ):
+            self._recompute_find()
+
     def _recompute_find(self):
         bar = self._view.findBar
         text = bar.query()
@@ -770,6 +778,9 @@ class ListLayout(CueLayout):
 
     def __cue_added(self, cue):
         cue.next.connect(self.__cue_next, Connection.QtQueued)
+        # Keep an open find coherent when a cue's searchable properties
+        # are edited in place (e.g. renamed/recoloured via the inspector).
+        cue.property_changed.connect(self._on_cue_prop_changed_find)
 
     def __cue_next(self, cue):
         try:
