@@ -542,6 +542,47 @@ def register_all(dispatcher, app, signal_manager):
         invoke_on_main_thread(do_select)
         return {"ok": True}
 
+    def handle_layout_find(params):
+        """Set the find query/colour and return matches + standby."""
+        _require_session()
+        _require_list_layout()
+        text = params.get("text", "")
+        color = params.get("color", "")
+
+        def do_find():
+            layout = app.layout
+            bar = layout._view.findBar
+            bar.show()
+            bar.queryEdit.setText(text)
+            bar.colorPalette.setColor(color)
+            layout._recompute_find()
+            return {
+                "matches": list(layout._find_matches),
+                "standby_index": layout.standby_index(),
+            }
+
+        return invoke_on_main_thread(do_find)
+
+    def handle_layout_find_jump(params):
+        """Jump to the next (step>=0) or previous (step<0) match."""
+        _require_session()
+        _require_list_layout()
+        step = params.get("step", 1)
+
+        def do_jump():
+            layout = app.layout
+            if step < 0:
+                layout._find_prev()
+            else:
+                layout._find_next()
+            return {
+                "standby_index": layout.standby_index(),
+                "match_position": layout._find_pos,
+                "match_count": len(layout._find_matches),
+            }
+
+        return invoke_on_main_thread(do_jump)
+
     def handle_layout_move_cue(params):
         """Move a cue from one index to another."""
         _require_session()
@@ -1370,6 +1411,8 @@ def register_all(dispatcher, app, signal_manager):
         "layout.selected_cues": handle_layout_selected_cues,
         "layout.selection_mode": handle_layout_selection_mode,
         "layout.select_cues": handle_layout_select_cues,
+        "layout.find": handle_layout_find,
+        "layout.find_jump": handle_layout_find_jump,
         "layout.move_cue": handle_layout_move_cue,
         "layout.context_action": handle_layout_context_action,
         "layout.stop_all": handle_layout_stop_all,

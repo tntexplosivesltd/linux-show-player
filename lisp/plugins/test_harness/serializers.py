@@ -61,6 +61,7 @@ def serialize_cue_brief(cue):
         "_type_": cue._type_,
         "index": cue.index,
         "cue_number": cue.cue_number,
+        "color_name": cue.color_name,
         "state": cue.state,
         "state_name": state_name(cue.state),
     }
