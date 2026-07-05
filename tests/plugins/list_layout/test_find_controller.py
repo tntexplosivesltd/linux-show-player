@@ -152,6 +152,31 @@ class TestZeroMatch:
         layout._find_prev()
         assert layout.standby_index() == 1
 
+    def test_zero_match_leaves_list_undimmed(self, mock_app):
+        # A query that matches nothing must NOT grey out the whole list:
+        # dimming only makes sense when there are matches to highlight.
+        cues = [_cue(mock_app, "alpha"), _cue(mock_app, "beta")]
+        layout = _make(mock_app, cues, text="zzz")
+        layout._recompute_find()
+        layout._view.listView.set_search_dim.assert_called_once_with(
+            set(), False
+        )
+
+
+class TestMatchDimming:
+    def test_matches_dim_non_matching_rows(self, mock_app):
+        # With at least one match, dimming activates and the match's id
+        # is in the highlighted set (so non-matches are the ones dimmed).
+        cues = [_cue(mock_app, "red one"), _cue(mock_app, "blue")]
+        layout = _make(mock_app, cues, text="red")
+        layout._recompute_find()
+        match_ids, active = (
+            layout._view.listView.set_search_dim.call_args.args
+        )
+        assert active is True
+        assert cues[0].id in match_ids
+        assert cues[1].id not in match_ids
+
 
 class TestAncestorExpansion:
     def test_jump_expands_collapsed_ancestor_group(self, mock_app):
@@ -175,6 +200,108 @@ class TestAncestorExpansion:
         # The ancestor group's tree item must have been expanded.
         layout._view.listView.cueItemAt.assert_any_call(group.index)
         item.setExpanded.assert_called_with(True)
+
+    def test_jump_expands_nested_ancestor_groups(self, mock_app):
+        # grandparent group -> child group -> leaf cue: BOTH ancestor
+        # levels must be expanded so the jumped-to row is visible.
+        grandparent = _cue(mock_app, "Act 1")
+        child_group = _cue(mock_app, "Scene 2", group_id=grandparent.id)
+        leaf = _cue(mock_app, "Thunder", group_id=child_group.id)
+        cues = [grandparent, child_group, leaf]  # indices 0, 1, 2
+
+        groups = {
+            grandparent.id: grandparent,
+            child_group.id: child_group,
+        }
+        mock_app.cue_model = MagicMock()
+        mock_app.cue_model.get.side_effect = lambda gid: groups.get(gid)
+
+        layout = _make(mock_app, cues, text="thunder", standby=0)
+        gp_item, cg_item = MagicMock(), MagicMock()
+        items = {grandparent.index: gp_item, child_group.index: cg_item}
+        layout._view.listView.cueItemAt.side_effect = (
+            lambda idx: items.get(idx)
+        )
+
+        layout._recompute_find()
+        assert layout._find_matches == [2]
+
+        layout._find_next()  # jump to the deeply-nested leaf
+        gp_item.setExpanded.assert_called_with(True)
+        cg_item.setExpanded.assert_called_with(True)
+
+
+class TestFindClose:
+    def test_close_clears_dimming_and_resets_state(self, mock_app):
+        cues = [_cue(mock_app, "red"), _cue(mock_app, "blue")]
+        layout = _make(mock_app, cues, text="red")
+        layout._recompute_find()
+        assert layout._find_matches == [0]
+
+        layout._close_find()
+        layout._view.findBar.hide.assert_called_once()
+        # Dimming must be cleared so the list renders normally again.
+        layout._view.listView.set_search_dim.assert_called_with(set(), False)
+        assert layout._find_matches == []
+        assert layout._find_pos == -1
+        assert layout._find_landed is False
+        layout._view.listView.setFocus.assert_called_once()
+
+    def test_toggle_closes_when_visible(self, mock_app):
+        layout = _make(mock_app, [_cue(mock_app, "a")], visible=True)
+        layout._close_find = MagicMock()  # spy
+        layout._toggle_find()
+        layout._close_find.assert_called_once()
+
+    def test_toggle_opens_and_recomputes_when_hidden(self, mock_app):
+        layout = _make(mock_app, [_cue(mock_app, "a")], visible=False)
+        layout._recompute_find = MagicMock()  # spy
+        layout._toggle_find()
+        layout._view.findBar.show.assert_called_once()
+        layout._view.findBar.focusQuery.assert_called_once()
+        layout._recompute_find.assert_called_once()
+
+
+class TestModelChangeRecompute:
+    def test_add_while_open_updates_matches(self, mock_app):
+        c0 = _cue(mock_app, "red one")
+        layout = _make(mock_app, [c0], text="red", visible=True)
+        layout._recompute_find()
+        assert layout._find_matches == [0]
+
+        # A new matching cue is appended to the model while the bar is open.
+        c1 = _cue(mock_app, "red two")
+        layout._list_model._cues.append(c1)
+        c1.index = 1
+        layout._on_model_changed_find()
+        assert layout._find_matches == [0, 1]
+
+    def test_remove_pointed_at_match_recomputes_without_error(self, mock_app):
+        c0 = _cue(mock_app, "red one")
+        c1 = _cue(mock_app, "red two")
+        layout = _make(
+            mock_app, [c0, c1], text="red", standby=0, visible=True
+        )
+        layout._recompute_find()
+        layout._find_next()  # land on a match
+        pointed = layout._find_matches[layout._find_pos]
+
+        # Remove the currently pointed-at cue, then reindex the model.
+        del layout._list_model._cues[pointed]
+        for i, c in enumerate(layout._list_model._cues):
+            c.index = i
+
+        layout._on_model_changed_find()  # must not raise
+        # One "red" cue remains, now at index 0.
+        assert layout._find_matches == [0]
+
+    def test_no_recompute_when_bar_hidden(self, mock_app):
+        layout = _make(
+            mock_app, [_cue(mock_app, "red")], text="red", visible=False
+        )
+        layout._recompute_find = MagicMock()  # spy
+        layout._on_model_changed_find()
+        layout._recompute_find.assert_not_called()
 
 
 class TestPropertyChangeRecompute:

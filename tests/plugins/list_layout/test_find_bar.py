@@ -68,3 +68,21 @@ def test_counter_zero_without_query_is_blank(bar):
     bar.setMatchCounter(0, 0)
     assert bar.counterLabel.text() == ""
     assert bar.queryEdit.styleSheet() == ""
+
+
+def test_counter_zero_with_query_shows_zero_over_zero(bar):
+    # An active search matching nothing shows "0/0" so the operator can
+    # tell it apart from an idle bar (which stays blank).
+    bar.queryEdit.setText("nope")
+    bar.setMatchCounter(0, 0)
+    assert bar.counterLabel.text() == "0/0"
+
+
+def test_counter_zero_with_color_only_marks_invalid(bar):
+    # Colour-only searches with no matches must also signal "no match":
+    # invalid tint and "0/0", even though the text field is empty.
+    bar.queryEdit.setText("")
+    bar.colorPalette.setColor("Red")
+    bar.setMatchCounter(0, 0)
+    assert bar.queryEdit.styleSheet() != ""
+    assert bar.counterLabel.text() == "0/0"

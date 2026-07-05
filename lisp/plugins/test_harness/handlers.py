@@ -548,6 +548,10 @@ def register_all(dispatcher, app, signal_manager):
         _require_list_layout()
         text = params.get("text", "")
         color = params.get("color", "")
+        if not isinstance(text, str):
+            raise AppError("text must be a string")
+        if not isinstance(color, str):
+            raise AppError("color must be a string")
 
         def do_find():
             layout = app.layout
@@ -568,6 +572,10 @@ def register_all(dispatcher, app, signal_manager):
         _require_session()
         _require_list_layout()
         step = params.get("step", 1)
+        # Reject bool too: bool is a subclass of int, but a JSON `true`
+        # for a step is a client mistake, not a valid direction.
+        if not isinstance(step, int) or isinstance(step, bool):
+            raise AppError("step must be an integer")
 
         def do_jump():
             layout = app.layout
