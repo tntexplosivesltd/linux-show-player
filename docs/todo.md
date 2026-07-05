@@ -73,25 +73,42 @@ exploratory — decide scope before starting.
 
 ## Video pipeline
 
-- **First-cue-transition flicker in playlist groups.** The first
-  hand-off between two videos in a playlist `GroupCue` shows a brief
-  flicker; subsequent transitions in the same playlist (e.g. loop
-  iteration 2+) flow cleanly. Suggests something is one-time-cold on
-  the very first inter-cue boundary — candidates to investigate:
-  GL context first-init on the new `glimagesink`, X11/compositor
-  warm-up of the singleton render widget, or an asymmetry in the
-  100ms deferred-clear window when the first cue's pipeline hasn't
-  been reused before. The deferred-clear / deferred-show fix in
-  `docs/bugs/2026-05-23-video-sink-stale-frame-bleedthrough.md` is
-  the right architecture; this is a residual on top of it.
-- Verify image-stop-then-video transition under the new deferred-
-  clear behaviour. Original failure mode: image cue's 5-second
-  duration expires, projection should clear to black after ~100ms,
-  next video plays cleanly with no bleed of the image's last frame.
-  The fix targets this case but it needs an operator-level pass.
+- **Cross-sink GL surface wedge / flicker on inter-cue transition** —
+  full investigation in
+  `docs/bugs/2026-05-29-video-cross-sink-gl-surface-wedge.md`. Both
+  symptoms stem from the per-cue `glimagesink` design: every cue owns a
+  sink and they all share the one projection XID, so each transition is
+  a hand-off of the single surface.
+  - **Symptom A (image→video hard wedge) — FIXED (2026-06-20).** Option
+    3: image-fronted pipelines go to `NULL` on EOS (releasing the GL
+    surface) instead of parking in READY. Video pipelines still park in
+    READY (loop warm-restart preserved). Pixel-verified;
+    `tests/e2e/test_video_wedge_e2e.py`.
+  - **Symptom B (video→video first-transition flicker) — root cause
+    CONFIRMED, deliberately NOT fixed.** It is a ~2-frame (~33ms) black
+    at the FIRST transition (each `glimagesink`'s first present to the
+    shared surface is black; A's is masked by startup, B's shows).
+    Refuted the deferred-clear and pre-arm theories. The only fix that
+    works (warm each sink at load) can't be silent — it flashes each
+    cue's first frame at load — so it was rejected as throwaway. B is
+    deferred to the video-mixing rearchitecture below, which removes the
+    whole hand-off class. Characterization test:
+    `tests/e2e/test_video_transition_flicker_e2e.py` (reports the
+    flicker, exits 0; flip its commented assertion when the mixer lands).
+  - `[FLICKER-DIAG]` diagnostic logging is kept in-tree at DEBUG level
+    (useful for the mixer work).
 - Multiple video cues at once / video mixing — compose more than one
-  video stream onto the projection output (compositor element, alpha,
-  positioning).
+  video stream onto the projection output via a `glvideomixer`/
+  `compositor` element (per-pad alpha, positioning, zorder) feeding ONE
+  persistent output sink, instead of today's per-cue sink sharing the
+  projection XID. **This is also the proper fix for the whole cross-sink
+  wedge/flicker class above:** a single always-warm sink has no hand-off,
+  so Symptom B disappears and Symptom A's `NULL`-on-EOS hack becomes
+  unnecessary. It also retires the `VideoExclusiveManager` (overlap
+  becomes the feature) and most of the deferred-clear / first-buffer-probe
+  machinery. Design notes: cues become mixer request-pads (start = add
+  pad, stop = remove, crossfade = animate pad alpha); the operator
+  monitor window needs a `tee` off the mixer output or a second mixer.
 - GPU acceleration — survey what the current pipeline does on the CPU
   vs. GPU and where vaapi / nvdec / glcolorconvert would help.
 - Test second screen — exercise the projection-window-on-output-2

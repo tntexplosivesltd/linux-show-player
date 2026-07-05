@@ -68,6 +68,10 @@ class VideoSink(GstMediaElement):
     # its GL context before a different sink takes over.
     _previous_sink = None
 
+    # [FLICKER-DIAG] Monotonic counter so each VideoSink instance has
+    # a short id we can correlate across log lines. Diagnostic only.
+    _next_iid = 0
+
     # Class-level coordination for the deferred clear.  stop() sets
     # _pending_clear = True and schedules a delayed clear; any
     # VideoSink.play() within the defer window resets the flag,
@@ -78,6 +82,14 @@ class VideoSink(GstMediaElement):
 
     def __init__(self, pipeline):
         super().__init__(pipeline)
+
+        # [FLICKER-DIAG] Assign a short instance id for log correlation.
+        VideoSink._next_iid += 1
+        self._iid = VideoSink._next_iid
+        logger.debug(
+            "[FLICKER-DIAG] VideoSink.__init__ iid=%d pipeline=%s",
+            self._iid, pipeline.get_name(),
+        )
 
         # Audio path: same as the existing AutoSink
         self.audio_sink = Gst.ElementFactory.make(
@@ -152,6 +164,30 @@ class VideoSink(GstMediaElement):
         )
 
     def play(self):
+        # [FLICKER-DIAG] Capture state at entry. We want to see
+        # whether the previous sink is still alive and what
+        # pipeline state we're starting from.
+        prev = VideoSink._previous_sink
+        _, entry_state, _ = self.pipeline.get_state(0)
+        if prev is not None and prev is not self:
+            try:
+                _, prev_state, _ = prev.pipeline.get_state(0)
+                prev_state_name = prev_state.value_nick
+            except Exception:
+                prev_state_name = "<unavailable>"
+            logger.debug(
+                "[FLICKER-DIAG] VideoSink.play ENTER iid=%d "
+                "state=%s prev_iid=%d prev_state=%s",
+                self._iid, entry_state.value_nick,
+                prev._iid, prev_state_name,
+            )
+        else:
+            logger.debug(
+                "[FLICKER-DIAG] VideoSink.play ENTER iid=%d "
+                "state=%s prev=None",
+                self._iid, entry_state.value_nick,
+            )
+
         # Cancel any clear that an immediately-preceding stop() may
         # have scheduled.  In a playlist GroupCue the auto-advance
         # path runs us within one Qt tick of the previous child's
@@ -167,6 +203,10 @@ class VideoSink(GstMediaElement):
         # preroll cycle of added latency.
         _, state, _ = self.pipeline.get_state(0)
         if state == Gst.State.PAUSED:
+            logger.debug(
+                "[FLICKER-DIAG] VideoSink.play FAST-PATH iid=%d",
+                self._iid,
+            )
             self._show_displays()
             return
 
@@ -179,12 +219,21 @@ class VideoSink(GstMediaElement):
             # No pad, or a probe is somehow already installed —
             # fall back to immediate show.  Should not happen in
             # normal flow.
+            logger.debug(
+                "[FLICKER-DIAG] VideoSink.play FALLBACK-SHOW iid=%d "
+                "pad=%s existing_probe=%s",
+                self._iid, pad, self._first_buffer_probe,
+            )
             self._show_displays()
             return
 
         self._first_buffer_probe = pad.add_probe(
             Gst.PadProbeType.BUFFER,
             self.__on_first_buffer,
+        )
+        logger.debug(
+            "[FLICKER-DIAG] VideoSink.play PROBE-INSTALLED iid=%d",
+            self._iid,
         )
 
     def _show_displays(self):
@@ -194,6 +243,10 @@ class VideoSink(GstMediaElement):
         _first_buffer_signal once the new sink's first buffer has
         passed proj_queue.src.
         """
+        logger.debug(
+            "[FLICKER-DIAG] VideoSink._show_displays iid=%d",
+            self._iid,
+        )
         window = self._video_window()
         if window is not None:
             window.show_display()
@@ -209,6 +262,10 @@ class VideoSink(GstMediaElement):
         for the Qt show() call.  Returning REMOVE uninstalls the
         probe atomically; subsequent buffers must not re-trigger.
         """
+        logger.debug(
+            "[FLICKER-DIAG] VideoSink.__on_first_buffer iid=%d",
+            self._iid,
+        )
         self._first_buffer_probe = None
         self._first_buffer_signal.emit()
         return Gst.PadProbeReturn.REMOVE
@@ -234,6 +291,15 @@ class VideoSink(GstMediaElement):
                 pass
 
     def stop(self):
+        _, entry_state, _ = self.pipeline.get_state(0)
+        logger.debug(
+            "[FLICKER-DIAG] VideoSink.stop ENTER iid=%d state=%s "
+            "prev_is_self=%s pending_probe=%s",
+            self._iid, entry_state.value_nick,
+            VideoSink._previous_sink is self,
+            self._first_buffer_probe is not None,
+        )
+
         self._consume_first_buffer_probe()
 
         if VideoSink._previous_sink is self:
@@ -359,6 +425,10 @@ class VideoSink(GstMediaElement):
             self._audio_removed = True
 
     def dispose(self):
+        logger.debug(
+            "[FLICKER-DIAG] VideoSink.dispose iid=%d", self._iid,
+        )
+
         # Clean up before tearing the pipeline down — proj_queue may
         # be removed below, after which the probe id can't be revoked.
         self._consume_first_buffer_probe()
@@ -427,7 +497,9 @@ class VideoSink(GstMediaElement):
             if handle != 0:
                 message.src.set_window_handle(handle)
                 logger.debug(
-                    "VideoSink: set window handle %d on %s",
-                    handle,
-                    message.src.get_name(),
+                    "[FLICKER-DIAG] VideoSink set_window_handle "
+                    "iid=%d handle=%d src=%s target=%s",
+                    self._iid, handle, message.src.get_name(),
+                    "projection" if window is self._video_window()
+                    else "monitor",
                 )
