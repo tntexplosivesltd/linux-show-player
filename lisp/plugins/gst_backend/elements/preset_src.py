@@ -30,7 +30,7 @@ class PresetSrc(GstSrcElement):
     Name = QT_TRANSLATE_NOOP("MediaElementName", "Preset Input")
 
     FREQ = 8000
-    SILENCE = lambda t: 0
+    SILENCE = lambda t: 0  # noqa: E731  (parallel to the PRESETS lambdas)
     PRESETS = {
         "The 42 melody": lambda t: t * (42 & t >> 10),
         "Mission": lambda t: (~t >> 2)
