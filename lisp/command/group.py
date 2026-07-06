@@ -94,8 +94,14 @@ class UngroupCuesCommand(Command):
         # in principle be retargeted between cycles by some
         # other command, so we freeze the value we promote to.
         self._parent_group_id = group_cue.group_id
+        # Snapshot of the grandparent's `children` list, taken in
+        # do() so undo() can restore it verbatim. Stays None when the
+        # parent is top-level ("") and thus has no children list.
+        self._parent_children_before = None
 
     def do(self):
+        from lisp.plugins.action_cues.group_cue import GroupCue
+
         # Promote children to the dissolved group's parent. For
         # top-level groups this is "" (legacy behavior); for
         # nested inner groups this is the grandparent's id.
@@ -103,6 +109,26 @@ class UngroupCuesCommand(Command):
             cue = self._app.cue_model.get(child_id)
             if cue is not None:
                 cue.group_id = self._parent_group_id
+
+        # Splice the promoted children into the grandparent GroupCue's
+        # explicit `children` list, replacing the dissolved group's id
+        # (preserving order). GroupCue playback iterates this list
+        # (`_resolve_children`) rather than scanning for group_id
+        # back-links, so without this the promoted children silently
+        # stop being playable via the grandparent (bug C1). Top-level
+        # parents ("") have no children list, hence the isinstance
+        # guard.
+        parent = self._app.cue_model.get(self._parent_group_id)
+        if isinstance(parent, GroupCue) and (
+            self._group_cue.id in parent.children
+        ):
+            self._parent_children_before = list(parent.children)
+            index = parent.children.index(self._group_cue.id)
+            parent.children = (
+                parent.children[:index]
+                + list(self._child_ids)
+                + parent.children[index + 1:]
+            )
 
         # Remove the group cue
         self._app.cue_model.remove(self._group_cue)
@@ -122,6 +148,16 @@ class UngroupCuesCommand(Command):
             cue = self._app.cue_model.get(child_id)
             if cue is not None:
                 cue.group_id = self._group_cue.id
+
+        # Restore the grandparent's `children` list to its pre-do()
+        # state (undo the splice), so the dissolved group id is back
+        # in place and its children are removed from the grandparent.
+        if self._parent_children_before is not None:
+            from lisp.plugins.action_cues.group_cue import GroupCue
+
+            parent = self._app.cue_model.get(self._parent_group_id)
+            if isinstance(parent, GroupCue):
+                parent.children = list(self._parent_children_before)
 
     def redo(self):
         self.do()

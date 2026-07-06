@@ -61,9 +61,39 @@ class CueModel(Model):
         # remove, so this loop no-ops on that path; it's the
         # safety net for direct cue_model.remove callers.
         parent_group_id = cue.group_id
+        promoted = []
         for other in self.__cues.values():
             if other.group_id == cue_id:
                 other.group_id = parent_group_id
+                promoted.append(other.id)
+
+        # Splice the promoted ids into the grandparent GroupCue's
+        # explicit `children` list, replacing the removed group's id
+        # (preserving order). Playback resolution iterates that list
+        # — not the group_id back-links — so without this the
+        # promoted children are silently dropped from the grandparent
+        # (bug C1). Guarded by isinstance since a top-level ("")
+        # parent has no children list. UngroupCuesCommand pre-splices
+        # before calling remove, so this no-ops on that path (the
+        # removed id is already gone from the parent's list); it's the
+        # safety net for direct cue_model.remove callers.
+        from lisp.plugins.action_cues.group_cue import GroupCue
+
+        parent = self.__cues.get(parent_group_id)
+        if isinstance(parent, GroupCue) and cue_id in parent.children:
+            # Order the promoted ids by the removed group's own
+            # children list where possible, appending any stragglers
+            # (cues that pointed at the group but weren't listed).
+            removed_children = list(getattr(cue, "children", []))
+            ordered = [c for c in removed_children if c in promoted]
+            ordered += [c for c in promoted if c not in ordered]
+
+            index = parent.children.index(cue_id)
+            parent.children = (
+                parent.children[:index]
+                + ordered
+                + parent.children[index + 1:]
+            )
 
         return cue
 

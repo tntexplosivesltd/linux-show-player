@@ -232,6 +232,107 @@ class TestUngroupCuesCommand:
         )
         assert mock_app.cue_model.get(inner_group.id) is None
 
+    def test_ungroup_nested_splices_grandparent_children_list(
+        self, mock_app, mock_list_model
+    ):
+        """The real playback invariant behind C1.
+
+        GroupCue playback iterates the group's own explicit
+        `children` id list (`_resolve_children`), NOT the set of
+        cues whose `group_id` points at it. So promoting a child
+        by only rewriting `group_id` (what the other tests assert)
+        silently drops it from the grandparent's playback: the dead
+        inner-group id stays in `children` and the promoted id never
+        gets added. Assert the list itself and `_resolve_children`.
+        """
+        from lisp.command.group import (
+            GroupCuesCommand,
+            UngroupCuesCommand,
+        )
+        from lisp.plugins.action_cues.group_cue import GroupCue
+
+        # Real GroupCue objects so `children` / `_resolve_children`
+        # behave like production, not MagicMock stand-ins.
+        mock_app.cue_factory.create_cue.side_effect = [
+            GroupCue(mock_app, id="inner_grp3"),
+            GroupCue(mock_app, id="outer_grp3"),
+        ]
+
+        leaf = _make_cue("leaf3", index=2)
+        mock_app.cue_model.add(leaf)
+
+        inner_cmd = GroupCuesCommand(
+            mock_app, mock_list_model, [leaf]
+        )
+        inner_cmd.do()
+        inner_group = inner_cmd._group_cue
+
+        outer_cmd = GroupCuesCommand(
+            mock_app, mock_list_model, [inner_group]
+        )
+        outer_cmd.do()
+        outer_group = outer_cmd._group_cue
+
+        assert outer_group.children == [inner_group.id]
+
+        ungroup_cmd = UngroupCuesCommand(
+            mock_app, mock_list_model, inner_group
+        )
+        ungroup_cmd.do()
+
+        # Pre-existing proxy invariant.
+        assert leaf.group_id == outer_group.id
+        # C1: the grandparent's explicit children list is spliced —
+        # the dead inner id is replaced by the promoted child id.
+        assert outer_group.children == [leaf.id]
+        # ...so playback resolution actually finds the promoted child.
+        assert [
+            c.id for c in outer_group._resolve_children()
+        ] == [leaf.id]
+
+    def test_ungroup_nested_undo_restores_grandparent_children(
+        self, mock_app, mock_list_model
+    ):
+        """Undo must put the dissolved group back into the
+        grandparent's `children` list exactly where it was, so a
+        redo/undo cycle is lossless for playback resolution too."""
+        from lisp.command.group import (
+            GroupCuesCommand,
+            UngroupCuesCommand,
+        )
+        from lisp.plugins.action_cues.group_cue import GroupCue
+
+        mock_app.cue_factory.create_cue.side_effect = [
+            GroupCue(mock_app, id="inner_grp4"),
+            GroupCue(mock_app, id="outer_grp4"),
+        ]
+
+        leaf = _make_cue("leaf4", index=2)
+        mock_app.cue_model.add(leaf)
+
+        inner_cmd = GroupCuesCommand(
+            mock_app, mock_list_model, [leaf]
+        )
+        inner_cmd.do()
+        inner_group = inner_cmd._group_cue
+
+        outer_cmd = GroupCuesCommand(
+            mock_app, mock_list_model, [inner_group]
+        )
+        outer_cmd.do()
+        outer_group = outer_cmd._group_cue
+
+        ungroup_cmd = UngroupCuesCommand(
+            mock_app, mock_list_model, inner_group
+        )
+        ungroup_cmd.do()
+        ungroup_cmd.undo()
+
+        assert outer_group.children == [inner_group.id]
+        assert [
+            c.id for c in outer_group._resolve_children()
+        ] == [inner_group.id]
+
     def test_ungroup_nested_undo_restores_chain(
         self, mock_app, mock_list_model
     ):

@@ -135,6 +135,61 @@ class TestCueModelPop:
 
         assert child.group_id == ""
 
+    def test_pop_splices_promoted_children_into_grandparent_list(self):
+        """C1 safety-net: a direct cue_model.remove of an inner group
+        must not only retarget the promoted children's group_id but
+        also splice them into the grandparent GroupCue's explicit
+        `children` list, replacing the dead inner id. GroupCue
+        playback iterates that list (`_resolve_children`), so without
+        the splice the promoted children silently stop being playable.
+        """
+        from lisp.plugins.action_cues.group_cue import GroupCue
+
+        model = CueModel()
+        app = MagicMock()
+        app.cue_model = model
+
+        outer = GroupCue(app, id="outer")
+        inner = GroupCue(app, id="inner")
+        leaf = _make_cue("leaf", group_id="inner")
+
+        inner.group_id = "outer"
+        inner.children = ["leaf"]
+        outer.children = ["inner"]
+
+        model.add(outer)
+        model.add(inner)
+        model.add(leaf)
+
+        model.pop("inner")
+
+        # Pre-existing group_id promotion.
+        assert leaf.group_id == "outer"
+        # C1: grandparent's children list is spliced, dead id gone.
+        assert outer.children == ["leaf"]
+        assert [c.id for c in outer._resolve_children()] == ["leaf"]
+
+    def test_pop_top_level_group_does_not_crash_on_empty_parent(self):
+        """Removing a top-level group ("" parent) has no grandparent
+        GroupCue to splice — the isinstance guard must no-op cleanly
+        rather than trying to index into a non-existent children list.
+        """
+        from lisp.plugins.action_cues.group_cue import GroupCue
+
+        model = CueModel()
+        app = MagicMock()
+        app.cue_model = model
+
+        group = GroupCue(app, id="g")
+        child = _make_cue("c", group_id="g")
+        group.children = ["c"]
+        model.add(group)
+        model.add(child)
+
+        model.pop("g")
+
+        assert child.group_id == ""
+
     def test_pop_leaf_does_not_touch_unrelated_cues(self):
         """Popping a non-group cue must not mutate any other cue's
         group_id, since no cue points at the removed leaf."""

@@ -19,7 +19,7 @@ _Also: 8 finding(s) already fixed on master, 1 not-applicable — see appendix._
 
 ## Critical (1)
 
-- [ ] **C1** · `lisp/command/group.py:98` · _7c6c27d3 (qa)_ — **Promoted grandchildren are never added to the grandparent GroupCue's `children` list, so they silently stop being playable**  
+- [x] **C1** · `lisp/command/group.py:98` · _7c6c27d3 (qa)_ — **Promoted grandchildren are never added to the grandparent GroupCue's `children` list, so they silently stop being playable** — fixed: splice promoted child ids into the grandparent GroupCue's explicit `children` list (replacing the dissolved/removed group id, order-preserving) in both `UngroupCuesCommand.do()`/`undo()` and `CueModel.pop()`'s safety-net, guarded by `isinstance(parent, GroupCue)`. Regression tests assert `outer.children` + `_resolve_children()` (not just `group_id`); E2E now starts the grandparent post-ungroup and asserts promoted children fire `started`.  
   GroupCue playback (`__start__`, `_resolve_children`, `_resolve_playable_children` in lisp/plugins/action_cues/group_cue.py) iterates the GroupCue's own `children` Property (an explicit list of child ids) and looks each id up in cue_model — it does NOT scan the model for cues whose `group_id` equals the group's id. `Un…  
   _Fix:_ When promoting children to a grandparent, also splice the grandparent GroupCue's `children` list: replace the dissolved/removed group's id with the promoted child ids (preserving relative order), in both `UngroupCuesCommand.do()`/`undo()` and `CueModel.pop()`'s safety-net loop (guard with `isinstance(parent, GroupCue)` since a plain '' top-level parent has no children list to touch). Add tests th…
 

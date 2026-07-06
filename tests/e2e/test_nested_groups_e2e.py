@@ -149,6 +149,22 @@ def run_tests(t):
     )
     t.check("inner_group dissolved by ungroup", not inner_present)
 
+    # 7b. The real C1 invariant: promoted children must still be
+    # playable via the grandparent. Starting outer_group must fire
+    # B.started and C.started — GroupCue playback iterates outer's
+    # own `children` list, so if the promoted ids weren't spliced in
+    # (only group_id rewritten), B/C would silently never start.
+    with cue_signal(B, "started") as sub_b2, \
+         cue_signal(C, "started") as sub_c2:
+        call("cue.start", {"id": outer_group["id"]})
+        ev_b2 = wait_for_signal(sub_b2, timeout=5)
+        ev_c2 = wait_for_signal(sub_c2, timeout=5)
+        t.check("B playable via outer after ungroup", ev_b2 is not None)
+        t.check("C playable via outer after ungroup", ev_c2 is not None)
+
+    stop_all()
+    time.sleep(0.5)
+
     # 8. Restore the nested structure from the on-disk save and
     # exercise the delete path: cue.remove on the inner group
     # must leave B and C inside outer_group (Phase 3 fix).
