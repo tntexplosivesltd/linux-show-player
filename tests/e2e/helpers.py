@@ -187,6 +187,21 @@ def wait_state(cue_id, target, timeout=5.0):
     return False
 
 
+def wait_current_time(cue_id, min_ms=1, timeout=5.0):
+    """Poll until a cue's current_time exceeds min_ms, or timeout.
+
+    Robust replacement for ``sleep(N); assert current_time > X``: the
+    GStreamer position clock can lag wall-clock during pipeline startup
+    on a slow, software-rendered runner, so a fixed sleep is fragile.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if call("cue.state", {"id": cue_id})["current_time"] > min_ms:
+            return True
+        time.sleep(0.1)
+    return False
+
+
 # ── Signal-based waits (preferred over polling) ──────────────
 
 def subscribe_cue(cue_id, signal_name):
