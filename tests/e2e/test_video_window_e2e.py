@@ -82,6 +82,16 @@ def wait_state(cue_id, target, timeout=5.0):
     return False
 
 
+def wait_current_time(cue_id, min_ms=1, timeout=5.0):
+    """Poll until a cue's current_time exceeds min_ms, or timeout."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if call("cue.state", {"id": cue_id})["current_time"] > min_ms:
+            return True
+        time.sleep(0.1)
+    return False
+
+
 def window_state():
     return call("video_window.state")
 
@@ -357,11 +367,10 @@ def test_6_image_then_video_sequence():
     check("6f: Render visible during video",
           ws["render_visible"] is True)
 
-    # Verify video is actually progressing (not stuck)
-    time.sleep(1)
-    state = call("cue.state", {"id": video_id})
-    check("6g: Video current_time > 500ms",
-          state["current_time"] > 500)
+    # Verify video is actually progressing (poll — the video clock may
+    # lag wall-clock under llvmpipe).
+    check("6g: Video current_time advances past 500ms",
+          wait_current_time(video_id, min_ms=500, timeout=5))
 
     call("cue.stop", {"id": video_id})
     wait_state(video_id, "Stop", timeout=3)
