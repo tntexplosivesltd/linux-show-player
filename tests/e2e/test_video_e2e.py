@@ -28,6 +28,7 @@ from helpers import (
     run_suite,
     signal_sub,
     stop_all,
+    wait_current_time,
     wait_for_signal,
     wait_state,
 )
@@ -170,11 +171,10 @@ def test_1_video_cue_lifecycle(t):
         started = wait_for_signal(sub, timeout=5)
     t.check("1c: cue.started signal fired", started is not None)
 
-    # Verify current_time advances (inherent wait — time must pass)
-    time.sleep(0.5)
-    state = call("cue.state", {"id": cue_id})
-    t.check("1d: current_time > 0",
-            state["current_time"] > 0)
+    # Verify current_time advances (poll — the clock may lag wall-clock
+    # during pipeline startup on a slow, software-rendered runner).
+    t.check("1d: current_time advances",
+            wait_current_time(cue_id, min_ms=1, timeout=5))
 
     # Pause
     with cue_signal(cue_id, "paused") as sub:
@@ -219,10 +219,8 @@ def test_2_audio_backward_compat(t):
         started = wait_for_signal(sub, timeout=5)
     t.check("2b: Audio cue reaches Running", started is not None)
 
-    time.sleep(0.5)
-    state = call("cue.state", {"id": cue_id})
-    t.check("2c: Audio current_time > 0",
-            state["current_time"] > 0)
+    t.check("2c: Audio current_time advances",
+            wait_current_time(cue_id, min_ms=1, timeout=5))
 
     with cue_signal(cue_id, "stopped") as sub:
         call("cue.stop", {"id": cue_id})
@@ -332,10 +330,8 @@ def test_5_stop_and_replay(t):
         t.check("5d: Second play reaches Running",
                 wait_for_signal(sub, timeout=5) is not None)
 
-    time.sleep(0.5)
-    state = call("cue.state", {"id": cue_id})
     t.check("5e: current_time advancing on replay",
-            state["current_time"] > 0)
+            wait_current_time(cue_id, min_ms=1, timeout=5))
 
     with cue_signal(cue_id, "stopped") as sub:
         call("cue.stop", {"id": cue_id})
@@ -465,13 +461,8 @@ def test_8_video_only_no_audio(t):
         )
 
         # Pre-fix symptom was current_time stuck at 0.
-        time.sleep(0.8)
-        state = call("cue.state", {"id": cue_id})
-        t.check(
-            f"8c: current_time advances past 0 "
-            f"(got {state['current_time']} ms)",
-            state["current_time"] > 0,
-        )
+        t.check("8c: current_time advances past 0",
+                wait_current_time(cue_id, min_ms=1, timeout=5))
 
         t.check(
             "8d: cue.end fires on natural EOS",
