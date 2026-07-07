@@ -80,11 +80,16 @@ def start_lisp():
     deadline = time.time() + STARTUP_TIMEOUT
     while time.time() < deadline:
         try:
+            # The harness answers `ping` before the session is attached;
+            # wait for has_session so the cue.add calls that follow don't
+            # race and hit "No active session".
             resp = send_request(HOST, PORT, "ping")
             if "result" in resp:
-                # Clean up temp file after load
-                os.unlink(session_path)
-                return
+                info = send_request(HOST, PORT, "session.info")
+                if (info.get("result") or {}).get("has_session"):
+                    # Clean up temp file after load
+                    os.unlink(session_path)
+                    return
         except (ConnectionRefusedError, ConnectionError, OSError):
             pass
         time.sleep(0.5)
