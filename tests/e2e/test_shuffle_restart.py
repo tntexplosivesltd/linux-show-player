@@ -61,7 +61,7 @@ def check(name, condition):
         print(f"  FAIL: {name}")
 
 
-def launch(session_file):
+def launch(session_file, expected_cues=None):
     global _proc
     _proc = subprocess.Popen(
         [sys.executable, "-m", "lisp.main", "-l", "warning",
@@ -74,9 +74,23 @@ def launch(session_file):
     deadline = time.time() + STARTUP_TIMEOUT
     while time.time() < deadline:
         try:
+            # The harness answers `ping` before the session is attached,
+            # so waiting on ping alone races: a `cue.add` issued right
+            # after can hit "No active session".  Wait for has_session.
             resp = send_request(HOST, PORT, "ping")
             if "result" in resp:
-                return
+                info = send_request(HOST, PORT, "session.info")
+                if (info.get("result") or {}).get("has_session"):
+                    # has_session flips True at the *start* of a -f load,
+                    # before cues are inserted; when reloading a populated
+                    # session, also wait for the cues to finish loading.
+                    if expected_cues:
+                        _deadline = time.time() + 10.0
+                        while time.time() < _deadline:
+                            if len(call("cue.list")) >= expected_cues:
+                                break
+                            time.sleep(0.1)
+                    return
         except (ConnectionRefusedError, ConnectionError, OSError):
             pass
         time.sleep(0.5)
@@ -178,11 +192,11 @@ def main():
     check("2: On-disk children match saved_order",
           on_disk_group["children"] == saved_order)
 
-    # 7. Relaunch LiSP with the saved session
+    # 7. Relaunch LiSP with the saved session (group + 6 children = 7
+    #    cues); wait for them all to load rather than a fixed sleep.
     print("Relaunching LiSP with saved session...")
-    launch(SESSION_PATH)
+    launch(SESSION_PATH, expected_cues=7)
     print("LiSP ready.")
-    time.sleep(1.0)
 
     # 8. Grab the group again and check its children order
     cues = call("cue.list")

@@ -80,11 +80,16 @@ def start_lisp():
     deadline = time.time() + STARTUP_TIMEOUT
     while time.time() < deadline:
         try:
+            # The harness answers `ping` before the session is attached;
+            # wait for has_session so the cue.add calls that follow don't
+            # race and hit "No active session".
             resp = send_request(HOST, PORT, "ping")
             if "result" in resp:
-                # Clean up temp file after load
-                os.unlink(session_path)
-                return
+                info = send_request(HOST, PORT, "session.info")
+                if (info.get("result") or {}).get("has_session"):
+                    # Clean up temp file after load
+                    os.unlink(session_path)
+                    return
         except (ConnectionRefusedError, ConnectionError, OSError):
             pass
         time.sleep(0.5)
@@ -140,6 +145,16 @@ def wait_state(cue_id, target, timeout=5.0):
         if cue_state(cue_id) == target:
             return True
         time.sleep(0.2)
+    return False
+
+
+def _wait_prop(cue_id, prop, value, timeout=5.0):
+    """Poll until a cue property equals value, or timeout."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if cue_prop(cue_id, prop) == value:
+            return True
+        time.sleep(0.1)
     return False
 
 
@@ -352,11 +367,11 @@ def test_4_playlist_mode(ids, group_id):
     check("4a: Group running",
           cue_state(group_id) == "Running")
 
-    # 4b: Advances when first child ends
+    # 4b: Advances when first child ends (poll for the transition
+    # rather than sampling once after a fixed sleep).
     call("cue.seek", {"id": A, "position": 7500})
-    time.sleep(1)
-    check("4b: A ended", cue_state(A) == "Stop")
-    check("4b: B running", cue_state(B) == "Running")
+    check("4b: A ended", wait_state(A, "Stop", timeout=5))
+    check("4b: B running", wait_state(B, "Running", timeout=5))
     check("4b: Group still running",
           cue_state(group_id) == "Running")
 
@@ -379,15 +394,18 @@ def test_5_playlist_loop(ids, group_id):
     })
 
     call("cue.execute", {"id": group_id, "action": "Start"})
-    time.sleep(0.3)
+    wait_state(A, "Running", timeout=5)
 
-    for cid in [A, B, C]:
-        call("cue.seek", {"id": cid, "position": 7500})
-        time.sleep(0.8)
+    # Drive each child to its end; the playlist advances to the next,
+    # then loops back to A after C ends. Wait for each transition.
+    call("cue.seek", {"id": A, "position": 7500})
+    wait_state(B, "Running", timeout=5)
+    call("cue.seek", {"id": B, "position": 7500})
+    wait_state(C, "Running", timeout=5)
+    call("cue.seek", {"id": C, "position": 7500})
 
-    time.sleep(0.5)
     check("5a: Looped back to A",
-          cue_state(A) == "Running")
+          wait_state(A, "Running", timeout=6))
     check("5a: Group still running",
           cue_state(group_id) == "Running")
 
@@ -412,27 +430,31 @@ def test_6_crossfade(ids, group_id):
     })
 
     call("cue.execute", {"id": group_id, "action": "Start"})
-    time.sleep(0.3)
+    wait_state(A, "Running", timeout=5)
     call("cue.seek", {"id": A, "position": 5500})
-    time.sleep(1.5)
     check("6a: Crossfade started B",
-          cue_state(B) == "Running")
+          wait_state(B, "Running", timeout=5))
 
     # 6b: After crossfade completes, fadein_duration should be
     # restored to its original value (0) via the one-shot
     # started signal handler — not permanently modified.
-    time.sleep(2.5)
+    # The fade cannot finish before its 2.0s duration, so wait that
+    # out first (a poll alone could read the pre-crossfade 0 and
+    # false-pass), then poll for the restore so a slow runner can't
+    # miss it.
+    time.sleep(2.0)
+    _wait_prop(B, "fadein_duration", 0, timeout=5)
     check("6b: B fadein_duration restored after crossfade",
           cue_prop(B, "fadein_duration") == 0)
     check("6b: B still running after fade-in",
           cue_state(B) == "Running")
 
     call("cue.seek", {"id": B, "position": 5500})
-    time.sleep(1.5)
     check("6c: Crossfade started C",
-          cue_state(C) == "Running")
+          wait_state(C, "Running", timeout=5))
 
-    time.sleep(2.5)
+    time.sleep(2.0)
+    _wait_prop(C, "fadein_duration", 0, timeout=5)
     check("6c: C fadein_duration restored after crossfade",
           cue_prop(C, "fadein_duration") == 0)
     check("6c: C still running after fade-in",
@@ -639,14 +661,13 @@ def test_10_edge_cases(ids, group_id):
     })
 
     call("cue.execute", {"id": new_group, "action": "Start"})
-    time.sleep(0.3)
+    wait_state(A, "Running", timeout=5)
     call("cue.seek", {"id": A, "position": 7500})
-    time.sleep(0.8)
+    wait_state(B, "Running", timeout=5)
     call("cue.seek", {"id": B, "position": 7500})
-    time.sleep(1.5)
 
     check("10d: TriggerAfterEnd chains to D",
-          cue_state(D) == "Running")
+          wait_state(D, "Running", timeout=5))
 
     stop_all()
 

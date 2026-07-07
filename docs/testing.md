@@ -153,6 +153,37 @@ pgrep -fa lisp.main
 # kill the stale one
 ```
 
+### Running the whole E2E suite
+
+`tests/e2e/run_all.py` runs every `tests/e2e/test_*.py` serially (the tests
+share a fixed harness port, so they cannot run in parallel), with a per-test
+timeout and one retry:
+
+    poetry run python tests/e2e/run_all.py
+    poetry run python tests/e2e/run_all.py --list          # discover only
+    poetry run python tests/e2e/run_all.py --filter 'test_video*.py'
+
+### CI
+
+The `e2e` job in `.github/workflows/ci.yml` runs the full suite on every PR
+as a **required** gate. It provisions a headless media stack — Xvfb + Mesa
+software GL (llvmpipe) + a PulseAudio null-sink — and writes plugin config
+enabling the test harness, disabling MIDI (rtmidi segfaults with no ALSA
+sequencer), and enabling the Playback Monitor.
+
+The job is skipped for pull requests that only touch documentation
+(`**/*.md`, `docs/**`): a lightweight `changes` job gates it, so a docs-only
+PR still reports the required check green (a skipped job counts as success)
+without spending ~30 minutes on the serial suite.
+
+One test is a deliberate no-op in CI: `test_video_transition_flicker_e2e.py`
+self-skips (exit 0, no checks) unless `ffmpeg`, `xwininfo`, and
+`gst-launch-1.0` are all present. It works by screen-capturing frames from a
+GL-composited video projection window, which headless Xvfb + llvmpipe cannot
+produce — the tools are intentionally *not* installed in the `e2e` job, so it
+skips rather than failing the gate. Run it locally on a real display to
+exercise the flicker regression it characterises.
+
 ### The harness, conceptually
 
 ```
@@ -276,6 +307,25 @@ the wait completes the instant the event hits the buffer, and you avoid
 flaky timing assertions. **Subscribe BEFORE you trigger the action**
 (otherwise the event fires before the subscription exists and you wait
 forever).
+
+When no signal fits, poll the exact condition you're about to assert
+rather than `sleep(N)` then checking once — a fixed sleep is the main
+source of flakes on a slow, software-rendered CI runner. `helpers.py`
+provides two poll helpers for the common cases:
+
+```python
+# Wait until a cue's playback clock passes a threshold (replaces
+# `sleep(N); assert current_time > 0` — the GStreamer position clock
+# can lag wall-clock during pipeline startup under load).
+wait_current_time(cue_id, min_ms=1000, timeout=5)
+
+# After reloading a *populated* session file, wait for the cues to
+# finish loading. `session.info.has_session` flips True at the START of
+# the load (before any cue is inserted), so a `cue.list` issued the
+# instant has_session turns True can see an empty/partial model.
+if info.get("has_session"):
+    wait_cues_loaded(expected_cue_count)   # then read cue.list
+```
 
 `signals.wait_for` accepts an optional `match` dict to filter events by
 field — useful when many of the same signal type fire in a row.

@@ -187,6 +187,45 @@ def wait_state(cue_id, target, timeout=5.0):
     return False
 
 
+def wait_current_time(cue_id, min_ms=1, timeout=5.0):
+    """Poll until a cue's current_time exceeds min_ms, or timeout.
+
+    Robust replacement for ``sleep(N); assert current_time > X``: the
+    GStreamer position clock can lag wall-clock during pipeline startup
+    on a slow, software-rendered runner, so a fixed sleep is fragile.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if call("cue.state", {"id": cue_id})["current_time"] > min_ms:
+            return True
+        time.sleep(0.1)
+    return False
+
+
+def wait_cues_loaded(expected, timeout=10.0):
+    """Poll until the cue model holds at least ``expected`` cues.
+
+    A session opened via ``-f`` reports ``has_session=True`` at the very
+    *start* of the load: ``Application.__load_from_file`` creates the
+    Session (which flips has_session) *before* it reads a single cue from
+    the file, and only emits ``session_loaded`` after the whole
+    cue-insertion loop has finished.  Because the harness RPC server runs
+    on its own thread, a ``cue.list`` issued the moment ``has_session``
+    turns True can observe zero or partially-loaded cues — the classic
+    "waited for the wrong condition" race.  The load is synchronous, so
+    once the known cue count is present the list is complete and stable.
+
+    Use this after ``has_session`` when reloading a *populated* session
+    file.  Returns True on success, False on timeout.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if len(call("cue.list")) >= expected:
+            return True
+        time.sleep(0.1)
+    return False
+
+
 # ── Signal-based waits (preferred over polling) ──────────────
 
 def subscribe_cue(cue_id, signal_name):

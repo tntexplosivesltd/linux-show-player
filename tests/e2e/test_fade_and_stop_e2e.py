@@ -79,9 +79,11 @@ def test_2_fade_then_pause(t, ids):
 
     t.check("target received paused signal", ev is not None)
     t.check("target is Pause state", cue_state(target) == "Pause")
+    # Lower bound proves the 500ms fade actually ran (not skipped);
+    # upper bound is generous for a slow, loaded CI runner.
     t.check(
         f"pause fired after fade duration (got {elapsed * 1000:.0f}ms)",
-        0.4 < elapsed < 1.5,
+        0.4 < elapsed < 3.0,
     )
 
 

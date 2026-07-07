@@ -12,8 +12,47 @@ from tests.e2e.helpers import (
     clear_cues,
     run_suite,
     stop_all,
+    wait_current_time,
     wait_state,
 )
+
+
+def _wait_elapsed_ticks(timeout=5.0):
+    """Poll until the monitor's displayed elapsed passes 00:00.
+
+    ``playback_monitor.state["elapsed"]`` returns the live QLabel text,
+    refreshed by a ``Connection.QtQueued`` slot on the 33 ms CueTime
+    clock.  MM:SS truncation means it reads "00:00" for the first second
+    of playback, and under sustained load the Qt event loop can starve
+    the queued slot so the label stays stale even after the cue's clock
+    has passed 1 s.  Wait for a fresh, advanced tick rather than a fixed
+    sleep.  Returns the monitor state dict (last-seen on timeout).
+    """
+    deadline = time.time() + timeout
+    state = call("playback_monitor.state")
+    while time.time() < deadline:
+        state = call("playback_monitor.state")
+        if state.get("elapsed") not in (None, "00:00"):
+            return state
+        time.sleep(0.1)
+    return state
+
+
+def _wait_tracked(cue_id, timeout=5.0):
+    """Poll until the monitor is tracking ``cue_id``.
+
+    The monitor switches tracked cue via a queued signal handler that,
+    like the elapsed label, can lag under load.  Returns the monitor
+    state dict (last-seen on timeout).
+    """
+    deadline = time.time() + timeout
+    state = call("playback_monitor.state")
+    while time.time() < deadline:
+        state = call("playback_monitor.state")
+        if state.get("tracked_cue_id") == cue_id:
+            return state
+        time.sleep(0.1)
+    return state
 
 
 def run_tests(t):
@@ -63,10 +102,10 @@ def run_tests(t):
     call("cue.start", {"id": cue_id_a})
     wait_state(cue_id_a, "Running", timeout=5)
 
-    # Wait >1s so elapsed ticks past 00:00 (MM:SS truncates)
-    time.sleep(1.5)
-
-    state = call("playback_monitor.state")
+    # Poll until the monitor's displayed elapsed ticks past 00:00
+    # (MM:SS truncates; the QtQueued label can lag under load) rather
+    # than sleeping a fixed 1.5 s and hoping.
+    state = _wait_elapsed_ticks(timeout=5.0)
     t.check(
         "3: tracked cue id matches",
         state.get("tracked_cue_id") == cue_id_a,
@@ -87,9 +126,15 @@ def run_tests(t):
     # ── Test 3b: Remaining actually changes ───────────────────
     print("\n=== Test 3b: Remaining changes over time ===")
     remaining_1 = state.get("remaining")
-    time.sleep(2)
-    state2 = call("playback_monitor.state")
-    remaining_2 = state2.get("remaining")
+    # Poll until the monitor's remaining label changes instead of
+    # sleeping a fixed 2 s (the QtQueued label can lag under load).
+    deadline = time.time() + 5.0
+    remaining_2 = remaining_1
+    while time.time() < deadline:
+        remaining_2 = call("playback_monitor.state").get("remaining")
+        if remaining_2 != remaining_1:
+            break
+        time.sleep(0.1)
     t.check(
         "3b: remaining decreased",
         remaining_2 != remaining_1,
@@ -111,10 +156,18 @@ def run_tests(t):
     call("cue.start", {"id": cue_id_b})
     wait_state(cue_id_b, "Running", timeout=5)
 
-    # Wait >1s so elapsed ticks past 00:00
-    time.sleep(1.5)
-
-    state = call("playback_monitor.state")
+    # Test 5 asserts the monitor freezes a *non-zero* elapsed when B is
+    # stopped.  The monitor has no stopped-handler: it simply freezes at
+    # the last value the 33ms QtQueued tick wrote.  Two independent races
+    # can leave that "00:00", so guard against both, in order:
+    #   1. wait_current_time — B's own pipeline clock passes 1s, after
+    #      which NO tick can ever format B's position as "00:00".
+    #   2. _wait_elapsed_ticks — force a fresh non-zero tick into the
+    #      label (the display can otherwise be stuck on an old B tick or
+    #      cue A's leftover value) before Test 5 stops the cue.
+    state = _wait_tracked(cue_id_b, timeout=5.0)
+    wait_current_time(cue_id_b, min_ms=1000, timeout=5)
+    _wait_elapsed_ticks(timeout=5.0)
     t.check(
         "4: monitor switched to cue B",
         state.get("tracked_cue_id") == cue_id_b,

@@ -54,6 +54,7 @@ sys.path.insert(
 from client import send_request  # noqa: E402
 from helpers import (  # noqa: E402
     HOST, PORT, TestTracker, call, start_lisp, stop_lisp,
+    wait_cues_loaded,
 )
 
 MEDIA_DIR = "/tmp/lisp_test_flicker"
@@ -204,7 +205,9 @@ def measure_first_transition(t):
         if not loaded:
             return
 
-        time.sleep(1.0)
+        # has_session flips True before cues finish loading from the
+        # file; wait for the 2 videos + 1 GroupCue to be in the model.
+        wait_cues_loaded(3)
         cues = sorted(_rpc("cue.list"), key=lambda c: c["index"])
         group = next(
             (c for c in cues if c["_type_"] == "GroupCue"), None)

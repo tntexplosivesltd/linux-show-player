@@ -133,7 +133,7 @@ def run_tests(t):
         # Reload by stopping LiSP and starting against the saved file.
         stop_lisp()
         time.sleep(0.5)
-        start_lisp_with_file(save_path)
+        start_lisp_with_file(save_path, expected_cues=5)
 
         cues = call("cue.list")
         by_name = {c["name"]: c["cue_number"] for c in cues}
@@ -209,7 +209,7 @@ def run_tests(t):
 
         stop_lisp()
         time.sleep(0.5)
-        start_lisp_with_file(legacy_path)
+        start_lisp_with_file(legacy_path, expected_cues=3)
 
         cues = call("cue.list")
         by_name = {c["name"]: c["cue_number"] for c in cues}
@@ -226,9 +226,16 @@ def run_tests(t):
             os.unlink(legacy_path)
 
 
-def start_lisp_with_file(session_file):
+def start_lisp_with_file(session_file, expected_cues=None):
     """Start LiSP against a specific session file and wait for the
-    harness to be ready and the session to load."""
+    harness to be ready and the session to load.
+
+    ``has_session`` flips True at the *start* of the file load, before
+    any cue is inserted into the model (see ``helpers.wait_cues_loaded``).
+    Pass ``expected_cues`` when reloading a populated session so we also
+    wait for the cues to finish loading — otherwise ``cue.list`` can
+    return an empty/partial model right after ``has_session``.
+    """
     import subprocess
     import signal as _signal
     from tests.e2e import helpers
@@ -250,6 +257,8 @@ def start_lisp_with_file(session_file):
             if resp:
                 info = call("session.info")
                 if info.get("has_session"):
+                    if expected_cues:
+                        helpers.wait_cues_loaded(expected_cues)
                     return
         except Exception:
             pass

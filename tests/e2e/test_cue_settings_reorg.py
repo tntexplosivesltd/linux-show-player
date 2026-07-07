@@ -118,12 +118,17 @@ EXPECTED = {
 
 # ── LiSP restart helper ───────────────────────────────────────
 
-def _relaunch_lisp_with(session_path):
+def _relaunch_lisp_with(session_path, expected_cues=None):
     """Stop the running LiSP and relaunch against a saved session.
 
     Mirrors ``helpers.start_lisp`` but passes an existing .lsp path
     instead of synthesising an empty session. Waits for the harness
     to report ``has_session=True`` before returning.
+
+    ``has_session`` turns True at the *start* of the file load, before
+    cues are inserted into the model (see ``helpers.wait_cues_loaded``);
+    pass ``expected_cues`` so we also wait for the cues to finish loading
+    and avoid reading an empty/partial model.
     """
     # Stop the current process — reuse helpers' bookkeeping.
     _h.stop_lisp()
@@ -147,6 +152,8 @@ def _relaunch_lisp_with(session_path):
                 info = send_request(HOST, PORT, "session.info")
                 result = info.get("result") or {}
                 if result.get("has_session"):
+                    if expected_cues:
+                        _h.wait_cues_loaded(expected_cues)
                     return
         except (ConnectionRefusedError, ConnectionError, OSError):
             pass
@@ -236,7 +243,7 @@ def test_2_general_timing_roundtrip(t):
     call("session.save", {"path": SAVE_PATH})
     time.sleep(0.3)
 
-    _relaunch_lisp_with(SAVE_PATH)
+    _relaunch_lisp_with(SAVE_PATH, expected_cues=1)
 
     cues = call("cue.list")
     t.check("2: cue present after restart", len(cues) == 1)
@@ -284,7 +291,7 @@ def test_3_exclusive_and_icon_roundtrip(t):
     time.sleep(0.2)
 
     call("session.save", {"path": SAVE_PATH})
-    _relaunch_lisp_with(SAVE_PATH)
+    _relaunch_lisp_with(SAVE_PATH, expected_cues=1)
 
     cues = call("cue.list")
     t.check("3: cue present after restart", len(cues) == 1)
@@ -339,7 +346,7 @@ def test_4_groupcue_general_roundtrip(t):
     snapshot = {k: cue_prop(pre_id, k) for k in properties}
 
     call("session.save", {"path": SAVE_PATH})
-    _relaunch_lisp_with(SAVE_PATH)
+    _relaunch_lisp_with(SAVE_PATH, expected_cues=1)
 
     cues = call("cue.list")
     t.check("4: cue present after restart", len(cues) == 1)
