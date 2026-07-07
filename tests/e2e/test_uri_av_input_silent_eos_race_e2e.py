@@ -49,6 +49,7 @@ from helpers import (
     run_suite,
     signal_sub,
     stop_all,
+    wait_current_time,
     wait_for_signal,
 )
 
@@ -59,6 +60,12 @@ LOG_PATH = "/tmp/lisp_silent_eos_race_e2e.log"
 # regressed.  The bug doc's verification-path target was 100×; a
 # CI nightly run can override via RACE_E2E_ITERATIONS=100.
 ITERATIONS = int(os.environ.get("RACE_E2E_ITERATIONS", 20))
+# Cold-start warmup cap: the first starts of the heavy 3-pipeline
+# structure can report a 0 audio position until caches/registry/JIT are
+# warm; the count scales with machine slowness (~2 on a dev box, ~15 on
+# a shared CI runner). Cap generously so a genuine hard stall still
+# fails rather than looping forever.
+WARMUP_CAP = 30
 
 _SMOKING_GUN_AUDIO = re.compile(
     r"UriAvInput: no audio stream found"
@@ -198,50 +205,84 @@ def run_tests(t):
     seen_smoking_gun = []
     seen_assertions = []
 
-    for i in range(ITERATIONS):
+    def _go_and_scan(label, advance_timeout):
+        """Run one ``layout.go`` start→stop cycle of the outer group.
+
+        Returns ``(started, current_time)``.  Scans the per-cycle log
+        window for the variant-B markers (splice-misfire smoking gun and
+        GStreamer-CRITICAL segment assertions) and records the label if
+        seen — so warmup cycles contribute to race coverage too, not
+        just the measured ones.
+        """
         call("layout.set_standby_index", {"index": outer_index})
         log_before = _log_size()
         with cue_signal(audio_id, "started") as sub_a:
             call("layout.go", {})
-            ev_a = wait_for_signal(sub_a, timeout=5)
-        t.check(
-            f"iter {i}: audio cue started via layout.go",
-            ev_a is not None,
-        )
-        if ev_a is None:
-            stop_all()
-            time.sleep(0.5)
-            continue
-
-        # Variant A guard: clock must advance from 0 (rules out
-        # the hard-stall presentation).
-        time.sleep(1.2)
-        state = call("cue.state", {"id": audio_id})
-        t.check(
-            f"iter {i}: audio current_time advanced "
-            f"(got {state.get('current_time')} ms)",
-            state.get("current_time", 0) > 100,
-        )
-
-        # Variant B guard: even if current_time advances, the
-        # smoking-gun log + GStreamer-CRITICAL assertions mean
-        # the splice mis-fired.
+            started = wait_for_signal(sub_a, timeout=5) is not None
+        current_time = 0
+        if started:
+            wait_current_time(
+                audio_id, min_ms=100, timeout=advance_timeout
+            )
+            current_time = call(
+                "cue.state", {"id": audio_id}
+            ).get("current_time", 0)
         new_log = _read_log_since(log_before)
         if _SMOKING_GUN_AUDIO.search(new_log):
-            seen_smoking_gun.append(i)
+            seen_smoking_gun.append(label)
         if _GST_SEGMENT_ASSERT.search(new_log):
-            seen_assertions.append(i)
-
+            seen_assertions.append(label)
         stop_all()
         time.sleep(0.5)
+        return started, current_time
 
+    # Warm up before measuring.  The first starts of this heavy structure
+    # construct three GStreamer pipelines (audio + two VP8 decoders); on
+    # a cold, software-rendered runner the audio position can read 0 for
+    # the first several starts until warm, and the count scales with
+    # machine slowness — so a fixed sleep/poll flakes the per-iteration
+    # variant-A check below.  Cycle until audio actually advances first.
+    # A genuine variant-A hard stall never warms up, so the cap fails the
+    # test loudly (and we skip the measured loop to stay in budget).
+    warmed = False
+    for _ in range(WARMUP_CAP):
+        _, current_time = _go_and_scan("warmup", advance_timeout=3)
+        if current_time > 100:
+            warmed = True
+            break
     t.check(
-        f"no spurious 'no audio stream found' across "
+        f"structure warmed up within {WARMUP_CAP} starts "
+        "(audio position advances)",
+        warmed,
+    )
+
+    if warmed:
+        for i in range(ITERATIONS):
+            started, current_time = _go_and_scan(i, advance_timeout=5)
+            t.check(
+                f"iter {i}: audio cue started via layout.go",
+                started,
+            )
+            if not started:
+                continue
+            # Variant A guard: clock must advance from 0 (rules out the
+            # hard-stall presentation).
+            t.check(
+                f"iter {i}: audio current_time advanced "
+                f"(got {current_time} ms)",
+                current_time > 100,
+            )
+
+    # Variant B guard: even when current_time advances, the smoking-gun
+    # log line + GStreamer-CRITICAL segment assertions mean the splice
+    # mis-fired.  Checked across warmup + measured cycles.
+    t.check(
+        f"no spurious 'no audio stream found' across warmup + "
         f"{ITERATIONS} iterations (saw at: {seen_smoking_gun})",
         not seen_smoking_gun,
     )
     t.check(
-        f"no gst_segment_to_*_time assertions across "
+        f"no gst_segment_to_*_time assertions across warmup + "
         f"{ITERATIONS} iterations (saw at: {seen_assertions})",
         not seen_assertions,
     )

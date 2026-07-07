@@ -28,6 +28,7 @@ from helpers import (
     run_suite,
     signal_sub,
     stop_all,
+    wait_current_time,
     wait_for_signal,
     wait_state,
 )
@@ -140,11 +141,10 @@ def test_2_image_cue_manual_stop(t):
         t.check("2b: Cue reaches Running",
                 wait_for_signal(sub, timeout=5) is not None)
 
-    # Verify time is advancing
-    time.sleep(0.5)
-    state = call("cue.state", {"id": cue_id})
+    # Verify time is advancing (poll — the clock can lag wall-clock
+    # during startup on a cold, software-rendered CI runner).
     t.check("2c: current_time > 0",
-            state["current_time"] > 0)
+            wait_current_time(cue_id, min_ms=1, timeout=5))
 
     # Manual stop before duration
     with cue_signal(cue_id, "stopped") as sub:
@@ -332,10 +332,8 @@ def test_5_stop_and_replay(t):
         t.check("5d: Second play reaches Running",
                 wait_for_signal(sub, timeout=5) is not None)
 
-    time.sleep(0.5)
-    state = call("cue.state", {"id": cue_id})
     t.check("5e: current_time advancing on replay",
-            state["current_time"] > 0)
+            wait_current_time(cue_id, min_ms=1, timeout=5))
 
     with cue_signal(cue_id, "stopped") as sub:
         call("cue.stop", {"id": cue_id})
@@ -442,12 +440,13 @@ def test_8_pause_resume(t):
         t.check("8b: Cue reaches Running",
                 wait_for_signal(sub, timeout=5) is not None)
 
-    # Let it run ~1s so current_time is safely above 0
-    time.sleep(1)
+    # Let it run past 500ms so current_time is safely above 0 (poll —
+    # a fixed 1s can leave the clock at 0 on a cold CI runner).
+    advanced = wait_current_time(cue_id, min_ms=500, timeout=5)
     t_before = call("cue.state", {"id": cue_id})["current_time"]
     t.check("8c: current_time advanced before pause "
             f"(got {t_before} ms)",
-            t_before > 500)
+            advanced)
 
     with cue_signal(cue_id, "paused") as sub:
         call("cue.pause", {"id": cue_id})
@@ -469,12 +468,14 @@ def test_8_pause_resume(t):
         t.check("8f: cue.started fired on resume",
                 wait_for_signal(sub, timeout=3) is not None)
 
-    # Let it advance again
-    time.sleep(0.7)
+    # Let it advance again (poll past a clear delta from the paused
+    # position rather than sleeping a fixed 0.7s).
+    advanced_after = wait_current_time(
+        cue_id, min_ms=t_pause + 300, timeout=5)
     t_after = call("cue.state", {"id": cue_id})["current_time"]
     t.check("8g: current_time advances after resume "
             f"(got {t_after} ms > {t_pause} ms)",
-            t_after > t_pause + 300)
+            advanced_after)
 
     # Clean stop
     with cue_signal(cue_id, "stopped") as sub:

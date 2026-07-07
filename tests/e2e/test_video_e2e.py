@@ -364,15 +364,16 @@ def test_6_seek(t):
     # Seek to 5000ms (midway through a 10s clip)
     call("cue.seek", {"id": cue_id, "position": 5000})
 
-    # Allow time for the seek flush/preroll
-    time.sleep(0.8)
+    # Poll for the position to reach the seek target rather than a
+    # fixed preroll sleep — the flush/preroll can be slow on a cold,
+    # software-rendered CI runner. The pre-seek position (~500ms) is
+    # well below the 4500ms threshold, so this cannot pass on the old
+    # value; >= 4500 allows for clock drift and brief continued play.
+    advanced = wait_current_time(cue_id, min_ms=4500, timeout=5)
     state = call("cue.state", {"id": cue_id})
-    # current_time is reported in ms from the pipeline; after a
-    # seek to 5s, it should be >= 4500ms (allowing for clock drift
-    # and the brief continued playback after seek completes).
     t.check("6b: current_time advanced past seek target "
             f"(got {state['current_time']} ms)",
-            state["current_time"] >= 4500)
+            advanced)
 
     # Must still be running — seek should not stop the cue
     t.check("6c: Cue still Running after seek",
