@@ -92,3 +92,141 @@ jobs:
 
       - name: Run tests
         run: poetry run pytest --cov=lisp --cov-report=term-missing --cov-report=xml -v
+
+  # Detect whether any non-docs file changed. The E2E job is expensive
+  # and serial, and documentation/markdown edits cannot affect runtime
+  # behaviour, so we gate it on this. Skipping happens at the JOB level
+  # (via `needs` + `if`) rather than a workflow-level `paths` filter:
+  # a job skipped by `if` still reports a "skipped" conclusion, which
+  # branch protection treats as success — so a docs-only PR passes the
+  # required "E2E (headless)" check instead of hanging on it forever
+  # (which a workflow-level path filter would cause).
+  changes:
+    name: Detect code changes
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          # code = any changed path that is NOT markdown and NOT under
+          # docs/. A docs/markdown-only change yields code == 'false'.
+          filters: |
+            code:
+              - '**'
+              - '!**/*.md'
+              - '!docs/**'
+
+  e2e:
+    name: E2E (headless)
+    runs-on: ubuntu-24.04
+    needs: changes
+    # Skip on docs/markdown-only changes (see the `changes` job).
+    if: needs.changes.outputs.code == 'true'
+
+    env:
+      # Force software GL; the null-sink handles audio. Do NOT set
+      # QT_QPA_PLATFORM=offscreen — video needs a real xcb platform
+      # under Xvfb, which offscreen cannot provide.
+      LIBGL_ALWAYS_SOFTWARE: "1"
+      GALLIUM_DRIVER: llvmpipe
+      XDG_RUNTIME_DIR: /tmp/xdg-runtime
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The unit-test deps PLUS the headless media stack: Xvfb + Mesa
+      # software GL, PulseAudio, extra GStreamer plugins (x264enc via
+      # -ugly, gst-launch-1.0 via -tools), and the Qt xcb runtime libs.
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            libgirepository-2.0-dev \
+            libcairo2-dev \
+            libglib2.0-dev \
+            libasound2-dev \
+            libjack-jackd2-dev \
+            libgl1 \
+            libegl1 \
+            libxkbcommon0 \
+            libdbus-1-3 \
+            libfontconfig1 \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good \
+            gir1.2-gstreamer-1.0 \
+            gir1.2-gst-plugins-base-1.0 \
+            xvfb \
+            libgl1-mesa-dri \
+            libxcb-cursor0 \
+            libxkbcommon-x11-0 \
+            libxcb-icccm4 \
+            libxcb-image0 \
+            libxcb-keysyms1 \
+            libxcb-randr0 \
+            libxcb-render-util0 \
+            libxcb-shape0 \
+            libxcb-xinerama0 \
+            libxcb-xkb1 \
+            pulseaudio \
+            pulseaudio-utils \
+            gstreamer1.0-gl \
+            gstreamer1.0-x \
+            gstreamer1.0-plugins-bad \
+            gstreamer1.0-plugins-ugly \
+            gstreamer1.0-libav \
+            gstreamer1.0-tools
+
+      - name: Install Poetry
+        run: pipx install poetry
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: poetry
+
+      - name: Install dependencies
+        run: poetry install --no-interaction --with dev
+
+      # Provision harness/plugin config. _version_ MUST match each
+      # plugin default or LiSP's config layer discards the file.
+      #  - test_harness: enable it (else every test times out on launch)
+      #  - midi: DISABLE — python-rtmidi segfaults with no /dev/snd/seq
+      #  - playback_monitor: enable — its test asserts the plugin loaded
+      - name: Provision LiSP config
+        run: |
+          mkdir -p "$HOME/.config/LinuxShowPlayer/0.6"
+          cat > "$HOME/.config/LinuxShowPlayer/0.6/test_harness.json" <<'JSON'
+          {"_version_":"1","_enabled_":true,"host":"127.0.0.1","port":8070,"maxEventBuffer":1000,"defaultWaitTimeout":10.0}
+          JSON
+          cat > "$HOME/.config/LinuxShowPlayer/0.6/midi.json" <<'JSON'
+          {"_version_":"2.1","_enabled_":false,"backend":"mido.backends.rtmidi","inputDevice":"","outputDevice":"","connectByNameMatch":true}
+          JSON
+          cat > "$HOME/.config/LinuxShowPlayer/0.6/playback_monitor.json" <<'JSON'
+          {"_version_":"2","_enabled_":true,"alwaysOnTop":true,"elapsedPrimary":true}
+          JSON
+
+      - name: Start PulseAudio null-sink
+        run: |
+          mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
+          # Start fully detached (setsid + redirected fds). A bare
+          # `pulseaudio --start` lets the daemon inherit this step's
+          # stdout pipe; the runner then blocks waiting for EOF and the
+          # step hangs indefinitely. Diagnosed in the Docker dry-run.
+          setsid pulseaudio --start --exit-idle-time=-1 </dev/null >/dev/null 2>&1
+          sleep 1
+          pactl load-module module-null-sink sink_name=dummy
+          pactl set-default-sink dummy
+
+      - name: Run E2E suite
+        run: |
+          xvfb-run -a \
+            --server-args="-screen 0 1280x1024x24 +extension GLX +render" \
+            poetry run python tests/e2e/run_all.py
