@@ -128,6 +128,9 @@ jobs:
     needs: changes
     # Skip on docs/markdown-only changes (see the `changes` job).
     if: needs.changes.outputs.code == 'true'
+    # The suite is ~40 serial tests at 180s each with one retry; a genuine
+    # hang should fail fast rather than run out the 6h default job budget.
+    timeout-minutes: 60
 
     env:
       # Force software GL; the null-sink handles audio. Do NOT set

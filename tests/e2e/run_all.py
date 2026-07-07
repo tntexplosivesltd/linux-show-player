@@ -98,6 +98,13 @@ def main():
     print(f"{'=' * 60}")
     if retried:
         print("RETRIED (flaky): " + ", ".join(retried))
+        # Surface flakiness on the PR even when the run is green: a
+        # retry-masked regression would otherwise only live in the log.
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            print(
+                "::warning title=E2E flaky tests::"
+                "passed only after a retry: " + ", ".join(retried)
+            )
     if failed:
         print("FAILED: " + ", ".join(failed))
         return 1

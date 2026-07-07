@@ -148,6 +148,16 @@ def wait_state(cue_id, target, timeout=5.0):
     return False
 
 
+def _wait_prop(cue_id, prop, value, timeout=5.0):
+    """Poll until a cue property equals value, or timeout."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if cue_prop(cue_id, prop) == value:
+            return True
+        time.sleep(0.1)
+    return False
+
+
 def stop_all():
     call("layout.stop_all")
     time.sleep(0.3)
@@ -428,7 +438,12 @@ def test_6_crossfade(ids, group_id):
     # 6b: After crossfade completes, fadein_duration should be
     # restored to its original value (0) via the one-shot
     # started signal handler — not permanently modified.
-    time.sleep(2.5)
+    # The fade cannot finish before its 2.0s duration, so wait that
+    # out first (a poll alone could read the pre-crossfade 0 and
+    # false-pass), then poll for the restore so a slow runner can't
+    # miss it.
+    time.sleep(2.0)
+    _wait_prop(B, "fadein_duration", 0, timeout=5)
     check("6b: B fadein_duration restored after crossfade",
           cue_prop(B, "fadein_duration") == 0)
     check("6b: B still running after fade-in",
@@ -438,7 +453,8 @@ def test_6_crossfade(ids, group_id):
     check("6c: Crossfade started C",
           wait_state(C, "Running", timeout=5))
 
-    time.sleep(2.5)
+    time.sleep(2.0)
+    _wait_prop(C, "fadein_duration", 0, timeout=5)
     check("6c: C fadein_duration restored after crossfade",
           cue_prop(C, "fadein_duration") == 0)
     check("6c: C still running after fade-in",
