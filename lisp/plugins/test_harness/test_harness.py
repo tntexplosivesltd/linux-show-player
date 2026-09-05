@@ -23,6 +23,7 @@ from lisp.plugins.test_harness.handlers import register_all
 from lisp.plugins.test_harness.qt_invoke import init_invoker
 from lisp.plugins.test_harness.server import ServerThread
 from lisp.plugins.test_harness.signal_manager import SignalManager
+from lisp.plugins.test_harness import portfile
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,10 @@ class TestHarness(Plugin):
     CorePlugin = False
     Depends = ()
     OptDepends = ()
+
+    # Set once the discovery file is written; guards finalize() when
+    # __init__ fails before the portfile is resolved.
+    _portfile_path = None
 
     def __init__(self, app):
         super().__init__(app)
@@ -55,10 +60,27 @@ class TestHarness(Plugin):
         self.server_thread = ServerThread(host, port, self.dispatcher)
         self.server_thread.start()
 
-        logger.info("Test harness listening on %s:%d", host, port)
+        try:
+            actual_port = self.server_thread.server.server_address[1]
+            self._portfile_path = portfile.resolve_portfile_path(__file__)
+            portfile.write_port(self._portfile_path, actual_port)
+        except BaseException:
+            # Don't leave a bound, serving thread orphaned if we fail
+            # to publish the port (e.g. read-only worktree).
+            self.server_thread.stop()
+            raise
+
+        logger.info(
+            "Test harness listening on %s:%d (portfile: %s)",
+            host,
+            actual_port,
+            self._portfile_path,
+        )
 
     def finalize(self):
         self.signal_manager.unsubscribe_all()
         self.server_thread.stop()
+        if self._portfile_path is not None:
+            portfile.remove_portfile(self._portfile_path)
         logger.info("Test harness stopped")
         super().finalize()

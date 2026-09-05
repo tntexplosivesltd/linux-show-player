@@ -89,7 +89,13 @@ poetry run python tests/e2e/test_pre_arm_e2e.py
 python tests/e2e/test_pre_arm_e2e.py
 ```
 
-Before running, run `pgrep -af "lisp.main"` to verify no stale LiSP is bound to port 8070 — a stale instance silently steals RPC calls and produces confusing "Method not found" errors for new RPCs.
+The harness auto-selects a port per worktree: it tries `8070`, falls
+back to an OS-assigned free port if that's taken, and writes the actual
+port to `.lisp-test-harness-port` at the worktree root (gitignored). The
+CLI client and the E2E helpers read that file automatically, so multiple
+worktrees can run LiSP at once without clashing — no `--port` or env var
+needed. (`pgrep -af "lisp.main"` is still handy to spot a *same-worktree*
+instance you forgot to stop.)
 
 ## Architecture
 
