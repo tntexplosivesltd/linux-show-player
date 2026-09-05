@@ -27,9 +27,12 @@ jobs:
 
       # Ruff is a standalone binary with no dependency on the app's native
       # stack, so we install just it — no need for the full Poetry env here.
-      # pyproject pins `ruff = "*"`, so there is no locked version to match.
+      # Pin to match the version in pyproject/poetry.lock so CI and local
+      # `poetry run ruff` never disagree — an unpinned install silently
+      # floats to the newest release and breaks every open PR when Ruff
+      # ships new lint rules against pre-existing code.
       - name: Install Ruff
-        run: pipx install ruff
+        run: pipx install ruff==0.11.11
 
       - name: Ruff lint
         run: ruff check --output-format=github lisp/
