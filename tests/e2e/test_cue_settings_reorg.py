@@ -34,8 +34,6 @@ Run:
 """
 
 import os
-import signal
-import subprocess
 import sys
 import time
 
@@ -43,16 +41,12 @@ sys.path.insert(
     0, os.path.join(os.path.dirname(__file__), "..", ".."),
 )
 from tests.e2e.helpers import (  # noqa: E402
-    HOST,
-    PORT,
-    STARTUP_TIMEOUT,
     call,
     cue_prop,
     run_suite,
     stop_all,
 )
 from tests.e2e import helpers as _h  # noqa: E402
-from client import send_request  # noqa: E402
 
 
 SAVE_PATH = "/tmp/lisp_cue_settings_reorg_test.lsp"
@@ -121,47 +115,20 @@ EXPECTED = {
 def _relaunch_lisp_with(session_path, expected_cues=None):
     """Stop the running LiSP and relaunch against a saved session.
 
-    Mirrors ``helpers.start_lisp`` but passes an existing .lsp path
-    instead of synthesising an empty session. Waits for the harness
-    to report ``has_session=True`` before returning.
+    Delegates to ``helpers.start_lisp`` so the relaunched process gets
+    the same port-discovery wiring (the harness port is per-worktree
+    and only known after launch); ``start_lisp`` waits for
+    ``has_session=True`` before returning.
 
     ``has_session`` turns True at the *start* of the file load, before
     cues are inserted into the model (see ``helpers.wait_cues_loaded``);
     pass ``expected_cues`` so we also wait for the cues to finish loading
     and avoid reading an empty/partial model.
     """
-    # Stop the current process — reuse helpers' bookkeeping.
     _h.stop_lisp()
-
-    proc = subprocess.Popen(
-        [
-            sys.executable, "-m", "lisp.main",
-            "-l", "warning",
-            "-f", session_path,
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    _h._lisp_proc = proc
-
-    deadline = time.time() + STARTUP_TIMEOUT
-    while time.time() < deadline:
-        try:
-            resp = send_request(HOST, PORT, "ping")
-            if "result" in resp:
-                info = send_request(HOST, PORT, "session.info")
-                result = info.get("result") or {}
-                if result.get("has_session"):
-                    if expected_cues:
-                        _h.wait_cues_loaded(expected_cues)
-                    return
-        except (ConnectionRefusedError, ConnectionError, OSError):
-            pass
-        time.sleep(0.5)
-
-    raise RuntimeError(
-        f"LiSP did not relaunch within {STARTUP_TIMEOUT}s"
-    )
+    _h.start_lisp(session_path=session_path)
+    if expected_cues:
+        _h.wait_cues_loaded(expected_cues)
 
 
 # ── Tests ─────────────────────────────────────────────────────

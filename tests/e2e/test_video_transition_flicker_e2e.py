@@ -51,9 +51,8 @@ sys.path.insert(0, os.path.dirname(__file__))
 sys.path.insert(
     0, os.path.join(os.path.dirname(__file__), "..", "..",
                     "lisp", "plugins", "test_harness"))
-from client import send_request  # noqa: E402
 from helpers import (  # noqa: E402
-    HOST, PORT, TestTracker, call, start_lisp, stop_lisp,
+    TestTracker, call, start_lisp, stop_lisp,
     wait_cues_loaded,
 )
 
@@ -175,40 +174,17 @@ def build_session():
 
 # ── phase 2: launch on the saved session, measure ──────────────
 
-def _rpc(method, params=None):
-    r = send_request(HOST, PORT, method, params or {})
-    if "error" in r:
-        raise RuntimeError(f"{method}: {r['error']['message']}")
-    return r.get("result")
-
-
 def measure_first_transition(t):
-    proc = subprocess.Popen(
-        [sys.executable, "-m", "lisp.main", "-l", "warning",
-         "-f", SESSION],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
+    # start_lisp wires up the per-worktree harness port discovery (and
+    # waits for has_session); spawning LiSP by hand would leave PORT
+    # unresolved.
+    start_lisp(session_path=SESSION)
     frames = []
     try:
-        deadline = time.time() + 20
-        loaded = False
-        while time.time() < deadline:
-            try:
-                info = send_request(HOST, PORT, "session.info")
-                if (info.get("result") or {}).get("has_session"):
-                    loaded = True
-                    break
-            except Exception:
-                pass
-            time.sleep(0.5)
-        t.check("session loaded from file", loaded)
-        if not loaded:
-            return
-
         # has_session flips True before cues finish loading from the
         # file; wait for the 2 videos + 1 GroupCue to be in the model.
         wait_cues_loaded(3)
-        cues = sorted(_rpc("cue.list"), key=lambda c: c["index"])
+        cues = sorted(call("cue.list"), key=lambda c: c["index"])
         group = next(
             (c for c in cues if c["_type_"] == "GroupCue"), None)
         t.check("playlist group present after load", group is not None)
@@ -216,7 +192,7 @@ def measure_first_transition(t):
             return
         children = [c for c in cues if c["_type_"] != "GroupCue"]
         b_id = sorted(children, key=lambda c: c["index"])[1]["id"]
-        handle = _rpc("video_window.state")["handle"]
+        handle = call("video_window.state")["handle"]
         t.check("projection handle valid", handle != 0)
         if not handle:
             return
@@ -225,16 +201,16 @@ def measure_first_transition(t):
         # Subscribe to cue B's start so we can confirm (authoritatively,
         # via the harness) that the playlist actually advanced A→B —
         # independent of what the pixels show.
-        sub = _rpc("signals.subscribe",
+        sub = call("signals.subscribe",
                    {"signal": "cue.started", "cue_id": b_id})
         sub_id = sub["subscription_id"]
 
         # Start the group, wait for cue A to actually be on screen
         # (render widget mapped) before grabbing by XID.
-        _rpc("cue.execute", {"id": group["id"], "action": "Start"})
+        call("cue.execute", {"id": group["id"], "action": "Start"})
         vis_deadline = time.time() + 6
         while time.time() < vis_deadline:
-            if _rpc("video_window.state").get("render_visible"):
+            if call("video_window.state").get("render_visible"):
                 break
             time.sleep(0.1)
         time.sleep(0.2)
@@ -242,21 +218,17 @@ def measure_first_transition(t):
         # Record across the first A→B boundary (cue A ~CUE_SECONDS long).
         frames = record_rgb(handle, CUE_SECONDS + 3)
         try:
-            ev = send_request(HOST, PORT, "signals.wait_for",
-                              {"subscription_id": sub_id, "timeout": 1.0})
-            b_started = "result" in ev
+            call("signals.wait_for",
+                 {"subscription_id": sub_id, "timeout": 1.0})
+            b_started = True
         except Exception:
             b_started = False
         try:
-            _rpc("layout.stop_all")
+            call("layout.stop_all")
         except Exception:
             pass
     finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+        stop_lisp()
 
     t.check("captured projection frames", len(frames) > SETTLE_FRAMES)
     if len(frames) <= SETTLE_FRAMES:

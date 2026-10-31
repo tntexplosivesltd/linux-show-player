@@ -72,7 +72,12 @@ def _create_empty_session(layout="ListLayout"):
     return path
 
 
-def start_lisp(layout="ListLayout", log_level="warning", log_file=None):
+def start_lisp(
+    layout="ListLayout",
+    log_level="warning",
+    log_file=None,
+    session_path=None,
+):
     """Start LiSP with the given layout and wait for the harness.
 
     ``log_level`` overrides the default ``warning`` (e.g. ``info``
@@ -82,10 +87,18 @@ def start_lisp(layout="ListLayout", log_level="warning", log_file=None):
     logging and GStreamer-CRITICAL warnings both land) to the
     given path.  Use this when a test needs to assert on log
     lines.  ``None`` (default) discards output as before.
+
+    ``session_path`` opens an existing .lsp (e.g. to relaunch against
+    a saved session) instead of a synthesised empty one; ``layout`` is
+    then ignored and the file is left in place.  Restart tests must go
+    through here rather than spawning LiSP themselves: the harness
+    port is only known via the discovery file this function wires up.
     """
     global _lisp_proc, PORT
 
-    session_path = _create_empty_session(layout)
+    owns_session = session_path is None
+    if owns_session:
+        session_path = _create_empty_session(layout)
     # cwd must be this worktree's repo root so the child loads this
     # worktree's `lisp` (poetry venvs are shared by Python version).
     # Derive it from helpers' own location — not from _PORTFILE (which
@@ -132,7 +145,8 @@ def start_lisp(layout="ListLayout", log_level="warning", log_file=None):
                     info = send_request(HOST, PORT, "session.info")
                     result = info.get("result") or {}
                     if result.get("has_session"):
-                        os.unlink(session_path)
+                        if owns_session:
+                            os.unlink(session_path)
                         return
             except (
                 ConnectionRefusedError,
