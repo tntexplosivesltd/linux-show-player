@@ -23,15 +23,13 @@ Two properties make this test unusual:
     (XGetImage — occlusion independent; a screen-region grab gives
     false blacks from occlusion and must not be used).
 
-This is a CHARACTERIZATION test, not a regression guard (yet).  Symptom
-B is deliberately left unfixed — the planned video-mixing/compositor
-rearchitecture (a single persistent glimagesink fed by glvideomixer)
-eliminates the whole cross-sink hand-off class, so the throwaway
-"warm the sink at load" fix was not applied.  The test measures and
-reports the flicker and always exits 0; when the compositor lands, flip
-the commented assertion near the end into a real ``t.check`` and it
-becomes the regression guard proving mixing fixed B.  See the bug doc
-and ``docs/todo.md`` (Video pipeline → video mixing).
+This is the REGRESSION GUARD for Symptom B.  The VideoCompositor
+(one persistent glimagesink fed by glvideomixer; cues pump into it)
+removed the per-cue sink hand-off, and its handoff linger keeps the
+outgoing cue's last frame up until the next cue's first frame is
+shown — so the first transition must have no black run (``dark_run <=
+1``).  Before the compositor this measured ~2 frames; a compositor
+without the linger measured 17 (the next cue's preroll time).
 
 Requires an X display, ffmpeg (with x11grab) and xwininfo.  Skips
 cleanly otherwise.
@@ -241,36 +239,20 @@ def measure_first_transition(t):
           f"max_dark_run={dark_run} frames ({ms:.1f} ms)")
 
     # Sanity: the playlist actually advanced A→B (harness truth), and we
-    # captured live content (not an all-black grab).  These are the only
-    # hard assertions — the test PASSES whether or not the flicker is
-    # present, on purpose (see below).
+    # captured live content (not an all-black grab).
     t.check("transition A→B occurred (cue B started)", b_started)
     t.check("captured live video (mostly bright)", bright > len(body) // 2)
 
-    # CHARACTERIZATION (not a regression assertion yet).
-    #
-    # Symptom B is a ~2-frame black at the FIRST video→video transition
-    # (see docs/bugs/2026-05-29-video-cross-sink-gl-surface-wedge.md).
-    # We deliberately do NOT fix it with the throwaway "warm the sink at
-    # load" hack, because the planned video-mixing/compositor
-    # rearchitecture (single persistent glimagesink fed by glvideomixer)
-    # eliminates the whole cross-sink hand-off class — A and B both — for
-    # free.  So this test just measures and reports the flicker today and
-    # always exits 0.
-    #
-    # >>> WHEN THE COMPOSITOR REARCHITECTURE LANDS <<<
-    # the first transition should be clean; replace this report with the
-    # commented assertion below and this becomes the regression guard
-    # that proves mixing fixed Symptom B:
-    #     t.check("no black flicker at first transition", dark_run <= 1)
+    # REGRESSION GUARD (was characterization before the compositor
+    # rearchitecture). The single persistent glimagesink fed by
+    # glvideomixer eliminates the cross-sink hand-off class, and the
+    # compositor's handoff linger covers the next cue's preroll, so the
+    # first video→video transition must now be clean.
+    t.check("no black flicker at first transition", dark_run <= 1)
     if dark_run >= 2:
-        print(f"  CHARACTERIZATION: Symptom B present — {dark_run}-frame "
-              f"({ms:.1f} ms) black at first transition (expected until "
-              "the video-mixing/compositor rearchitecture lands).")
-    else:
-        print("  CHARACTERIZATION: no first-transition flicker detected — "
-              "if the compositor rearchitecture has landed, flip the "
-              "commented assertion above into a real regression check.")
+        print(f"  REGRESSION: {dark_run}-frame ({ms:.1f} ms) black at "
+              "first transition — the compositor should have eliminated "
+              "this.")
 
 
 def main():
