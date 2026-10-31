@@ -158,6 +158,24 @@ class VideoCompositor:
         video stays in sync with the cue's own audio."""
         return self._clock
 
+    def shutdown(self):
+        """Stop the projection pipeline for good. Idempotent.
+
+        Called from GstBackend.finalize(), which runs before the session
+        and the Qt windows are torn down. Left PLAYING, the GL sinks
+        keep rendering into dying X windows during interpreter exit
+        (MESA BadDrawable errors, intermittent segfault).
+        """
+        if self.pipeline is None:
+            return
+        self.available = False
+        self._registrations.clear()
+        if self._sync_handler is not None:
+            self.pipeline.get_bus().disconnect(self._sync_handler)
+            self._sync_handler = None
+        self.pipeline.set_state(Gst.State.NULL)
+        self.pipeline = None
+
     def register(self, sink):
         """Attach a cue to the projection pipeline. Returns a
         Registration the caller's pump pushes buffers into, or None if
@@ -348,6 +366,10 @@ class VideoCompositor:
         if struct is None or struct.get_name() != "prepare-window-handle":
             return
         handle = self.__owner_handle(message.src)
+        logger.debug(
+            "VideoCompositor: prepare-window-handle from %s -> %s",
+            message.src.get_name(), handle,
+        )
         if handle:
             message.src.set_window_handle(handle)
 

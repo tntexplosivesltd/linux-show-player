@@ -227,3 +227,51 @@ class TestLatencyHelpers:
             latency_offset=-86 * ms,
         )
         assert pts == (2000 + 1500 - 86) * ms
+
+
+class TestShutdown:
+    """The projection pipeline must be NULLed at plugin finalize, before
+    the session and Qt windows are torn down — otherwise its GL sinks
+    keep rendering into dying X windows (BadDrawable, exit segfault)."""
+
+    def _comp(self):
+        out, mon = _fake_windows()
+
+        def fake_build(self):
+            self.pipeline = MagicMock()
+            self.mixer = MagicMock()
+            self._sync_handler = 42
+            return True
+
+        with patch.object(vc.VideoCompositor, "_build", fake_build):
+            return vc.VideoCompositor(out, mon)
+
+    def test_shutdown_nulls_pipeline_and_disables(self):
+        comp = self._comp()
+        pipeline = comp.pipeline
+        comp.shutdown()
+        pipeline.set_state.assert_called_once_with(vc.Gst.State.NULL)
+        pipeline.get_bus.return_value.disconnect.assert_called_once_with(42)
+        assert comp.available is False
+        assert comp.register(object()) is None
+
+    def test_shutdown_forgets_registrations(self):
+        comp = self._comp()
+        with patch.object(comp, "_attach", return_value=vc.Registration()):
+            comp.register(object())
+        comp.shutdown()
+        assert comp.active_others(object()) is False
+
+    def test_shutdown_is_idempotent(self):
+        comp = self._comp()
+        pipeline = comp.pipeline
+        comp.shutdown()
+        comp.shutdown()
+        pipeline.set_state.assert_called_once()
+
+    def test_shutdown_when_build_failed(self):
+        out, mon = _fake_windows()
+        with patch.object(vc.VideoCompositor, "_build", autospec=True,
+                          return_value=False):
+            comp = vc.VideoCompositor(out, mon)
+        comp.shutdown()  # pipeline None — must not raise

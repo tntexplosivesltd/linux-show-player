@@ -62,6 +62,7 @@ class GstBackend(Plugin, BaseBackend):
 
     _video_window = None
     _monitor_window = None
+    _video_compositor = None
 
     @classmethod
     def video_window(cls):
@@ -72,6 +73,11 @@ class GstBackend(Plugin, BaseBackend):
     def monitor_window(cls):
         """Return the singleton VideoMonitorWindow, or None."""
         return cls._monitor_window
+
+    @classmethod
+    def video_compositor(cls):
+        """Return the singleton VideoCompositor, or None."""
+        return cls._video_compositor
 
     def __init__(self, app):
         super().__init__(app)
@@ -88,6 +94,24 @@ class GstBackend(Plugin, BaseBackend):
         GstBackend._video_window = VideoOutputWindow(app.window)
         GstBackend._monitor_window = VideoMonitorWindow(app.window)
         self.__apply_video_config()
+
+        # One persistent projection pipeline that every video/image cue
+        # pumps into (no per-cue sink, so no surface hand-off).
+        from lisp.plugins.gst_backend.video_compositor import (
+            VideoCompositor,
+        )
+        GstBackend._video_compositor = VideoCompositor(
+            GstBackend._video_window, GstBackend._monitor_window
+        )
+        if not GstBackend._video_compositor.available:
+            self.app.notify.emit(
+                translate(
+                    "GstBackend",
+                    "Video projection unavailable — video cues will "
+                    "play audio only",
+                ),
+                NotificationLevel.Warning,
+            )
 
         # Block overlapping video/image cue playback.
         self.app.video_exclusive_manager = (
@@ -154,6 +178,14 @@ class GstBackend(Plugin, BaseBackend):
         )
 
         backend.set_backend(self)
+
+    def finalize(self):
+        # Stop the projection pipeline before the session and windows
+        # are torn down (see VideoCompositor.shutdown).
+        if GstBackend._video_compositor is not None:
+            GstBackend._video_compositor.shutdown()
+            GstBackend._video_compositor = None
+        super().finalize()
 
     def uri_duration(self, uri):
         return gst_uri_duration(uri)
