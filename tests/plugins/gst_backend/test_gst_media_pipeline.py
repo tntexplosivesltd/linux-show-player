@@ -180,3 +180,35 @@ class TestProductionVideoPipeline:
             "DbMeter", "AutoSink",
         )
         assert len(media.elements) == 5
+
+
+class TestSharedClock:
+    """Cue pipelines adopt the VideoCompositor's clock so the pump's
+    base-time offset maps cue running-time onto the projection."""
+
+    _CM = ("lisp.plugins.gst_backend.gst_backend.GstBackend."
+           "video_compositor")
+
+    def test_pipeline_adopts_shared_clock(self):
+        from lisp.plugins.gst_backend.gi_repository import Gst
+        from unittest.mock import MagicMock
+
+        # A distinct instance — the default pipeline clock is the
+        # SystemClock.obtain() singleton, which would pass vacuously.
+        shared = Gst.SystemClock()
+        comp = MagicMock()
+        comp.clock.return_value = shared
+        with patch(self._CM, return_value=comp):
+            media = GstMedia()
+            media.pipe = ("UriInput", "AutoSink")
+        pipeline = media._GstMedia__pipeline
+        assert pipeline.get_pipeline_clock() is shared
+
+    def test_no_compositor_keeps_default_clock(self):
+        from lisp.plugins.gst_backend.gi_repository import Gst
+
+        with patch(self._CM, return_value=None):
+            media = GstMedia()
+            media.pipe = ("UriInput", "AutoSink")
+        pipeline = media._GstMedia__pipeline
+        assert pipeline.get_pipeline_clock() is Gst.SystemClock.obtain()
