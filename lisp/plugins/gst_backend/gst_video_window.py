@@ -32,9 +32,9 @@ class VideoOutputWindow(QMainWindow):
     X11 window ID.
 
     A separate native child widget (_render_widget) holds the video
-    surface.  Hiding it reveals the black background underneath,
-    providing a reliable way to clear stale frames between cues
-    without needing a separate GStreamer pipeline.
+    surface.  It stays mapped for the process lifetime: the
+    VideoCompositor's sink binds to it once, and black-between-cues
+    is the compositor's own background layer, not a hidden widget.
 
     The window ignores close events while video/image cues exist
     (visibility is managed by GstBackend's auto-show/hide logic).
@@ -50,9 +50,7 @@ class VideoOutputWindow(QMainWindow):
         central.setStyleSheet("background-color: black;")
         self.setCentralWidget(central)
 
-        # Native child widget for GStreamer rendering.  Hiding
-        # this widget unmaps its X11 window so the parent's
-        # black background shows through.
+        # Native child widget for GStreamer rendering.
         self._render_widget = QWidget(central)
         self._render_widget.setAttribute(Qt.WA_NativeWindow)
         self._render_widget.setAttribute(
@@ -65,15 +63,6 @@ class VideoOutputWindow(QMainWindow):
     def window_handle(self):
         """Return the native window ID for GStreamer VideoOverlay."""
         return int(self._render_widget.winId())
-
-    def clear_display(self):
-        """Hide the render surface, showing the black background."""
-        self._render_widget.hide()
-
-    def show_display(self):
-        """Show the render surface for GStreamer output."""
-        self._render_widget.show()
-        self._sync_render_geometry()
 
     def set_display(self, screen_index):
         """Move the window to the specified screen by index.
@@ -148,7 +137,8 @@ class VideoMonitorWindow(QMainWindow):
     Provides a confidence monitor on the operator's primary screen
     so they can see what's being projected without line-of-sight to
     the projection surface.  GStreamer renders into this window via
-    a second VideoOverlay sink fed by a tee in the VideoSink pipeline.
+    the VideoCompositor's second (monitor) sink, fed by a leaky tee
+    branch off the projection mixer.
 
     Closing the window hides it (the menu toggle re-shows it).
     """
@@ -174,15 +164,6 @@ class VideoMonitorWindow(QMainWindow):
     def window_handle(self):
         """Return the native window ID for GStreamer VideoOverlay."""
         return int(self._render_widget.winId())
-
-    def clear_display(self):
-        """Hide the render surface, showing the black background."""
-        self._render_widget.hide()
-
-    def show_display(self):
-        """Show the render surface for GStreamer output."""
-        self._render_widget.show()
-        self._sync_render_geometry()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

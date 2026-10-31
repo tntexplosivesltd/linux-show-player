@@ -87,28 +87,13 @@ class TestVideoOutputWindowBehavior:
             screen_geo = screens[0].geometry()
             assert window.pos() == screen_geo.topLeft()
 
-    def test_clear_display_hides_render_widget(self, qtbot):
+    def test_render_widget_mapped_when_shown(self, qtbot):
+        # No clear/show any more: the render widget stays mapped and
+        # black-between-cues comes from the compositor's background.
         window = VideoOutputWindow()
         qtbot.addWidget(window)
         window.show()
         qtbot.waitExposed(window)
-
-        window.show_display()
-        assert window._render_widget.isVisible()
-
-        window.clear_display()
-        assert not window._render_widget.isVisible()
-
-    def test_show_display_shows_render_widget(self, qtbot):
-        window = VideoOutputWindow()
-        qtbot.addWidget(window)
-        window.show()
-        qtbot.waitExposed(window)
-
-        window.clear_display()
-        assert not window._render_widget.isVisible()
-
-        window.show_display()
         assert window._render_widget.isVisible()
 
     def test_render_widget_is_native(self, qtbot):
@@ -189,24 +174,11 @@ class TestVideoMonitorWindowBehavior:
         window.close()
         assert not window.isVisible()
 
-    def test_clear_display_hides_render_widget(self, qtbot):
+    def test_render_widget_mapped_when_shown(self, qtbot):
+        # No clear/show any more: the render widget stays mapped and
+        # black-between-cues comes from the compositor's background.
         window = VideoMonitorWindow()
         qtbot.addWidget(window)
         window.show()
         qtbot.waitExposed(window)
-
-        window.show_display()
-        assert window._render_widget.isVisible()
-
-        window.clear_display()
-        assert not window._render_widget.isVisible()
-
-    def test_show_display_shows_render_widget(self, qtbot):
-        window = VideoMonitorWindow()
-        qtbot.addWidget(window)
-        window.show()
-        qtbot.waitExposed(window)
-
-        window.clear_display()
-        window.show_display()
         assert window._render_widget.isVisible()
