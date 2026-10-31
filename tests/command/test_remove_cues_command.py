@@ -192,3 +192,79 @@ class TestRemoveMultiple:
         assert i.children == ["a", "b"]
         assert a.group_id == "i" and b.group_id == "i"
         assert _resolved(i) == ["a", "b"]
+
+
+def _hierarchy(app):
+    """Every cue's group_id, each group's children, and what each group
+    actually resolves for playback -- the full state undo must restore."""
+    from lisp.plugins.action_cues.group_cue import GroupCue
+
+    state = {}
+    for cue in app.cue_model:
+        entry = {"group_id": cue.group_id}
+        if isinstance(cue, GroupCue):
+            entry["children"] = list(cue.children)
+            entry["resolved"] = _resolved(cue)
+        state[cue.id] = entry
+    return state
+
+
+def _three_level(app):
+    # t: [x, m, y]; m: [l]; l: [a, b]
+    t = _group(app, "t", ["x", "m", "y"])
+    m = _group(app, "m", ["l"], group_id="t")
+    lo = _group(app, "l", ["a", "b"], group_id="m")
+    cues = {"t": t, "m": m, "l": lo}
+    cues["x"] = _leaf("x", group_id="t")
+    cues["y"] = _leaf("y", group_id="t")
+    cues["a"] = _leaf("a", group_id="l")
+    cues["b"] = _leaf("b", group_id="l")
+    for cue_id in ("t", "x", "m", "l", "a", "b", "y"):
+        app.cue_model.add(cues[cue_id])
+    return cues
+
+
+def _siblings(app):
+    # g1: [a]; g2: [b, c] -- two top-level groups
+    cues = {
+        "g1": _group(app, "g1", ["a"]),
+        "g2": _group(app, "g2", ["b", "c"]),
+        "a": _leaf("a", group_id="g1"),
+        "b": _leaf("b", group_id="g2"),
+        "c": _leaf("c", group_id="g2"),
+    }
+    for cue_id in ("g1", "a", "g2", "b", "c"):
+        app.cue_model.add(cues[cue_id])
+    return cues
+
+
+@pytest.mark.parametrize(
+    "build, delete_ids",
+    [
+        (_three_level, ["m", "l"]),
+        (_three_level, ["l", "m"]),
+        (_siblings, ["g1", "g2"]),
+        (_siblings, ["g2", "g1"]),
+    ],
+    ids=["3lvl-outer-first", "3lvl-inner-first", "siblings", "siblings-rev"],
+)
+def test_multi_group_delete_round_trips(app, build, delete_ids):
+    """Deleting several groups in one command, where pop()'s splices
+    cascade, must undo/redo/undo back to exactly the starting state."""
+    cues = build(app)
+    original = _hierarchy(app)
+
+    cmd = _remove(app, *(cues[i] for i in delete_ids))
+    cmd.do()
+    after_do = _hierarchy(app)
+    for cue_id in delete_ids:
+        assert app.cue_model.get(cue_id) is None
+
+    cmd.undo()
+    assert _hierarchy(app) == original
+
+    cmd.redo()
+    assert _hierarchy(app) == after_do
+
+    cmd.undo()
+    assert _hierarchy(app) == original

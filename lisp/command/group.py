@@ -125,7 +125,7 @@ class UngroupCuesCommand(Command):
         # top-level groups this is "" (legacy behavior); for
         # nested inner groups this is the grandparent's id.
         for child_id in promoted:
-            model.get(child_id).group_id = self._parent_group_id
+            GroupCue.promote(model.get(child_id), self._parent_group_id)
 
         # Splice the promoted children into the grandparent GroupCue's
         # explicit `children` list, replacing the dissolved group's id
@@ -197,7 +197,7 @@ class RemoveCuesCommand(ModelRemoveItemsCommand):
         self._restore = {}
 
     def do(self):
-        before = {cue: self._hierarchy_state(cue) for cue in self._model}
+        before = {cue: self._hierarchy_state(cue) for cue in self._touchable()}
         super().do()
         self._restore = {
             cue: state
@@ -206,16 +206,36 @@ class RemoveCuesCommand(ModelRemoveItemsCommand):
         }
 
     def undo(self):
-        # Restore links first so the re-added cues come back into a
-        # model that already lists them where they were.
+        # Re-add first, then restore links. Each group_id write fires
+        # property_changed -> the list view reparents the row under the
+        # group's tree item, which only exists once the group is back;
+        # the view never adopts existing rows when a group is re-added,
+        # so restoring first would leave the children drawn top-level.
+        super().undo()
         for cue, (group_id, children) in self._restore.items():
             cue.group_id = group_id
             if children is not None:
                 cue.children = list(children)
-        super().undo()
 
     def redo(self):
         self.do()
+
+    def _touchable(self):
+        """The cues whose group_id/children pop() can rewrite here: the
+        removed cues, cues pointing at a removed cue (they get promoted,
+        cascading through removed ancestors), and the removed cues'
+        parents (which receive the splice). Snapshotting just these
+        keeps a delete from rebuilding the whole model's hierarchy."""
+        removed_ids = {cue.id for cue in self._items}
+        touchable = set(self._items)
+        for cue in self._model:
+            if cue.group_id in removed_ids:
+                touchable.add(cue)
+        for cue in self._items:
+            parent = self._model.get(cue.group_id)
+            if parent is not None:
+                touchable.add(parent)
+        return touchable
 
     @staticmethod
     def _hierarchy_state(cue):

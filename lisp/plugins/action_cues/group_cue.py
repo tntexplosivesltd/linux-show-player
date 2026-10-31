@@ -131,21 +131,30 @@ class GroupCue(Cue):
                 model.move(child.index, target)
 
     def replace_child(self, old_id, new_ids):
-        """Replace ``old_id`` in `children` with ``new_ids``, in place.
+        """Splice ``new_ids`` into `children` in place of ``old_id``.
 
         Used when a nested group is dissolved (ungroup or removal) to
-        splice its promoted children into this, its parent, group:
+        move its promoted children into this, its parent, group:
         playback iterates `children`, not the `group_id` back-links,
         so the promoted ids must land here or they silently stop
-        playing. Ids equal to this group's own id or already listed
-        are skipped, so a corrupt `group_id` cycle can't make a group
-        contain itself. No-op if `children` isn't a list or doesn't
-        contain ``old_id``.
+        playing. If `children` doesn't list ``old_id`` (group_id and
+        children have drifted apart in an older session) the ids are
+        appended instead, for the same reason.
 
-        :return: True if the list was changed
+        Skipped ids: this group's own id, ids already listed, and any
+        id whose own subtree already contains this group -- so a
+        corrupt or stale hierarchy can't make a group contain itself
+        or create a playback cycle. No-op if `children` isn't a list.
+
+        The list is rebuilt and reassigned, never mutated in place:
+        assignment fires `property_changed` (the layout and undo rely
+        on it), and a playback worker iterating the old list never
+        sees it half-updated.
+
+        :return: True if `children` was changed
         """
         children = self.children
-        if not isinstance(children, list) or old_id not in children:
+        if not isinstance(children, list):
             return False
 
         spliced = []
@@ -154,12 +163,44 @@ class GroupCue(Cue):
                 cue_id != self.id
                 and cue_id not in children
                 and cue_id not in spliced
+                and not self._subtree_contains(cue_id, self.id)
             ):
                 spliced.append(cue_id)
 
-        index = children.index(old_id)
-        self.children = children[:index] + spliced + children[index + 1:]
-        return True
+        if old_id in children:
+            index = children.index(old_id)
+            self.children = (
+                children[:index] + spliced + children[index + 1:]
+            )
+            return True
+        if spliced:
+            self.children = children + spliced
+            return True
+        return False
+
+    def _subtree_contains(self, root_id, target_id):
+        """True if ``target_id`` is reachable from ``root_id`` through
+        `children` lists (cycle-safe)."""
+        stack, seen = [root_id], set()
+        while stack:
+            cue_id = stack.pop()
+            if cue_id == target_id:
+                return True
+            if cue_id in seen:
+                continue
+            seen.add(cue_id)
+            children = getattr(self.app.cue_model.get(cue_id), "children", None)
+            if isinstance(children, list):
+                stack.extend(children)
+        return False
+
+    @staticmethod
+    def promote(cue, parent_group_id):
+        """Move ``cue`` up to ``parent_group_id`` (its dissolved group's
+        parent), never pointing a cue's group_id at itself -- that only
+        happens with a corrupt group_id cycle; such a cue goes to the
+        top level instead."""
+        cue.group_id = parent_group_id if cue.id != parent_group_id else ""
 
     @staticmethod
     def promotion_order(listed_ids, promoted_ids):
@@ -171,8 +212,10 @@ class GroupCue(Cue):
         """
         if not isinstance(listed_ids, list):
             listed_ids = []
-        ordered = [i for i in listed_ids if i in promoted_ids]
-        ordered += [i for i in promoted_ids if i not in ordered]
+        promoted = set(promoted_ids)
+        ordered = [i for i in listed_ids if i in promoted]
+        listed = set(ordered)
+        ordered += [i for i in promoted_ids if i not in listed]
         return ordered
 
     def _resolve_children(self):

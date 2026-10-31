@@ -499,3 +499,40 @@ class TestUngroupSplice:
         cmd.undo()
 
         assert outer.children == ["x", "y"]
+
+
+class TestUngroupCorruptHierarchy:
+    def test_two_cycle_never_points_a_cue_at_itself(
+        self, mock_app, mock_list_model
+    ):
+        """Corrupt 2-cycle: G.group_id == C, C.group_id == G, G lists C.
+        Ungrouping G must not leave C.group_id == "C"."""
+        from lisp.command.group import UngroupCuesCommand
+
+        g = _real_group(mock_app, "G", ["C"], group_id="C")
+        c = _real_group(mock_app, "C", ["G"], group_id="G")
+        mock_app.cue_model.add(g)
+        mock_app.cue_model.add(c)
+
+        UngroupCuesCommand(mock_app, mock_list_model, g).do()
+
+        assert c.group_id != "C"
+        assert "C" not in c.children
+
+    def test_appends_when_parent_does_not_list_the_group(
+        self, mock_app, mock_list_model
+    ):
+        from lisp.command.group import UngroupCuesCommand
+
+        outer = _real_group(mock_app, "outer", ["x"])
+        inner = _real_group(mock_app, "inner", ["a"], group_id="outer")
+        for cue in (outer, inner, _make_cue("x", group_id="outer"),
+                    _make_cue("a", group_id="inner")):
+            mock_app.cue_model.add(cue)
+
+        cmd = UngroupCuesCommand(mock_app, mock_list_model, inner)
+        cmd.do()
+        assert outer.children == ["x", "a"]
+
+        cmd.undo()
+        assert outer.children == ["x"]

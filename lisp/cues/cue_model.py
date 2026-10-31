@@ -60,14 +60,13 @@ class CueModel(Model):
         # — UngroupCuesCommand pre-sets group_ids before calling
         # remove, so this loop no-ops on that path; it's the
         # safety net for direct cue_model.remove callers.
+        from lisp.plugins.action_cues.group_cue import GroupCue
+
         parent_group_id = cue.group_id
         promoted = []
         for other in self.__cues.values():
             if other.group_id == cue_id:
-                # Never point a cue at itself (corrupt group_id cycle).
-                other.group_id = (
-                    parent_group_id if other.id != parent_group_id else ""
-                )
+                GroupCue.promote(other, parent_group_id)
                 promoted.append(other.id)
 
         # When a group is dissolved, splice the promoted ids into the
@@ -81,8 +80,6 @@ class CueModel(Model):
         # so this no-ops on that path; it's the safety net for direct
         # cue_model.remove callers. Undoing a removal of a group is
         # RemoveCuesCommand's job.
-        from lisp.plugins.action_cues.group_cue import GroupCue
-
         parent = self.__cues.get(parent_group_id)
         if isinstance(cue, GroupCue) and isinstance(parent, GroupCue):
             parent.replace_child(

@@ -398,3 +398,37 @@ class TestCueModelFilter:
         # Default filter is Cue class; MagicMock is not a Cue subclass
         results = list(model.filter())
         assert len(results) == 0
+
+
+class TestCueModelPopSpliceDrift:
+    """Sessions whose group_id back-links and children lists have drifted."""
+
+    def test_pop_appends_when_parent_does_not_list_the_group(self):
+        """Grandparent doesn't list the dissolved group: the promoted
+        children must still land in its playback list (appended), or
+        they show nested in the UI but never play -- the C1 symptom."""
+        model, app = _model_app()
+        outer = _group_cue(app, "outer", ["x"])
+        inner = _group_cue(app, "inner", ["a"], "outer")
+        for cue in (outer, inner, _make_cue("x", "outer"),
+                    _make_cue("a", "inner")):
+            model.add(cue)
+
+        model.pop("inner")
+
+        assert outer.children == ["x", "a"]
+
+    def test_pop_never_splices_an_ancestor_into_its_descendant(self):
+        """Stale back-link: X lists P, P lists G, but X.group_id == G.
+        Removing G promotes X into P; splicing X into P.children would
+        create an X -> P -> X playback cycle."""
+        model, app = _model_app()
+        x = _group_cue(app, "X", ["P"], group_id="G")
+        p = _group_cue(app, "P", ["G"], group_id="X")
+        g = _group_cue(app, "G", [], group_id="P")
+        for cue in (x, p, g):
+            model.add(cue)
+
+        model.pop("G")
+
+        assert "X" not in p.children
