@@ -16,8 +16,9 @@
 # along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
 import logging
+import threading
 
-from lisp.plugins.gst_backend.gi_repository import Gst
+from lisp.plugins.gst_backend.gi_repository import GLib, Gst
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,21 @@ COMP_WIDTH = 1920
 COMP_HEIGHT = 1080
 COMP_FPS = 30
 MIN_CANVAS = 64
+
+# Handoff linger. A stopped/ended cue's mixer pad is kept (the mixer
+# repeats its last frame) instead of being released at once, so a
+# playlist's next cue — which only starts after this one ends, and needs
+# a few hundred ms to preroll — takes over without a black gap. The old
+# per-cue sinks got this for free (the stale frame stayed on the X
+# surface); the shared canvas must do it explicitly.
+# - No successor within LINGER_MS → release (standalone stop → black,
+#   matching the old deferred clear).
+# - Successor's first frame pushed → release HANDOFF_RELEASE_MS later
+#   (> the pump's 100ms lead, so it is on screen first).
+# - LINGER_CAP_MS is the backstop if a successor never shows a frame.
+LINGER_MS = 100
+HANDOFF_RELEASE_MS = 250
+LINGER_CAP_MS = 3000
 
 # The black background source is tiny; its mixer pad is scaled to the
 # canvas, so resizing the canvas never renegotiates the source.
@@ -126,6 +142,8 @@ class Registration:
         self.caps_set = False
         # The cue's video caps, kept so a canvas resize can re-fit.
         self.caps = None
+        # Set by frame_ready() once the pump pushed the first frame.
+        self.frame_seen = False
         # (L_cue − L_proj), cached by the pump; re-queried when the
         # countdown reaches 0 (0 = query on the next buffer).
         self.latency_offset = 0
@@ -206,6 +224,14 @@ class VideoCompositor:
         self._next_zorder = 1
         # id(sink) -> registration handle; the exclusive-manager truth.
         self._registrations = {}
+        # Unregistered but still on screen (handoff linger).
+        self._lingering = []
+        # Guards the two collections above: touched from the main loop,
+        # cue worker threads (stop) and the pump's streaming thread.
+        self._lock = threading.Lock()
+        # Thread-safe; callbacks run on the main loop, which is where
+        # _detach must run (never on a projection streaming thread).
+        self._schedule = GLib.timeout_add
 
         self.available = self._build()
         if not self.available:
@@ -239,8 +265,9 @@ class VideoCompositor:
         )
         self._bg_pad.set_property("width", width)
         self._bg_pad.set_property("height", height)
-        # Snapshot: registrations may change on cue worker threads.
-        for reg in list(self._registrations.values()):
+        with self._lock:
+            visible = list(self._registrations.values()) + self._lingering
+        for reg in visible:
             if reg.caps is not None:
                 self._apply_fit(reg)
 
@@ -255,7 +282,9 @@ class VideoCompositor:
         if self.pipeline is None:
             return
         self.available = False
-        self._registrations.clear()
+        with self._lock:
+            self._registrations.clear()
+            self._lingering.clear()
         if self._sync_handler is not None:
             self.pipeline.get_bus().disconnect(self._sync_handler)
             self._sync_handler = None
@@ -268,28 +297,79 @@ class VideoCompositor:
         the compositor is unavailable."""
         if not self.available:
             return None
-        if id(sink) in self._registrations:
-            return self._registrations[id(sink)]
-        reg = self._attach(sink)
-        if reg is not None:
-            self._registrations[id(sink)] = reg
+        with self._lock:
+            reg = self._registrations.get(id(sink))
+            if reg is not None:
+                return reg
+            reg = self._attach(sink)
+            if reg is not None:
+                self._registrations[id(sink)] = reg
         return reg
 
     def unregister(self, sink):
-        """Detach a cue. Idempotent — a stop() after eos() (or vice
-        versa) must not error. Must not be called from a
-        projection-pipeline streaming thread (see _detach)."""
-        reg = self._registrations.pop(id(sink), None)
-        if reg is not None:
-            self._detach(reg)
+        """Stop treating a cue as active. Idempotent — a stop() after
+        eos() (or vice versa) must not error.
+
+        The cue's pad lingers (last frame stays up) until a successor's
+        first frame is on screen or LINGER_MS passes with none — see the
+        LINGER_* constants. It no longer counts for active_others(), so
+        the successor is not blocked by it.
+        """
+        with self._lock:
+            reg = self._registrations.pop(id(sink), None)
+            if reg is None:
+                return
+            self._lingering.append(reg)
+        self._schedule(LINGER_MS, self._on_linger_timeout, reg)
+        self._schedule(LINGER_CAP_MS, self._release, reg)
+
+    def frame_ready(self, reg):
+        """Pump hook (streaming thread): `reg` pushed its first frame.
+        Hand off from every lingering predecessor once it is shown."""
+        with self._lock:
+            reg.frame_seen = True
+            lingering = list(self._lingering)
+        if lingering:
+            self._schedule(HANDOFF_RELEASE_MS, self._release, *lingering)
 
     def is_registered(self, sink):
-        return id(sink) in self._registrations
+        with self._lock:
+            return id(sink) in self._registrations
 
     def active_others(self, sink):
         """True if any cue OTHER than `sink` is currently registered —
-        the single source of truth for VideoExclusiveManager."""
-        return any(k != id(sink) for k in self._registrations)
+        the single source of truth for VideoExclusiveManager. Lingering
+        cues do not count."""
+        with self._lock:
+            return any(k != id(sink) for k in self._registrations)
+
+    def _on_linger_timeout(self, reg):
+        """Main loop. With no successor, release now (black on stop).
+        With a successor, hand off once its first frame is up."""
+        with self._lock:
+            active = list(self._registrations.values())
+        if not active:
+            self._release(reg)
+        elif all(r.frame_seen for r in active):
+            # Successor already showing (its frame_ready came first).
+            self._schedule(HANDOFF_RELEASE_MS, self._release, reg)
+        # else: the successor's frame_ready() releases us (cap: backstop)
+        return False
+
+    def _release(self, *regs):
+        """Main loop. Detach lingering registrations; idempotent and a
+        no-op after shutdown(). Returns False (one-shot GLib timeout)."""
+        to_detach = []
+        with self._lock:
+            if self.pipeline is None:
+                return False
+            for reg in regs:
+                if reg in self._lingering:
+                    self._lingering.remove(reg)
+                    to_detach.append(reg)
+        for reg in to_detach:
+            self._detach(reg)
+        return False
 
     def fit_registration(self, reg, caps):
         """Scale-to-fit a cue's mixer pad once its caps are known.

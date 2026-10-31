@@ -91,6 +91,7 @@ class TestRegistrationBookkeeping:
                           return_value=True):
             comp = vc.VideoCompositor(out, mon)
         comp.available = True
+        comp.pipeline = MagicMock()  # built (None means shut down)
         return comp
 
     def test_register_records_and_returns_handle(self):
@@ -118,15 +119,18 @@ class TestRegistrationBookkeeping:
         attach.assert_called_once()
         assert first is second
 
-    def test_unregister_detaches_and_forgets(self):
+    def test_unregister_forgets_then_detaches_after_linger(self):
         comp = self._comp()
+        sched = _FakeScheduler(comp)
         sink = object()
         with patch.object(comp, "_attach", return_value=vc.Registration()):
             comp.register(sink)
         with patch.object(comp, "_detach") as detach:
             comp.unregister(sink)
+            assert comp.is_registered(sink) is False
+            detach.assert_not_called()  # lingering, not yet released
+            sched.fire(vc.LINGER_MS)
         detach.assert_called_once()
-        assert comp.is_registered(sink) is False
 
     def test_unregister_is_idempotent(self):
         comp = self._comp()
@@ -426,3 +430,135 @@ class TestCanvasSizing:
         comp = self._comp()
         comp.shutdown()
         comp.set_canvas_size(1024, 768)  # must not raise
+
+
+
+class _FakeScheduler:
+    """Stands in for GLib.timeout_add: records (ms, fn, args) and lets a
+    test fire the callbacks scheduled for a given delay."""
+
+    def __init__(self, comp):
+        self.pending = []
+        comp._schedule = self.add
+
+    def add(self, ms, fn, *args):
+        self.pending.append((ms, fn, args))
+        return len(self.pending)
+
+    def fire(self, ms):
+        due = [p for p in self.pending if p[0] == ms]
+        self.pending = [p for p in self.pending if p[0] != ms]
+        for _ms, fn, args in due:
+            fn(*args)
+
+
+class TestHandoffLinger:
+    """A stopped/ended cue's last frame stays on screen until the next
+    cue's first frame is up (seamless playlist advance), or goes black
+    after LINGER_MS when nothing follows (standalone stop/end)."""
+
+    def _comp(self):
+        out, mon = _fake_windows()
+
+        def fake_build(self):
+            self.pipeline = MagicMock()
+            self.mixer = MagicMock()
+            return True
+
+        with patch.object(vc.VideoCompositor, "_build", fake_build):
+            comp = vc.VideoCompositor(out, mon)
+        return comp, _FakeScheduler(comp)
+
+    def _register(self, comp, sink):
+        with patch.object(comp, "_attach",
+                          side_effect=lambda s: vc.Registration()):
+            return comp.register(sink)
+
+    def test_lingering_cue_does_not_block_next(self):
+        comp, _ = self._comp()
+        a, b = object(), object()
+        self._register(comp, a)
+        comp.unregister(a)
+        assert comp.active_others(b) is False
+
+    def test_standalone_end_goes_black_after_linger(self):
+        comp, sched = self._comp()
+        a = object()
+        reg_a = self._register(comp, a)
+        with patch.object(comp, "_detach") as detach:
+            comp.unregister(a)
+            sched.fire(vc.LINGER_MS)
+        detach.assert_called_once_with(reg_a)
+
+    def test_handoff_holds_until_successor_frame(self):
+        comp, sched = self._comp()
+        a, b = object(), object()
+        reg_a = self._register(comp, a)
+        with patch.object(comp, "_detach") as detach:
+            comp.unregister(a)
+            reg_b = self._register(comp, b)  # playlist advance
+            sched.fire(vc.LINGER_MS)
+            detach.assert_not_called()  # B has no frame yet: hold A
+            comp.frame_ready(reg_b)
+            sched.fire(vc.HANDOFF_RELEASE_MS)
+        detach.assert_called_once_with(reg_a)
+
+    def test_successor_already_showing_releases_at_linger(self):
+        comp, sched = self._comp()
+        a, b = object(), object()
+        reg_a = self._register(comp, a)
+        with patch.object(comp, "_detach") as detach:
+            comp.unregister(a)
+            reg_b = self._register(comp, b)
+            comp.frame_ready(reg_b)
+            sched.fire(vc.LINGER_MS)
+            sched.fire(vc.HANDOFF_RELEASE_MS)
+        detach.assert_called_once_with(reg_a)
+
+    def test_cap_releases_if_successor_never_shows(self):
+        comp, sched = self._comp()
+        a, b = object(), object()
+        reg_a = self._register(comp, a)
+        with patch.object(comp, "_detach") as detach:
+            comp.unregister(a)
+            self._register(comp, b)
+            sched.fire(vc.LINGER_MS)
+            sched.fire(vc.LINGER_CAP_MS)
+        detach.assert_called_once_with(reg_a)
+
+    def test_release_is_idempotent(self):
+        comp, sched = self._comp()
+        a = object()
+        self._register(comp, a)
+        with patch.object(comp, "_detach") as detach:
+            comp.unregister(a)
+            sched.fire(vc.LINGER_MS)
+            sched.fire(vc.LINGER_CAP_MS)
+        detach.assert_called_once()
+
+    def test_frame_ready_without_lingering_schedules_nothing(self):
+        comp, sched = self._comp()
+        reg = self._register(comp, object())
+        comp.frame_ready(reg)
+        assert sched.pending == []
+
+    def test_reregister_while_lingering_attaches_fresh(self):
+        # Playlist loop A→B→A: A's old registration may still linger.
+        comp, sched = self._comp()
+        a = object()
+        first = self._register(comp, a)
+        comp.unregister(a)
+        second = self._register(comp, a)
+        assert second is not first
+        assert comp.is_registered(a) is True
+
+    def test_timers_after_shutdown_are_harmless(self):
+        comp, sched = self._comp()
+        a = object()
+        self._register(comp, a)
+        comp.unregister(a)
+        comp.shutdown()
+        with patch.object(comp, "_detach") as detach:
+            sched.fire(vc.LINGER_MS)
+            sched.fire(vc.LINGER_CAP_MS)
+        detach.assert_not_called()

@@ -147,7 +147,8 @@ class VideoSink(GstMediaElement):
             return Gst.FlowReturn.OK
 
         buf = sample.get_buffer()
-        if not reg.caps_set:
+        first = not reg.caps_set
+        if first:
             caps = sample.get_caps()
             reg.appsrc.set_property("caps", caps)
             compositor.fit_registration(reg, caps)
@@ -171,6 +172,9 @@ class VideoSink(GstMediaElement):
         )
         out.dts = Gst.CLOCK_TIME_NONE
         reg.appsrc.emit("push-buffer", out)
+        if first:
+            # Lets a lingering predecessor hand off (no black gap).
+            compositor.frame_ready(reg)
         return Gst.FlowReturn.OK
 
     def sink(self):
