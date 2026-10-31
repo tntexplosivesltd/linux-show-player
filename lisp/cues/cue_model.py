@@ -64,35 +64,29 @@ class CueModel(Model):
         promoted = []
         for other in self.__cues.values():
             if other.group_id == cue_id:
-                other.group_id = parent_group_id
+                # Never point a cue at itself (corrupt group_id cycle).
+                other.group_id = (
+                    parent_group_id if other.id != parent_group_id else ""
+                )
                 promoted.append(other.id)
 
-        # Splice the promoted ids into the grandparent GroupCue's
-        # explicit `children` list, replacing the removed group's id
-        # (preserving order). Playback resolution iterates that list
-        # — not the group_id back-links — so without this the
-        # promoted children are silently dropped from the grandparent
-        # (bug C1). Guarded by isinstance since a top-level ("")
-        # parent has no children list. UngroupCuesCommand pre-splices
-        # before calling remove, so this no-ops on that path (the
-        # removed id is already gone from the parent's list); it's the
-        # safety net for direct cue_model.remove callers.
+        # When a group is dissolved, splice the promoted ids into the
+        # grandparent GroupCue's explicit `children` list in place of
+        # the removed group's id. Playback iterates that list — not
+        # the group_id back-links — so without this the promoted
+        # children silently stop playing (bug C1). Removing a plain
+        # cue leaves its parent's list alone: `_resolve_children`
+        # skips the missing id, and re-adding the cue (undo) restores
+        # playback. UngroupCuesCommand splices before calling remove,
+        # so this no-ops on that path; it's the safety net for direct
+        # cue_model.remove callers. Undoing a removal of a group is
+        # RemoveCuesCommand's job.
         from lisp.plugins.action_cues.group_cue import GroupCue
 
         parent = self.__cues.get(parent_group_id)
-        if isinstance(parent, GroupCue) and cue_id in parent.children:
-            # Order the promoted ids by the removed group's own
-            # children list where possible, appending any stragglers
-            # (cues that pointed at the group but weren't listed).
-            removed_children = list(getattr(cue, "children", []))
-            ordered = [c for c in removed_children if c in promoted]
-            ordered += [c for c in promoted if c not in ordered]
-
-            index = parent.children.index(cue_id)
-            parent.children = (
-                parent.children[:index]
-                + ordered
-                + parent.children[index + 1:]
+        if isinstance(cue, GroupCue) and isinstance(parent, GroupCue):
+            parent.replace_child(
+                cue_id, GroupCue.promotion_order(cue.children, promoted)
             )
 
         return cue

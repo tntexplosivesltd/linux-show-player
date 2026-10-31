@@ -204,6 +204,138 @@ class TestCueModelPop:
         assert sibling.group_id == ""
 
 
+def _group_cue(app, cue_id, children, group_id=""):
+    from lisp.plugins.action_cues.group_cue import GroupCue
+
+    group = GroupCue(app, id=cue_id)
+    group.group_id = group_id
+    group.children = children
+    return group
+
+
+def _model_app():
+    model = CueModel()
+    app = MagicMock()
+    app.cue_model = model
+    return model, app
+
+
+class TestCueModelPopSplice:
+    """Edge cases of the C1 safety-net splice in `CueModel.pop()`."""
+
+    def test_pop_leaf_in_group_leaves_parent_list_alone(self):
+        """A leaf has nothing to promote: its parent's children list
+        must not change, so a plain re-add (undo) restores playback.
+        """
+        model, app = _model_app()
+        g = _group_cue(app, "g", ["a", "b"])
+        a = _make_cue("a", group_id="g")
+        b = _make_cue("b", group_id="g")
+        for cue in (g, a, b):
+            model.add(cue)
+
+        model.pop("a")
+
+        assert g.children == ["a", "b"]
+        assert [c.id for c in g._resolve_children()] == ["b"]
+
+    def test_pop_multi_child_group_splices_in_order(self):
+        """outer [x, inner, y] + inner [a, b, c] → [x, a, b, c, y]."""
+        model, app = _model_app()
+        outer = _group_cue(app, "outer", ["x", "inner", "y"])
+        inner = _group_cue(app, "inner", ["a", "b", "c"], "outer")
+        cues = [outer, inner] + [
+            _make_cue(i, group_id="outer") for i in ("x", "y")
+        ] + [_make_cue(i, group_id="inner") for i in ("c", "a", "b")]
+        for cue in cues:
+            model.add(cue)
+
+        model.pop("inner")
+
+        assert outer.children == ["x", "a", "b", "c", "y"]
+
+    def test_pop_empty_group_drops_its_id_from_parent(self):
+        model, app = _model_app()
+        outer = _group_cue(app, "outer", ["x", "inner", "y"])
+        inner = _group_cue(app, "inner", [], "outer")
+        for cue in (outer, inner, _make_cue("x", "outer"),
+                    _make_cue("y", "outer")):
+            model.add(cue)
+
+        model.pop("inner")
+
+        assert outer.children == ["x", "y"]
+
+    def test_pop_skips_stale_child_ids(self):
+        """Ids listed in the removed group but no longer in the model
+        must not be spliced into the grandparent."""
+        model, app = _model_app()
+        outer = _group_cue(app, "outer", ["inner"])
+        inner = _group_cue(app, "inner", ["gone", "a"], "outer")
+        for cue in (outer, inner, _make_cue("a", "inner")):
+            model.add(cue)
+
+        model.pop("inner")
+
+        assert outer.children == ["a"]
+
+    def test_pop_appends_stragglers_after_listed_children(self):
+        """A cue pointing at the group but missing from its list still
+        gets promoted, and spliced after the listed children."""
+        model, app = _model_app()
+        outer = _group_cue(app, "outer", ["inner"])
+        inner = _group_cue(app, "inner", ["a"], "outer")
+        for cue in (outer, inner, _make_cue("stray", "inner"),
+                    _make_cue("a", "inner")):
+            model.add(cue)
+
+        model.pop("inner")
+
+        assert outer.children == ["a", "stray"]
+
+    def test_pop_three_levels_collapses_one_level(self):
+        model, app = _model_app()
+        top = _group_cue(app, "top", ["mid"])
+        mid = _group_cue(app, "mid", ["low"], "top")
+        low = _group_cue(app, "low", ["a"], "mid")
+        for cue in (top, mid, low, _make_cue("a", "low")):
+            model.add(cue)
+
+        model.pop("mid")
+
+        assert top.children == ["low"]
+        assert low.group_id == "top"
+        assert low.children == ["a"]
+
+    def test_pop_group_id_cycle_does_not_make_group_contain_itself(self):
+        """Corrupt session: A.group_id=B, B.group_id=A. Removing A must
+        not splice "B" into B's own children list."""
+        model, app = _model_app()
+        a = _group_cue(app, "A", ["B"], group_id="B")
+        b = _group_cue(app, "B", ["A"], group_id="A")
+        model.add(a)
+        model.add(b)
+
+        model.pop("A")
+
+        assert "B" not in b.children
+        assert b.group_id != "B"
+
+    def test_pop_with_malformed_children_does_not_raise(self):
+        """A string `children` (corrupt session) must not raise mid-pop
+        and leave the model half-updated."""
+        model, app = _model_app()
+        outer = _group_cue(app, "outer", ["inner"])
+        outer.children = "inner"
+        inner = _group_cue(app, "inner", ["a"], "outer")
+        for cue in (outer, inner, _make_cue("a", "inner")):
+            model.add(cue)
+
+        model.pop("inner")
+
+        assert model.get("inner") is None
+
+
 class TestCueModelReset:
     def test_reset_clears(self):
         model = CueModel()

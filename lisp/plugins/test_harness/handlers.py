@@ -20,10 +20,10 @@ import time
 
 from lisp import layout as layout_module
 from lisp.command.cue import UpdateCueCommand
+from lisp.command.group import RemoveCuesCommand
 from lisp.command.model import (
     ModelAddItemsCommand,
     ModelMoveItemsCommand,
-    ModelRemoveItemsCommand,
 )
 from lisp.cues.cue import CueAction
 from lisp.plugins.test_harness.dispatcher import AppError
@@ -177,7 +177,7 @@ def register_all(dispatcher, app, signal_manager):
 
         def do_remove():
             app.commands_stack.do(
-                ModelRemoveItemsCommand(app.cue_model, cue)
+                RemoveCuesCommand(app.cue_model, cue)
             )
 
         invoke_on_main_thread(do_remove)

@@ -379,3 +379,123 @@ class TestUngroupCuesCommand:
         assert mock_app.cue_model.get(inner_group.id) is inner_group
         assert leaf.group_id == inner_group.id
         assert inner_group.group_id == outer_group.id
+
+
+def _real_group(app, cue_id, children, group_id=""):
+    from lisp.plugins.action_cues.group_cue import GroupCue
+
+    group = GroupCue(app, id=cue_id)
+    group.group_id = group_id
+    group.children = list(children)
+    return group
+
+
+class TestUngroupSplice:
+    """Splice edge cases for UngroupCuesCommand on a nested group,
+    built directly in the model with real GroupCue objects so the
+    `[:index]`/`[index+1:]` slices and multi-child order are exercised.
+    """
+
+    def _build(self, mock_app, inner_children=("a", "b", "c")):
+        # outer: [x, inner, y]; inner: inner_children
+        outer = _real_group(mock_app, "outer", ["x", "inner", "y"])
+        inner = _real_group(
+            mock_app, "inner", inner_children, group_id="outer"
+        )
+        cues = [outer, inner]
+        cues += [_make_cue(i, group_id="outer") for i in ("x", "y")]
+        cues += [_make_cue(i, group_id="inner") for i in inner_children]
+        for cue in cues:
+            mock_app.cue_model.add(cue)
+        return outer, inner
+
+    def test_multi_child_do_undo_redo(self, mock_app, mock_list_model):
+        from lisp.command.group import UngroupCuesCommand
+
+        outer, inner = self._build(mock_app)
+        cmd = UngroupCuesCommand(mock_app, mock_list_model, inner)
+
+        cmd.do()
+        assert outer.children == ["x", "a", "b", "c", "y"]
+        assert [c.id for c in outer._resolve_children()] == [
+            "x", "a", "b", "c", "y",
+        ]
+
+        cmd.undo()
+        assert outer.children == ["x", "inner", "y"]
+        assert inner.children == ["a", "b", "c"]
+        assert [c.id for c in inner._resolve_children()] == [
+            "a", "b", "c",
+        ]
+
+        cmd.redo()
+        assert outer.children == ["x", "a", "b", "c", "y"]
+
+    def test_empty_inner_group(self, mock_app, mock_list_model):
+        from lisp.command.group import UngroupCuesCommand
+
+        outer, inner = self._build(mock_app, inner_children=())
+        cmd = UngroupCuesCommand(mock_app, mock_list_model, inner)
+
+        cmd.do()
+        assert outer.children == ["x", "y"]
+        cmd.undo()
+        assert outer.children == ["x", "inner", "y"]
+
+    def test_stragglers_are_spliced_too(self, mock_app, mock_list_model):
+        """A cue pointing at the inner group but missing from its list
+        is promoted by pop(); it must also land in outer's list, after
+        the listed children (same rule as CueModel.pop)."""
+        from lisp.command.group import UngroupCuesCommand
+
+        outer, inner = self._build(mock_app, inner_children=("a",))
+        mock_app.cue_model.add(_make_cue("stray", group_id="inner"))
+        cmd = UngroupCuesCommand(mock_app, mock_list_model, inner)
+
+        cmd.do()
+
+        assert outer.children == ["x", "a", "stray", "y"]
+        assert mock_app.cue_model.get("stray").group_id == "outer"
+
+    def test_three_levels_collapses_one_level(
+        self, mock_app, mock_list_model
+    ):
+        from lisp.command.group import UngroupCuesCommand
+
+        top = _real_group(mock_app, "top", ["mid"])
+        mid = _real_group(mock_app, "mid", ["low"], group_id="top")
+        low = _real_group(mock_app, "low", ["a"], group_id="mid")
+        for cue in (top, mid, low, _make_cue("a", group_id="low")):
+            mock_app.cue_model.add(cue)
+
+        cmd = UngroupCuesCommand(mock_app, mock_list_model, mid)
+        cmd.do()
+
+        assert top.children == ["low"]
+        assert low.group_id == "top"
+        assert [c.id for c in low._resolve_children()] == ["a"]
+
+        cmd.undo()
+        assert top.children == ["mid"]
+        assert mid.children == ["low"]
+        assert low.group_id == "mid"
+
+    def test_redo_that_skips_splice_does_not_reuse_stale_snapshot(
+        self, mock_app, mock_list_model
+    ):
+        """If a redo() finds the group id no longer in the parent's
+        list, undo() must not write back the snapshot taken in an
+        earlier do()."""
+        from lisp.command.group import UngroupCuesCommand
+
+        outer, inner = self._build(mock_app, inner_children=("a",))
+        cmd = UngroupCuesCommand(mock_app, mock_list_model, inner)
+        cmd.do()
+        cmd.undo()
+
+        # Something else drops inner from outer's list in between.
+        outer.children = ["x", "y"]
+        cmd.redo()
+        cmd.undo()
+
+        assert outer.children == ["x", "y"]

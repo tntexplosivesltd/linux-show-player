@@ -130,6 +130,51 @@ class GroupCue(Cue):
             if child.index != target:
                 model.move(child.index, target)
 
+    def replace_child(self, old_id, new_ids):
+        """Replace ``old_id`` in `children` with ``new_ids``, in place.
+
+        Used when a nested group is dissolved (ungroup or removal) to
+        splice its promoted children into this, its parent, group:
+        playback iterates `children`, not the `group_id` back-links,
+        so the promoted ids must land here or they silently stop
+        playing. Ids equal to this group's own id or already listed
+        are skipped, so a corrupt `group_id` cycle can't make a group
+        contain itself. No-op if `children` isn't a list or doesn't
+        contain ``old_id``.
+
+        :return: True if the list was changed
+        """
+        children = self.children
+        if not isinstance(children, list) or old_id not in children:
+            return False
+
+        spliced = []
+        for cue_id in new_ids:
+            if (
+                cue_id != self.id
+                and cue_id not in children
+                and cue_id not in spliced
+            ):
+                spliced.append(cue_id)
+
+        index = children.index(old_id)
+        self.children = children[:index] + spliced + children[index + 1:]
+        return True
+
+    @staticmethod
+    def promotion_order(listed_ids, promoted_ids):
+        """Order the ids promoted out of a dissolved group.
+
+        Ids follow the dissolved group's own `children` order
+        (``listed_ids``); any promoted ids it didn't list (cues whose
+        `group_id` pointed at it anyway) are appended after them.
+        """
+        if not isinstance(listed_ids, list):
+            listed_ids = []
+        ordered = [i for i in listed_ids if i in promoted_ids]
+        ordered += [i for i in promoted_ids if i not in ordered]
+        return ordered
+
     def _resolve_children(self):
         """Return the list of child Cue objects in order."""
         cues = []
