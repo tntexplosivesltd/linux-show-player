@@ -27,6 +27,25 @@ from tests.e2e.helpers import (
 )
 
 
+def _wait_for(predicate, timeout=5.0):
+    """Poll ``predicate`` until truthy or timeout; return its last value.
+
+    Context actions and cue.remove are dispatched to the Qt main
+    thread, so poll for the resulting state instead of sleeping a
+    fixed amount (fixed sleeps are what flake on slow CI runners).
+    """
+    deadline = time.time() + timeout
+    while True:
+        value = predicate()
+        if value or time.time() >= deadline:
+            return value
+        time.sleep(0.05)
+
+
+def _children(cue_id):
+    return cue_prop(cue_id, "children")
+
+
 def run_tests(t):
     cues = setup_with_tones()
     A, B, C = cues["tone_A"], cues["tone_B"], cues["tone_C"]
@@ -134,7 +153,7 @@ def run_tests(t):
         "action": "Ungroup",
         "cue_ids": [inner_group["id"]],
     })
-    time.sleep(0.3)
+    _wait_for(lambda: cue_prop(B, "group_id") == outer_group["id"])
 
     t.check(
         "B promoted to outer (not top-level) after ungroup",
@@ -148,6 +167,27 @@ def run_tests(t):
         c["id"] == inner_group["id"] for c in call("cue.list")
     )
     t.check("inner_group dissolved by ungroup", not inner_present)
+    # outer's own playback list: inner's id replaced by B, C in order.
+    t.check(
+        "outer.children == [A, B, C] after ungroup",
+        _children(outer_group["id"]) == [A, B, C],
+    )
+
+    # 7b. The real C1 invariant: promoted children must still be
+    # playable via the grandparent. Starting outer_group must fire
+    # B.started and C.started — GroupCue playback iterates outer's
+    # own `children` list, so if the promoted ids weren't spliced in
+    # (only group_id rewritten), B/C would silently never start.
+    with cue_signal(B, "started") as sub_b2, \
+         cue_signal(C, "started") as sub_c2:
+        call("cue.start", {"id": outer_group["id"]})
+        ev_b2 = wait_for_signal(sub_b2, timeout=5)
+        ev_c2 = wait_for_signal(sub_c2, timeout=5)
+        t.check("B playable via outer after ungroup", ev_b2 is not None)
+        t.check("C playable via outer after ungroup", ev_c2 is not None)
+
+    stop_all()
+    time.sleep(0.5)
 
     # 8. Restore the nested structure from the on-disk save and
     # exercise the delete path: cue.remove on the inner group
@@ -161,7 +201,9 @@ def run_tests(t):
     )
 
     call("cue.remove", {"id": inner_group["id"]})
-    time.sleep(0.3)
+    _wait_for(lambda: not any(
+        c["id"] == inner_group["id"] for c in call("cue.list")
+    ))
 
     t.check(
         "B retained outer parentage after inner deletion",
@@ -177,6 +219,34 @@ def run_tests(t):
     t.check(
         "inner_group removed by cue.remove",
         not inner_present_2,
+    )
+    t.check(
+        "outer.children == [A, B, C] after inner deletion",
+        _children(outer_group["id"]) == [A, B, C],
+    )
+
+    # 9. Undo the deletion: the whole nested hierarchy must come back,
+    # including both explicit children lists that playback iterates
+    # (a plain re-add would leave B/C promoted and inner unlisted).
+    call("commands.undo")
+    _wait_for(lambda: cue_prop(B, "group_id") == inner_group["id"])
+
+    t.check(
+        "inner restored by undo of delete",
+        cue_prop(inner_group["id"], "group_id") == outer_group["id"],
+    )
+    t.check(
+        "B, C back under inner after undo of delete",
+        cue_prop(B, "group_id") == inner_group["id"]
+        and cue_prop(C, "group_id") == inner_group["id"],
+    )
+    t.check(
+        "outer.children == [A, inner] after undo of delete",
+        _children(outer_group["id"]) == [A, inner_group["id"]],
+    )
+    t.check(
+        "inner.children == [B, C] after undo of delete",
+        _children(inner_group["id"]) == [B, C],
     )
 
 

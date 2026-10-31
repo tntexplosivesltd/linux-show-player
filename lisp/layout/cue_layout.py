@@ -19,7 +19,7 @@ from abc import abstractmethod
 
 from PyQt5.QtCore import Qt
 
-from lisp.command.model import ModelRemoveItemsCommand
+from lisp.command.group import RemoveCuesCommand
 from lisp.core.has_properties import HasProperties
 from lisp.core.signal import Signal
 from lisp.cues.cue import Cue, CueAction
@@ -223,5 +223,5 @@ class CueLayout(HasProperties):
 
     def _remove_cues(self, cues):
         self.app.commands_stack.do(
-            ModelRemoveItemsCommand(self.cue_model, *cues)
+            RemoveCuesCommand(self.cue_model, *cues)
         )

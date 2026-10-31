@@ -85,12 +85,24 @@ class GroupCue(Cue):
         self.property_changed.connect(self._on_property_changed)
 
     def _on_property_changed(self, _cue, name, value):
-        """Shuffle when the shuffle option transitions to True.
+        """Sanitise `children`; shuffle when shuffle turns on.
 
-        Fires during deserialization as well; that's harmless
-        since _shuffle_on_load will run on session_loaded and
-        double-shuffling remains uniformly random.
+        Fires during deserialization as well. For `children` that is
+        the point: a hand-edited/corrupt session can hold non-string
+        entries (e.g. ``[["x"], {}]``) that load fine but make every
+        id lookup (dict/set hashing) raise later, mid-operation. Drop
+        them once, here, keeping order. For shuffle it's harmless:
+        _shuffle_on_load runs on session_loaded and double-shuffling
+        remains uniformly random.
         """
+        if (
+            name == "children"
+            and isinstance(value, list)
+            and not all(isinstance(i, str) for i in value)
+        ):
+            self.children = [i for i in value if isinstance(i, str)]
+            return
+
         if (
             name == "shuffle"
             and value is True
@@ -129,6 +141,90 @@ class GroupCue(Cue):
             target = base + offset
             if child.index != target:
                 model.move(child.index, target)
+
+    def replace_child(self, old_id, new_ids):
+        """Splice ``new_ids`` into `children` in place of ``old_id``.
+
+        Used when a nested group is dissolved (ungroup or removal) to
+        move its promoted children into this, its parent, group:
+        playback iterates `children`, not the `group_id` back-links,
+        so the promoted ids must land here or they silently stop
+        playing. If `children` doesn't list ``old_id`` (group_id and
+        children have drifted apart in an older session) the ids are
+        appended instead, for the same reason.
+
+        Skipped ids: this group's own id, ids already listed, and any
+        id whose own subtree already contains this group -- so a
+        corrupt or stale hierarchy can't make a group contain itself
+        or create a playback cycle. No-op if `children` isn't a list.
+
+        The list is rebuilt and reassigned, never mutated in place:
+        assignment fires `property_changed` (the layout and undo rely
+        on it), and a playback worker iterating the old list never
+        sees it half-updated.
+
+        :return: True if `children` was changed
+        """
+        children = self.children
+        if not isinstance(children, list):
+            return False
+
+        listed = set(children)
+        # Ids from which this group is reachable through `children`
+        # (itself included): splicing any of them in would be a cycle.
+        blocked = self._ids_reaching(self.id)
+        spliced = []
+        for cue_id in new_ids:
+            if cue_id in listed or cue_id in blocked:
+                continue
+            listed.add(cue_id)
+            spliced.append(cue_id)
+
+        if old_id in children:
+            index = children.index(old_id)
+            self.children = (
+                children[:index] + spliced + children[index + 1:]
+            )
+            return True
+        if spliced:
+            self.children = children + spliced
+            return True
+        return False
+
+    def _ids_reaching(self, target_id):
+        """Ids whose `children` subtree contains ``target_id`` (plus
+        ``target_id`` itself), found with one upward walk over the
+        model -- linear in the model, however many ids get checked."""
+        parents = {}
+        for cue in self.app.cue_model:
+            children = getattr(cue, "children", None)
+            if isinstance(children, list):
+                for child_id in children:
+                    parents.setdefault(child_id, []).append(cue.id)
+
+        reaching, stack = {target_id}, [target_id]
+        while stack:
+            for parent_id in parents.get(stack.pop(), ()):
+                if parent_id not in reaching:
+                    reaching.add(parent_id)
+                    stack.append(parent_id)
+        return reaching
+
+    @staticmethod
+    def promotion_order(listed_ids, promoted_ids):
+        """Order the ids promoted out of a dissolved group.
+
+        Ids follow the dissolved group's own `children` order
+        (``listed_ids``); any promoted ids it didn't list (cues whose
+        `group_id` pointed at it anyway) are appended after them.
+        """
+        if not isinstance(listed_ids, list):
+            listed_ids = []
+        promoted = set(promoted_ids)
+        ordered = [i for i in listed_ids if i in promoted]
+        listed = set(ordered)
+        ordered += [i for i in promoted_ids if i not in listed]
+        return ordered
 
     def _resolve_children(self):
         """Return the list of child Cue objects in order."""
