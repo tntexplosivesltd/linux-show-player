@@ -319,12 +319,14 @@ provides two poll helpers for the common cases:
 # can lag wall-clock during pipeline startup under load).
 wait_current_time(cue_id, min_ms=1000, timeout=5)
 
-# After reloading a *populated* session file, wait for the cues to
-# finish loading. `session.info.has_session` flips True at the START of
-# the load (before any cue is inserted), so a `cue.list` issued the
-# instant has_session turns True can see an empty/partial model.
+# `session.info` is answered on the Qt main thread, so it can't run in
+# the middle of a (synchronous, main-thread) session load:
+# has_session=True means every cue is in the model AND every
+# `session_loaded` handler (e.g. shuffle-on-load's reorder) has run.
+# `start_lisp` waits for exactly that. `wait_cues_loaded(n)` remains as
+# a cheap cue-count sanity check after reloading a populated session.
 if info.get("has_session"):
-    wait_cues_loaded(expected_cue_count)   # then read cue.list
+    cues = call("cue.list")   # complete and post-load-handler
 ```
 
 `signals.wait_for` accepts an optional `match` dict to filter events by

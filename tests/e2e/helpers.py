@@ -96,9 +96,11 @@ def start_lisp(
     through here rather than spawning LiSP themselves: the harness
     port is only known via the discovery file this function wires up.
 
-    ``expected_cues`` additionally waits for that many cues to finish
-    loading (see ``wait_cues_loaded``) — needed when ``session_path``
-    is a populated session.  ``timeout`` overrides the startup budget.
+    Returns once ``session.info`` reports ``has_session``, which (being
+    answered on the main thread) means the load and its
+    ``session_loaded`` handlers have finished.  ``expected_cues``
+    additionally sanity-checks the reloaded cue count (see
+    ``wait_cues_loaded``).  ``timeout`` overrides the startup budget.
 
     Exits with status 2 if LiSP doesn't come up in time, or as soon as
     the process dies during startup.
@@ -260,18 +262,16 @@ def wait_current_time(cue_id, min_ms=1, timeout=5.0):
 def wait_cues_loaded(expected, timeout=10.0):
     """Poll until the cue model holds at least ``expected`` cues.
 
-    A session opened via ``-f`` reports ``has_session=True`` at the very
-    *start* of the load: ``Application.__load_from_file`` creates the
-    Session (which flips has_session) *before* it reads a single cue from
-    the file, and only emits ``session_loaded`` after the whole
-    cue-insertion loop has finished.  Because the harness RPC server runs
-    on its own thread, a ``cue.list`` issued the moment ``has_session``
-    turns True can observe zero or partially-loaded cues — the classic
-    "waited for the wrong condition" race.  The load is synchronous, so
-    once the known cue count is present the list is complete and stable.
+    ``session.info`` is answered on the Qt main thread, so once it
+    reports ``has_session=True`` the synchronous session load -- cue
+    insertion *and* every ``session_loaded`` handler -- has finished.
+    This is now a cheap sanity check on the reloaded cue count (it also
+    covers attaching to an older LiSP whose ``session.info`` ran off the
+    main thread and flipped ``has_session`` at the start of the load).
+    Note the cue count alone is NOT a "load finished" signal: it is
+    reached before ``session_loaded`` handlers run.
 
-    Use this after ``has_session`` when reloading a *populated* session
-    file.  Returns True on success, False on timeout.
+    Returns True on success, False on timeout.
     """
     deadline = time.time() + timeout
     while time.time() < deadline:

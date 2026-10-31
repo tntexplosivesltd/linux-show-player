@@ -181,8 +181,7 @@ def measure_first_transition(t):
     start_lisp(session_path=SESSION)
     frames = []
     try:
-        # has_session flips True before cues finish loading from the
-        # file; wait for the 2 videos + 1 GroupCue to be in the model.
+        # Sanity-check the reload: 2 videos + 1 GroupCue.
         wait_cues_loaded(3)
         cues = sorted(call("cue.list"), key=lambda c: c["index"])
         group = next(
