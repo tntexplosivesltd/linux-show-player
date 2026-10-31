@@ -15,39 +15,20 @@ Run:
     poetry run python tests/e2e/test_shuffle_restart.py
 """
 
-import atexit
 import json
 import os
-import signal
-import subprocess
 import sys
 import time
 
-sys.path.insert(
-    0,
-    os.path.join(
-        os.path.dirname(__file__), "..", "..", "lisp", "plugins",
-        "test_harness",
-    ),
-)
-from client import send_request  # noqa: E402
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+from tests.e2e.helpers import call, start_lisp, stop_lisp  # noqa: E402
 
-HOST = "127.0.0.1"
-PORT = 8070
 STARTUP_TIMEOUT = 20
 SESSION_PATH = "/tmp/lisp_shuffle_restart_session.lsp"
 
 _pass = 0
 _fail = 0
 _errors = []
-_proc = None
-
-
-def call(method, params=None):
-    resp = send_request(HOST, PORT, method, params or {})
-    if "error" in resp:
-        raise RuntimeError(f"{method}: {resp['error']['message']}")
-    return resp.get("result")
 
 
 def check(name, condition):
@@ -59,59 +40,6 @@ def check(name, condition):
         _fail += 1
         _errors.append(name)
         print(f"  FAIL: {name}")
-
-
-def launch(session_file, expected_cues=None):
-    global _proc
-    _proc = subprocess.Popen(
-        [sys.executable, "-m", "lisp.main", "-l", "warning",
-         "-f", session_file],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    atexit.register(terminate)
-
-    deadline = time.time() + STARTUP_TIMEOUT
-    while time.time() < deadline:
-        try:
-            # The harness answers `ping` before the session is attached,
-            # so waiting on ping alone races: a `cue.add` issued right
-            # after can hit "No active session".  Wait for has_session.
-            resp = send_request(HOST, PORT, "ping")
-            if "result" in resp:
-                info = send_request(HOST, PORT, "session.info")
-                if (info.get("result") or {}).get("has_session"):
-                    # has_session flips True at the *start* of a -f load,
-                    # before cues are inserted; when reloading a populated
-                    # session, also wait for the cues to finish loading.
-                    if expected_cues:
-                        _deadline = time.time() + 10.0
-                        while time.time() < _deadline:
-                            if len(call("cue.list")) >= expected_cues:
-                                break
-                            time.sleep(0.1)
-                    return
-        except (ConnectionRefusedError, ConnectionError, OSError):
-            pass
-        time.sleep(0.5)
-
-    terminate()
-    print(
-        f"ERROR: LiSP didn't start within {STARTUP_TIMEOUT}s",
-        file=sys.stderr,
-    )
-    sys.exit(2)
-
-
-def terminate():
-    global _proc
-    if _proc and _proc.poll() is None:
-        _proc.send_signal(signal.SIGTERM)
-        try:
-            _proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            _proc.kill()
-    _proc = None
 
 
 def make_empty_session(path):
@@ -138,12 +66,12 @@ def main():
     # 1. Start LiSP fresh with an empty session
     make_empty_session(SESSION_PATH)
     print("Starting LiSP (empty session)...")
-    launch(SESSION_PATH)
+    start_lisp(session_path=SESSION_PATH, timeout=STARTUP_TIMEOUT)
     print("LiSP ready.")
 
     # 2. Add six simple cues, then group them
     child_ids = [add_stop_cue(f"cue_{i}") for i in range(6)]
-    group_res = call("layout.context_action", {
+    call("layout.context_action", {
         "action": "Group selected",
         "cue_ids": child_ids,
     })
@@ -178,7 +106,7 @@ def main():
     call("session.save", {"path": SESSION_PATH})
     time.sleep(0.5)
     print("Terminating LiSP...")
-    terminate()
+    stop_lisp()
     time.sleep(1.0)
 
     # 6. Verify save-file content
@@ -195,7 +123,11 @@ def main():
     # 7. Relaunch LiSP with the saved session (group + 6 children = 7
     #    cues); wait for them all to load rather than a fixed sleep.
     print("Relaunching LiSP with saved session...")
-    launch(SESSION_PATH, expected_cues=7)
+    start_lisp(
+        session_path=SESSION_PATH,
+        expected_cues=7,
+        timeout=STARTUP_TIMEOUT,
+    )
     print("LiSP ready.")
 
     # 8. Grab the group again and check its children order
@@ -205,7 +137,7 @@ def main():
     )
     check("3: Group exists after relaunch", group is not None)
     if group is None:
-        terminate()
+        stop_lisp()
         _report()
         return
 
@@ -233,7 +165,7 @@ def main():
     check("6: UI indices match children order after reload",
           ui_indices == sorted(ui_indices))
 
-    terminate()
+    stop_lisp()
     _report()
 
 
@@ -251,4 +183,4 @@ if __name__ == "__main__":
     try:
         main()
     finally:
-        terminate()
+        stop_lisp()

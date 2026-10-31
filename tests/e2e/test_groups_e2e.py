@@ -9,120 +9,35 @@ Run:
 Options:
     --no-launch    Don't start/stop LiSP (attach to existing)
     --host HOST    Harness host (default: 127.0.0.1)
-    --port PORT    Harness port (default: 8070)
+    --port PORT    Harness port (with --no-launch; default: read
+                   from the worktree's discovery file)
 """
 
-import atexit
-import json
 import math
 import os
-import signal
 import struct
-import subprocess
 import sys
-import tempfile
 import time
 import wave
 
-# Allow importing the test harness client without installing
-sys.path.insert(
-    0,
-    os.path.join(
-        os.path.dirname(__file__), "..", "..", "lisp", "plugins",
-        "test_harness",
-    ),
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+from tests.e2e import helpers as _h  # noqa: E402
+from tests.e2e.helpers import (  # noqa: E402
+    call,
+    parse_args,
+    resolve_suite_port,
+    start_lisp,
+    stop_lisp,
 )
-from client import send_request  # noqa: E402
 
-HOST = "127.0.0.1"
-PORT = 8070
-STARTUP_TIMEOUT = 15
 AUDIO_DIR = "/tmp/lisp_test_audio"
 
 _pass = 0
 _fail = 0
 _errors = []
-_lisp_proc = None
-
-
-# ── LiSP lifecycle ──────────────────────────────────────────
-
-def _create_empty_session():
-    """Create a minimal ListLayout session file."""
-    session = {
-        "meta": {"version": "0.6"},
-        "session": {"layout_type": "ListLayout"},
-        "cues": [],
-    }
-    fd, path = tempfile.mkstemp(suffix=".lsp")
-    with os.fdopen(fd, "w") as f:
-        json.dump(session, f)
-    return path
-
-
-def start_lisp():
-    """Start LiSP in the background and wait for the harness."""
-    global _lisp_proc
-
-    session_path = _create_empty_session()
-
-    _lisp_proc = subprocess.Popen(
-        [
-            sys.executable, "-m", "lisp.main",
-            "-l", "warning",
-            "-f", session_path,
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    atexit.register(stop_lisp)
-
-    deadline = time.time() + STARTUP_TIMEOUT
-    while time.time() < deadline:
-        try:
-            # The harness answers `ping` before the session is attached;
-            # wait for has_session so the cue.add calls that follow don't
-            # race and hit "No active session".
-            resp = send_request(HOST, PORT, "ping")
-            if "result" in resp:
-                info = send_request(HOST, PORT, "session.info")
-                if (info.get("result") or {}).get("has_session"):
-                    # Clean up temp file after load
-                    os.unlink(session_path)
-                    return
-        except (ConnectionRefusedError, ConnectionError, OSError):
-            pass
-        time.sleep(0.5)
-
-    stop_lisp()
-    print("ERROR: LiSP did not start within "
-          f"{STARTUP_TIMEOUT}s", file=sys.stderr)
-    sys.exit(2)
-
-
-def stop_lisp():
-    """Terminate LiSP gracefully."""
-    global _lisp_proc
-    if _lisp_proc and _lisp_proc.poll() is None:
-        _lisp_proc.send_signal(signal.SIGTERM)
-        try:
-            _lisp_proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            _lisp_proc.kill()
-    _lisp_proc = None
 
 
 # ── Helpers ──────────────────────────────────────────────────
-
-def call(method, params=None):
-    """Call a harness method; return result or raise on error."""
-    resp = send_request(HOST, PORT, method, params or {})
-    if "error" in resp:
-        raise RuntimeError(
-            f"{method}: {resp['error']['message']}"
-        )
-    return resp.get("result")
-
 
 def cue_state(cue_id):
     return call("cue.state", {"id": cue_id})["state_name"]
@@ -1056,21 +971,11 @@ def test_12_group_delete_children_survive(ids, group_id):
 # ── Main ─────────────────────────────────────────────────────
 
 def main():
-    global HOST, PORT
-
-    import argparse
-    parser = argparse.ArgumentParser(
-        description="E2E tests for cue groups"
-    )
-    parser.add_argument("--host", default=HOST)
-    parser.add_argument("--port", type=int, default=PORT)
-    parser.add_argument(
-        "--no-launch", action="store_true",
-        help="Don't start/stop LiSP (attach to existing)",
-    )
-    args = parser.parse_args()
-    HOST = args.host
-    PORT = args.port
+    args = parse_args("E2E tests for cue groups")
+    _h.HOST = args.host
+    port = resolve_suite_port(args)
+    if port is not None:
+        _h.PORT = port
 
     print("Generating test audio files...")
     create_test_audio()

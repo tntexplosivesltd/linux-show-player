@@ -72,7 +72,14 @@ def _create_empty_session(layout="ListLayout"):
     return path
 
 
-def start_lisp(layout="ListLayout", log_level="warning", log_file=None):
+def start_lisp(
+    layout="ListLayout",
+    log_level="warning",
+    log_file=None,
+    session_path=None,
+    expected_cues=None,
+    timeout=STARTUP_TIMEOUT,
+):
     """Start LiSP with the given layout and wait for the harness.
 
     ``log_level`` overrides the default ``warning`` (e.g. ``info``
@@ -82,10 +89,25 @@ def start_lisp(layout="ListLayout", log_level="warning", log_file=None):
     logging and GStreamer-CRITICAL warnings both land) to the
     given path.  Use this when a test needs to assert on log
     lines.  ``None`` (default) discards output as before.
+
+    ``session_path`` opens an existing .lsp (e.g. to relaunch against
+    a saved session) instead of a synthesised empty one; ``layout`` is
+    then ignored and the file is left in place.  Restart tests must go
+    through here rather than spawning LiSP themselves: the harness
+    port is only known via the discovery file this function wires up.
+
+    ``expected_cues`` additionally waits for that many cues to finish
+    loading (see ``wait_cues_loaded``) — needed when ``session_path``
+    is a populated session.  ``timeout`` overrides the startup budget.
+
+    Exits with status 2 if LiSP doesn't come up in time, or as soon as
+    the process dies during startup.
     """
     global _lisp_proc, PORT
 
-    session_path = _create_empty_session(layout)
+    owns_session = session_path is None
+    if owns_session:
+        session_path = _create_empty_session(layout)
     # cwd must be this worktree's repo root so the child loads this
     # worktree's `lisp` (poetry venvs are shared by Python version).
     # Derive it from helpers' own location — not from _PORTFILE (which
@@ -116,8 +138,17 @@ def start_lisp(layout="ListLayout", log_level="warning", log_file=None):
     )
     atexit.register(stop_lisp)
 
-    deadline = time.time() + STARTUP_TIMEOUT
+    deadline = time.time() + timeout
     while time.time() < deadline:
+        if _lisp_proc.poll() is not None:
+            # Died during startup (crash, import error): fail now
+            # rather than polling a dead process until the deadline.
+            print(
+                f"ERROR: LiSP exited during startup "
+                f"(code {_lisp_proc.returncode})",
+                file=sys.stderr,
+            )
+            break
         found = portfile.read_port(_PORTFILE)
         if found is not None:
             PORT = found
@@ -132,7 +163,10 @@ def start_lisp(layout="ListLayout", log_level="warning", log_file=None):
                     info = send_request(HOST, PORT, "session.info")
                     result = info.get("result") or {}
                     if result.get("has_session"):
-                        os.unlink(session_path)
+                        if owns_session:
+                            os.unlink(session_path)
+                        if expected_cues:
+                            wait_cues_loaded(expected_cues)
                         return
             except (
                 ConnectionRefusedError,
@@ -146,11 +180,12 @@ def start_lisp(layout="ListLayout", log_level="warning", log_file=None):
                 pass
         time.sleep(0.5)
 
+    else:
+        print(
+            f"ERROR: LiSP did not start within {timeout}s",
+            file=sys.stderr,
+        )
     stop_lisp()
-    print(
-        f"ERROR: LiSP did not start within {STARTUP_TIMEOUT}s",
-        file=sys.stderr,
-    )
     sys.exit(2)
 
 
