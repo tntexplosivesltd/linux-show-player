@@ -99,12 +99,17 @@ class GstBackend(Plugin, BaseBackend):
         # pumps into (no per-cue sink, so no surface hand-off).
         from lisp.plugins.gst_backend.video_compositor import (
             VideoCompositor,
-            canvas_size_for_screen,
         )
         GstBackend._video_compositor = VideoCompositor(
             GstBackend._video_window,
             GstBackend._monitor_window,
-            canvas_size=canvas_size_for_screen(self.__target_screen()),
+            canvas_size=GstBackend._video_window.render_size(),
+        )
+        # The canvas follows the output window's render area, so a
+        # cue's fit-to-canvas is its fit-to-window (fullscreen: the
+        # screen; windowed: the window).
+        GstBackend._video_window.render_size_changed.connect(
+            GstBackend._video_compositor.set_canvas_size
         )
         if not GstBackend._video_compositor.available:
             self.app.notify.emit(
@@ -451,15 +456,6 @@ class GstBackend(Plugin, BaseBackend):
             "video_fullscreen", True
         )
         window.set_fullscreen(fullscreen and is_secondary)
-
-        # The canvas follows the projection screen so a cue's
-        # fit-to-canvas is its fit-to-screen (see VideoCompositor).
-        compositor = GstBackend.video_compositor()
-        if compositor is not None:
-            from lisp.plugins.gst_backend.video_compositor import (
-                canvas_size_for_screen,
-            )
-            compositor.set_canvas_size(*canvas_size_for_screen(target))
 
     @staticmethod
     def __target_screen():

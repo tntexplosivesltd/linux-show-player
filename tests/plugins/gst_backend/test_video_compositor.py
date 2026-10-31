@@ -321,34 +321,26 @@ class TestFitRegistration:
         reg.mix_pad.set_property.assert_any_call("height", 1080)
 
 
-def _screen(width, height, dpr=1.0):
-    screen = MagicMock()
-    screen.geometry.return_value.width.return_value = width
-    screen.geometry.return_value.height.return_value = height
-    screen.devicePixelRatio.return_value = dpr
-    return screen
+class TestCanvasSizeFor:
+    """Canvas follows the output window's render area (physical px)."""
 
+    def test_plain(self):
+        assert vc.canvas_size_for(1920, 1080, 1.0) == (1920, 1080)
 
-class TestCanvasSizeForScreen:
-    def test_plain_1080p(self):
-        assert vc.canvas_size_for_screen(_screen(1920, 1080)) == (1920, 1080)
-
-    def test_4_3_projector(self):
-        assert vc.canvas_size_for_screen(_screen(1024, 768)) == (1024, 768)
+    def test_windowed_odd_size_rounded_down_to_even(self):
+        # The measured single-screen case: a near-square window.
+        assert vc.canvas_size_for(1054, 1057, 1.0) == (1054, 1056)
 
     def test_hidpi_uses_physical_pixels(self):
-        assert vc.canvas_size_for_screen(
-            _screen(1280, 800, dpr=2.0)) == (2560, 1600)
+        assert vc.canvas_size_for(1280, 800, 2.0) == (2560, 1600)
 
-    def test_odd_dimensions_rounded_down_to_even(self):
-        assert vc.canvas_size_for_screen(_screen(1365, 767)) == (1364, 766)
-
-    def test_degenerate_screen_falls_back(self):
-        assert vc.canvas_size_for_screen(_screen(0, 0)) == (
+    def test_never_shown_widget_falls_back(self):
+        # A QWidget that was never laid out reports 100x30.
+        assert vc.canvas_size_for(100, 30, 1.0) == (
             vc.COMP_WIDTH, vc.COMP_HEIGHT)
 
-    def test_none_screen_falls_back(self):
-        assert vc.canvas_size_for_screen(None) == (
+    def test_zero_falls_back(self):
+        assert vc.canvas_size_for(0, 0, 1.0) == (
             vc.COMP_WIDTH, vc.COMP_HEIGHT)
 
 

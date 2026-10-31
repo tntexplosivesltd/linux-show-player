@@ -182,3 +182,46 @@ class TestVideoMonitorWindowBehavior:
         window.show()
         qtbot.waitExposed(window)
         assert window._render_widget.isVisible()
+
+
+class TestVideoOutputWindowRenderSize:
+    """The compositor canvas follows the render widget's size, so a
+    windowed output is not letterboxed twice."""
+
+    def test_render_size_matches_render_widget(self, qtbot):
+        window = VideoOutputWindow()
+        qtbot.addWidget(window)
+        window.show()
+        qtbot.waitExposed(window)
+        rw = window._render_widget
+        dpr = rw.devicePixelRatioF()
+        w, h = window.render_size()
+        assert w == int(rw.width() * dpr) & ~1
+        assert h == int(rw.height() * dpr) & ~1
+
+    def test_resize_emits_render_size_changed(self, qtbot):
+        window = VideoOutputWindow()
+        qtbot.addWidget(window)
+        window.show()
+        qtbot.waitExposed(window)
+        with qtbot.waitSignal(window.render_size_changed,
+                              timeout=2000) as blocker:
+            window.resize(800, 600)
+        assert tuple(blocker.args) == window.render_size()
+
+    def test_resize_burst_is_debounced(self, qtbot):
+        window = VideoOutputWindow()
+        qtbot.addWidget(window)
+        window.show()
+        qtbot.waitExposed(window)
+        qtbot.wait(400)  # let the show-time emission pass
+        emitted = []
+
+        def on_changed(w, h):
+            emitted.append((w, h))
+
+        window.render_size_changed.connect(on_changed)
+        for width in (700, 720, 740, 760, 780):
+            window.resize(width, 500)
+        qtbot.wait(600)
+        assert len(emitted) == 1

@@ -21,12 +21,13 @@ from lisp.plugins.gst_backend.gi_repository import Gst
 
 logger = logging.getLogger(__name__)
 
-# Default canvas, used until the projection screen is known (and as a
-# fallback for a degenerate screen). The live canvas follows the target
-# screen — see canvas_size_for_screen() / set_canvas_size().
+# Default canvas, used until the output window's render area is known.
+# The live canvas follows that area — see canvas_size_for() /
+# set_canvas_size().
 COMP_WIDTH = 1920
 COMP_HEIGHT = 1080
 COMP_FPS = 30
+MIN_CANVAS = 64
 
 # The black background source is tiny; its mixer pad is scaled to the
 # canvas, so resizing the canvas never renegotiates the source.
@@ -69,21 +70,21 @@ def projection_pts(running_time, cue_base, proj_base, latency_offset):
     return running_time + (cue_base - proj_base) + latency_offset
 
 
-def canvas_size_for_screen(screen):
-    """Canvas size for a projection QScreen, in physical pixels.
+def canvas_size_for(width, height, dpr):
+    """Canvas size for an output render area, in physical pixels.
 
-    Matching the canvas to the screen makes the canvas→window scale
-    1:1, so a cue's fit-to-canvas is its fit-to-screen (no stacked
-    letterbox + pillarbox on non-16:9 outputs). Rounded down to even
-    dimensions for chroma-subsampled formats.
+    The canvas follows the projection window's render widget, so the
+    canvas→window scale is 1:1 and a cue's fit-to-canvas is its
+    fit-to-window: fullscreen on a projector that is the screen; in a
+    windowed (single-screen) setup it is the window, not the screen
+    (a screen-sized canvas letterboxed a 4:3 clip twice there).
+    Rounded down to even dimensions for chroma-subsampled formats.
+    Below MIN_CANVAS (e.g. a never-shown widget reporting 100x30) the
+    default canvas is used until the real size arrives.
     """
-    if screen is None:
-        return COMP_WIDTH, COMP_HEIGHT
-    geo = screen.geometry()
-    dpr = screen.devicePixelRatio()
-    width = int(geo.width() * dpr) & ~1
-    height = int(geo.height() * dpr) & ~1
-    if width <= 0 or height <= 0:
+    width = int(width * dpr) & ~1
+    height = int(height * dpr) & ~1
+    if width < MIN_CANVAS or height < MIN_CANVAS:
         return COMP_WIDTH, COMP_HEIGHT
     return width, height
 

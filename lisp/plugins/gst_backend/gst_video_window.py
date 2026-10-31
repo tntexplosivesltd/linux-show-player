@@ -17,9 +17,11 @@
 
 import logging
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QCursor
 from PyQt5.QtWidgets import QMainWindow, QWidget, QApplication
+
+from lisp.plugins.gst_backend.video_compositor import canvas_size_for
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +42,13 @@ class VideoOutputWindow(QMainWindow):
     (visibility is managed by GstBackend's auto-show/hide logic).
     """
 
+    # Render area in physical pixels, debounced; the VideoCompositor
+    # canvas follows it (see GstBackend).
+    render_size_changed = pyqtSignal(int, int)
+
+    # Coalesce a drag-resize burst into one canvas renegotiation.
+    RENDER_SIZE_DEBOUNCE_MS = 150
+
     def __init__(self, parent=None):
         super().__init__(parent, Qt.FramelessWindowHint)
         self.setWindowTitle("LiSP Video Output")
@@ -58,11 +67,27 @@ class VideoOutputWindow(QMainWindow):
         )
 
         self._fullscreen = False
+
+        self._render_size_timer = QTimer(self)
+        self._render_size_timer.setSingleShot(True)
+        self._render_size_timer.setInterval(self.RENDER_SIZE_DEBOUNCE_MS)
+        self._render_size_timer.timeout.connect(self._emit_render_size)
+
         self.resize(640, 480)
 
     def window_handle(self):
         """Return the native window ID for GStreamer VideoOverlay."""
         return int(self._render_widget.winId())
+
+    def render_size(self):
+        """The render area in physical pixels (the compositor canvas)."""
+        rw = self._render_widget
+        return canvas_size_for(
+            rw.width(), rw.height(), rw.devicePixelRatioF()
+        )
+
+    def _emit_render_size(self):
+        self.render_size_changed.emit(*self.render_size())
 
     def set_display(self, screen_index):
         """Move the window to the specified screen by index.
@@ -125,6 +150,7 @@ class VideoOutputWindow(QMainWindow):
         central = self.centralWidget()
         if central is not None:
             self._render_widget.setGeometry(central.rect())
+            self._render_size_timer.start()
 
     def closeEvent(self, event):
         """Block close while video/image cues exist."""
