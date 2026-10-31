@@ -448,6 +448,28 @@ class CueListView(QTreeWidget):
                 return found
         return None
 
+    def _itemForCue(self, cue):
+        """Return the QTreeWidgetItem showing ``cue``, matched by identity.
+
+        Unlike `cueItemAt`, safe while the model is mid-update: during
+        removal CueListModel has already re-indexed the surviving cues,
+        so another cue can hold the removed cue's (stale) index.
+        """
+        def _search(item):
+            if item.cue is cue:
+                return item
+            for j in range(item.childCount()):
+                found = _search(item.child(j))
+                if found is not None:
+                    return found
+            return None
+
+        for i in range(self.topLevelItemCount()):
+            found = _search(self.topLevelItem(i))
+            if found is not None:
+                return found
+        return None
+
     def cueIndexOf(self, item):
         """Return the flat model index for a QTreeWidgetItem."""
         if item is None:
@@ -908,7 +930,11 @@ class CueListView(QTreeWidget):
                         self.insertTopLevelItem(pos, child)
                     self.__setupItemWidgets(child)
 
-        item = self.cueItemAt(cue.index)
+        # By identity, not cue.index: the model has already re-indexed,
+        # so the first survivor shares the removed cue's index -- and a
+        # dissolved group's children were just moved up *ahead* of its
+        # row, so an index lookup would delete a child's row instead.
+        item = self._itemForCue(cue)
         if item is None:
             return
 
