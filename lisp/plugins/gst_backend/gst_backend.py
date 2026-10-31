@@ -510,10 +510,3 @@ class GstBackend(Plugin, BaseBackend):
         else:
             monitor.show()
             monitor.raise_()
-
-            # If a cue is already playing, the monitor missed
-            # the play() call — show its render surface now.
-            from lisp.plugins.gst_backend.elements.video_sink \
-                import VideoSink
-            if VideoSink._previous_sink is not None:
-                monitor.show_display()

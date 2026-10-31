@@ -20,43 +20,40 @@ import logging
 from PyQt5.QtCore import QT_TRANSLATE_NOOP
 
 from lisp.backend.media_element import ElementType, MediaType
-from lisp.core.signal import Connection, Signal
 from lisp.plugins.gst_backend.gi_repository import Gst
 from lisp.plugins.gst_backend.gst_element import GstMediaElement
 
+# Cycle-safe: video_compositor imports only gi_repository.
+from lisp.plugins.gst_backend.video_compositor import (
+    projection_pts,
+    query_min_latency,
+)
+
 logger = logging.getLogger(__name__)
 
-# Preferred video sink elements in priority order.
-# glimagesink: OpenGL-based, good quality, works on X11 + XWayland.
-# xvimagesink: X11 XVideo extension, lower overhead, X11 only.
-_VIDEO_SINK_FACTORIES = ("glimagesink", "xvimagesink")
+# The appsink releases each frame this long before its render time, so
+# it can cross into the projection pipeline (glupload + mixer) before
+# its deadline. It also bounds how much video sits queued in the
+# appsrc: at most PUMP_LEAD is stranded by a pause/seek/stop.
+PUMP_LEAD = 100 * Gst.MSECOND
 
-# How long stop() waits before actually clearing the projection
-# surface.  Playlist auto-advance and similar back-to-back triggers
-# call VideoSink.play() within one Qt event-loop tick (sub-ms in
-# practice); any value comfortably above that window produces seamless
-# transitions while staying below the threshold of operator
-# perception when no follow-up cue arrives.  Tuned conservatively.
-_DEFERRED_CLEAR_MS = 100
+# Re-query both pipelines' latency every N buffers (~1s at 30fps).
+# Latency only changes when elements join/leave, so per-buffer queries
+# would be wasted traversals.
+LATENCY_REFRESH_BUFFERS = 30
 
 
-def _create_video_sink():
-    """Create the best available video sink with VideoOverlay support.
+def _compositor():
+    """Fetch the VideoCompositor singleton lazily.
 
-    Falls back through _VIDEO_SINK_FACTORIES in order.  If none are
-    available, returns autovideosink (no overlay, opens own window).
+    Imported inside the call (not at module top) to avoid the
+    gst_backend ↔ video_sink import cycle — video_sink is loaded via
+    elements.load() from inside GstBackend.__init__, so a top-level
+    import of gst_backend would re-enter a half-initialised module.
     """
-    for name in _VIDEO_SINK_FACTORIES:
-        element = Gst.ElementFactory.make(name, None)
-        if element is not None:
-            logger.debug("VideoSink: using %s", name)
-            return element
+    from lisp.plugins.gst_backend.gst_backend import GstBackend
 
-    logger.warning(
-        "VideoSink: no overlay-capable sink found, "
-        "falling back to autovideosink"
-    )
-    return Gst.ElementFactory.make("autovideosink", None)
+    return GstBackend.video_compositor()
 
 
 class VideoSink(GstMediaElement):
@@ -64,294 +61,115 @@ class VideoSink(GstMediaElement):
     MediaType = MediaType.AudioAndVideo
     Name = QT_TRANSLATE_NOOP("MediaElementName", "A/V System Out")
 
-    # Track the last VideoSink that rendered, so we can release
-    # its GL context before a different sink takes over.
-    _previous_sink = None
-
-    # [FLICKER-DIAG] Monotonic counter so each VideoSink instance has
-    # a short id we can correlate across log lines. Diagnostic only.
-    _next_iid = 0
-
-    # Class-level coordination for the deferred clear.  stop() sets
-    # _pending_clear = True and schedules a delayed clear; any
-    # VideoSink.play() within the defer window resets the flag,
-    # cancelling the clear.  This produces QLab-style "clear on stop"
-    # for standalone cues while keeping playlist transitions seamless
-    # (because auto-advance fires play() within a Qt tick).
-    _pending_clear = False
-
     def __init__(self, pipeline):
         super().__init__(pipeline)
 
-        # [FLICKER-DIAG] Assign a short instance id for log correlation.
-        VideoSink._next_iid += 1
-        self._iid = VideoSink._next_iid
-        logger.debug(
-            "[FLICKER-DIAG] VideoSink.__init__ iid=%d pipeline=%s",
-            self._iid, pipeline.get_name(),
-        )
-
-        # Audio path: same as the existing AutoSink
-        self.audio_sink = Gst.ElementFactory.make(
-            "autoaudiosink", None
-        )
+        # Audio path unchanged: autoaudiosink in the cue pipeline,
+        # removed in post_link() when the source has no audio.
+        self.audio_sink = Gst.ElementFactory.make("autoaudiosink", None)
         self.pipeline.add(self.audio_sink)
 
-        # Video path: queue -> tee -> projection + monitor branches.
-        # The tee duplicates video buffers so both the projection
-        # window and the operator's monitor window can render
-        # independently.
+        # Video path now ends in an appsink. Its new-sample callback
+        # pumps each decoded buffer across the pipeline boundary into
+        # this cue's appsrc on the persistent projection pipeline. The
+        # appsink is bounded + drop-oldest so a stalled projection sink
+        # can never wedge this cue's decode thread or its audio.
+        # sync=True paces the pump to the clock: with sync=False the
+        # cue decodes as fast as it can and parks seconds of future
+        # frames in the appsrc, so video plays on through a pause.
+        # ts-offset releases each frame PUMP_LEAD early so it still
+        # makes its projection deadline.
         self.video_queue = Gst.ElementFactory.make("queue", None)
-        self.video_tee = Gst.ElementFactory.make("tee", None)
-
-        # Projection branch
-        self.proj_queue = Gst.ElementFactory.make("queue", None)
-        self.video_sink = _create_video_sink()
-
-        # Monitor branch
-        self.monitor_queue = Gst.ElementFactory.make("queue", None)
-        self.monitor_sink = _create_video_sink()
-
-        for elem in (
-            self.video_queue, self.video_tee,
-            self.proj_queue, self.video_sink,
-            self.monitor_queue, self.monitor_sink,
-        ):
-            self.pipeline.add(elem)
-
-        self.video_queue.link(self.video_tee)
-        self.video_tee.link(self.proj_queue)
-        self.proj_queue.link(self.video_sink)
-        self.video_tee.link(self.monitor_queue)
-        self.monitor_queue.link(self.monitor_sink)
+        self.video_appsink = Gst.ElementFactory.make("appsink", None)
+        self.video_appsink.set_property("emit-signals", True)
+        self.video_appsink.set_property("sync", True)
+        self.video_appsink.set_property("ts-offset", -PUMP_LEAD)
+        self.video_appsink.set_property("max-buffers", 2)
+        self.video_appsink.set_property("drop", True)
+        self.pipeline.add(self.video_queue)
+        self.pipeline.add(self.video_appsink)
+        self.video_queue.link(self.video_appsink)
 
         self._audio_removed = False
         self._video_removed = False
 
-        # Stale-frame bleed-through guard.  The projection window's
-        # native child widget is a process-wide singleton: cue A's
-        # last frame remains cached by the X11 compositor after A's
-        # sink is torn down.  When cue B's render widget is re-mapped
-        # we must not show it until B's sink has actually rendered a
-        # buffer, or the compositor briefly composites A's content.
-        #
-        # _first_buffer_probe holds the GstPad probe id while we are
-        # waiting for B's first buffer through proj_queue.src.  The
-        # probe fires on the GStreamer streaming thread, so it routes
-        # through _first_buffer_signal (QtQueued) to invoke
-        # _show_displays on the Qt main thread.
-        self._first_buffer_probe = None
-        self._first_buffer_signal = Signal()
-        self._first_buffer_signal.connect(
-            self._show_displays, Connection.QtQueued
-        )
-
-        # Deferred-clear bridge.  stop() may be called from a bus
-        # EOS handler whose thread isn't guaranteed to be the Qt main
-        # thread; route the timer-scheduling through QtQueued so the
-        # QTimer is always created on the main thread.
-        self._deferred_clear_signal = Signal()
-        self._deferred_clear_signal.connect(
-            self._on_deferred_clear_scheduled, Connection.QtQueued
-        )
-
-        # Install a synchronous bus handler so we can set the
-        # window handle before each sink opens its own window.
-        bus = self.pipeline.get_bus()
-        bus.enable_sync_message_emission()
-        self._sync_handler = bus.connect(
-            "sync-message::element", self.__on_sync_message
+        # Projection registration + pump state.
+        self._registration = None
+        self._sample_handler = self.video_appsink.connect(
+            "new-sample", self.__on_new_sample
         )
 
     def play(self):
-        # [FLICKER-DIAG] Capture state at entry. We want to see
-        # whether the previous sink is still alive and what
-        # pipeline state we're starting from.
-        prev = VideoSink._previous_sink
-        _, entry_state, _ = self.pipeline.get_state(0)
-        if prev is not None and prev is not self:
-            try:
-                _, prev_state, _ = prev.pipeline.get_state(0)
-                prev_state_name = prev_state.value_nick
-            except Exception:
-                prev_state_name = "<unavailable>"
-            logger.debug(
-                "[FLICKER-DIAG] VideoSink.play ENTER iid=%d "
-                "state=%s prev_iid=%d prev_state=%s",
-                self._iid, entry_state.value_nick,
-                prev._iid, prev_state_name,
-            )
-        else:
-            logger.debug(
-                "[FLICKER-DIAG] VideoSink.play ENTER iid=%d "
-                "state=%s prev=None",
-                self._iid, entry_state.value_nick,
-            )
-
-        # Cancel any clear that an immediately-preceding stop() may
-        # have scheduled.  In a playlist GroupCue the auto-advance
-        # path runs us within one Qt tick of the previous child's
-        # stop(), well inside the defer window — cancelling here is
-        # how playlists keep their flow seamless.
-        VideoSink._pending_clear = False
-
-        VideoSink._previous_sink = self
-
-        # Fast path: pipeline already holds a prerolled buffer
-        # (pre-armed cue, or resume from pause).  The sink can render
-        # immediately on map, so showing now is safe and avoids one
-        # preroll cycle of added latency.
-        _, state, _ = self.pipeline.get_state(0)
-        if state == Gst.State.PAUSED:
-            logger.debug(
-                "[FLICKER-DIAG] VideoSink.play FAST-PATH iid=%d",
-                self._iid,
-            )
-            self._show_displays()
+        """Register with the compositor; the pump starts with the
+        first sample once the pipeline reaches PLAYING."""
+        compositor = _compositor()
+        if compositor is None:
             return
-
-        # Cold-start path: pipeline is in READY/Null.  Defer the
-        # show until proj_queue.src emits its first buffer (preroll
-        # of the new sink), or the singleton render widget would
-        # briefly composite the previous cue's last frame.
-        pad = self.proj_queue.get_static_pad("src")
-        if pad is None or self._first_buffer_probe is not None:
-            # No pad, or a probe is somehow already installed —
-            # fall back to immediate show.  Should not happen in
-            # normal flow.
-            logger.debug(
-                "[FLICKER-DIAG] VideoSink.play FALLBACK-SHOW iid=%d "
-                "pad=%s existing_probe=%s",
-                self._iid, pad, self._first_buffer_probe,
-            )
-            self._show_displays()
-            return
-
-        self._first_buffer_probe = pad.add_probe(
-            Gst.PadProbeType.BUFFER,
-            self.__on_first_buffer,
-        )
-        logger.debug(
-            "[FLICKER-DIAG] VideoSink.play PROBE-INSTALLED iid=%d",
-            self._iid,
-        )
-
-    def _show_displays(self):
-        """Map the projection (and monitor) render surfaces.
-
-        Called either directly from play() on the fast path, or via
-        _first_buffer_signal once the new sink's first buffer has
-        passed proj_queue.src.
-        """
-        logger.debug(
-            "[FLICKER-DIAG] VideoSink._show_displays iid=%d",
-            self._iid,
-        )
-        window = self._video_window()
-        if window is not None:
-            window.show_display()
-
-        monitor = self._monitor_window()
-        if monitor is not None and monitor.isVisible():
-            monitor.show_display()
-
-    def __on_first_buffer(self, pad, info):
-        """Pad probe — fires on the streaming thread.
-
-        Marks the probe consumed and hands off to the main thread
-        for the Qt show() call.  Returning REMOVE uninstalls the
-        probe atomically; subsequent buffers must not re-trigger.
-        """
-        logger.debug(
-            "[FLICKER-DIAG] VideoSink.__on_first_buffer iid=%d",
-            self._iid,
-        )
-        self._first_buffer_probe = None
-        self._first_buffer_signal.emit()
-        return Gst.PadProbeReturn.REMOVE
-
-    def _consume_first_buffer_probe(self):
-        """Remove a pending first-buffer probe, if any.
-
-        Called from stop()/dispose() to clean up when a cue is torn
-        down before its first buffer arrives — the probe would
-        otherwise outlive the proj_queue element.
-        """
-        if self._first_buffer_probe is None:
-            return
-        probe_id = self._first_buffer_probe
-        self._first_buffer_probe = None
-        pad = self.proj_queue.get_static_pad("src")
-        if pad is not None:
-            try:
-                pad.remove_probe(probe_id)
-            except Exception:
-                # Pad already gone (pipeline tear-down race) —
-                # losing the probe with the pad is benign.
-                pass
+        self._registration = compositor.register(self)
 
     def stop(self):
-        _, entry_state, _ = self.pipeline.get_state(0)
-        logger.debug(
-            "[FLICKER-DIAG] VideoSink.stop ENTER iid=%d state=%s "
-            "prev_is_self=%s pending_probe=%s",
-            self._iid, entry_state.value_nick,
-            VideoSink._previous_sink is self,
-            self._first_buffer_probe is not None,
-        )
+        self.__unregister()
 
-        self._consume_first_buffer_probe()
+    def eos(self):
+        self.__unregister()
 
-        if VideoSink._previous_sink is self:
-            VideoSink._previous_sink = None
+    def __unregister(self):
+        # Drop our handle first so an in-flight new-sample on the
+        # streaming thread stops pushing before the appsrc goes away.
+        self._registration = None
+        compositor = _compositor()
+        if compositor is not None:
+            compositor.unregister(self)
 
-        # Defer the projection clear by _DEFERRED_CLEAR_MS.  An
-        # immediate clear here would race the playlist GroupCue's
-        # auto-advance: A's stopped → queued slot → B's play() runs
-        # all within a Qt tick, but the X11 unmap/remap between them
-        # is visible to the compositor as a black gap.  By deferring,
-        # the outgoing cue's last frame stays visible until either
-        # the next cue's first buffer overwrites it (seamless flow)
-        # or the timer expires (standalone stop → black, matching
-        # QLab/SCS default behaviour).
-        VideoSink._pending_clear = True
-        self._deferred_clear_signal.emit()
+    def __on_new_sample(self, appsink):
+        """Pull each sample and push the SAME buffer into this cue's
+        appsrc on the projection pipeline, preserving PTS and offsetting
+        it onto the projection running-time.
 
-    def _on_deferred_clear_scheduled(self):
-        """Main thread: arm the QTimer that performs the clear.
-
-        Invoked via _deferred_clear_signal (QtQueued) so the QTimer
-        is always created on the main thread, regardless of the
-        thread that called stop().
+        Runs on a GStreamer streaming thread. Touches only GStreamer
+        objects — never Qt. The offset formula (validated by the Phase-1
+        spike, see projection_pts): out.pts = running_time +
+        (cue_base − proj_base) + (L_cue − L_proj), with both pipelines
+        on the compositor's shared clock. The latency term is cached on
+        the registration and re-queried every LATENCY_REFRESH_BUFFERS.
         """
-        from PyQt5.QtCore import QTimer
-        QTimer.singleShot(
-            _DEFERRED_CLEAR_MS, VideoSink._maybe_do_clear,
+        sample = appsink.emit("pull-sample")
+        if sample is None:
+            return Gst.FlowReturn.OK
+
+        reg = self._registration
+        if reg is None or reg.appsrc is None:
+            # Not registered (or torn down mid-stream) — drop.
+            return Gst.FlowReturn.OK
+
+        compositor = _compositor()
+        if compositor is None or compositor.pipeline is None:
+            return Gst.FlowReturn.OK
+
+        buf = sample.get_buffer()
+        if not reg.caps_set:
+            reg.appsrc.set_property("caps", sample.get_caps())
+            reg.caps_set = True
+
+        if reg.latency_countdown <= 0:
+            reg.latency_offset = query_min_latency(
+                self.pipeline
+            ) - query_min_latency(compositor.pipeline)
+            reg.latency_countdown = LATENCY_REFRESH_BUFFERS
+        reg.latency_countdown -= 1
+
+        segment = sample.get_segment()
+        running_time = segment.to_running_time(Gst.Format.TIME, buf.pts)
+        out = buf.copy()
+        out.pts = projection_pts(
+            running_time,
+            self.pipeline.get_base_time(),
+            compositor.pipeline.get_base_time(),
+            reg.latency_offset,
         )
-
-    @classmethod
-    def _maybe_do_clear(cls):
-        """QTimer callback (main thread).
-
-        Performs the clear only if a subsequent play() hasn't reset
-        the pending flag.  Idempotent across multiple in-flight
-        timers: the first one through clears and resets; later ones
-        no-op.
-        """
-        if not cls._pending_clear:
-            return
-        cls._pending_clear = False
-
-        # Lazy import to avoid the circular gst_backend ↔ video_sink
-        # import that would happen at module load time.
-        from lisp.plugins.gst_backend.gst_backend import GstBackend
-        window = GstBackend.video_window()
-        if window is not None:
-            window.clear_display()
-
-        monitor = GstBackend.monitor_window()
-        if monitor is not None and monitor.isVisible():
-            monitor.clear_display()
+        out.dts = Gst.CLOCK_TIME_NONE
+        reg.appsrc.emit("push-buffer", out)
+        return Gst.FlowReturn.OK
 
     def sink(self):
         """Audio sink -- connected by the linear chain."""
@@ -379,9 +197,7 @@ class VideoSink(GstMediaElement):
             # Find the video source (UriAvInput/ImageInput)
             if input_video_src is None:
                 vs = element.video_src()
-                if vs is not None and not hasattr(
-                    element, "video_sink"
-                ):
+                if vs is not None and not hasattr(element, "video_sink"):
                     input_video_src = vs
             # Collect video plugins (have both video_sink
             # and video_src, e.g. VideoAlpha)
@@ -407,99 +223,26 @@ class VideoSink(GstMediaElement):
 
             if not prev_src.link(self.video_queue):
                 logger.warning(
-                    "VideoSink: failed to link video "
-                    "source to video queue"
+                    "VideoSink: failed to link video source to video queue"
                 )
         else:
-            logger.debug(
-                "VideoSink: no video source found in "
-                "pipeline"
-            )
+            logger.debug("VideoSink: no video source found in pipeline")
 
         if not has_audio_src:
-            logger.info(
-                "VideoSink: no audio source, removing "
-                "audio sink"
-            )
+            logger.info("VideoSink: no audio source, removing audio sink")
             self.pipeline.remove(self.audio_sink)
             self._audio_removed = True
 
     def dispose(self):
-        logger.debug(
-            "[FLICKER-DIAG] VideoSink.dispose iid=%d", self._iid,
-        )
-
-        # Clean up before tearing the pipeline down — proj_queue may
-        # be removed below, after which the probe id can't be revoked.
-        self._consume_first_buffer_probe()
-
-        bus = self.pipeline.get_bus()
-        if bus is not None and self._sync_handler is not None:
-            bus.disconnect(self._sync_handler)
-            self._sync_handler = None
+        # Release the projection resources before teardown.
+        self.__unregister()
+        if self._sample_handler is not None:
+            self.video_appsink.disconnect(self._sample_handler)
+            self._sample_handler = None
         if not self._video_removed:
             self.pipeline.remove(self.video_queue)
-            self.pipeline.remove(self.video_tee)
-            self.pipeline.remove(self.proj_queue)
-            self.pipeline.remove(self.video_sink)
-            self.pipeline.remove(self.monitor_queue)
-            self.pipeline.remove(self.monitor_sink)
+            self.pipeline.remove(self.video_appsink)
             self._video_removed = True
         if not self._audio_removed:
             self.pipeline.remove(self.audio_sink)
             self._audio_removed = True
-
-    @staticmethod
-    def _video_window():
-        from lisp.plugins.gst_backend.gst_backend import (
-            GstBackend,
-        )
-        return GstBackend.video_window()
-
-    @staticmethod
-    def _monitor_window():
-        from lisp.plugins.gst_backend.gst_backend import (
-            GstBackend,
-        )
-        return GstBackend.monitor_window()
-
-    def _find_owner_sink(self, element):
-        """Walk up from element to find which top-level sink it
-        belongs to.  Bin-based sinks like glimagesink post
-        prepare-window-handle from an internal child, not from
-        the bin we stored."""
-        while element is not None:
-            if element == self.video_sink:
-                return self._video_window()
-            if element == self.monitor_sink:
-                return self._monitor_window()
-            element = element.get_parent()
-        return None
-
-    def __on_sync_message(self, bus, message):
-        """Handle prepare-window-handle from video sinks.
-
-        This runs in the GStreamer streaming thread, before each
-        sink creates its own window.  We route the projection
-        sink to VideoOutputWindow and the monitor sink to
-        VideoMonitorWindow.
-        """
-        if message.get_structure() is None:
-            return
-        if message.get_structure().get_name() != \
-                "prepare-window-handle":
-            return
-
-        window = self._find_owner_sink(message.src)
-
-        if window is not None:
-            handle = window.window_handle()
-            if handle != 0:
-                message.src.set_window_handle(handle)
-                logger.debug(
-                    "[FLICKER-DIAG] VideoSink set_window_handle "
-                    "iid=%d handle=%d src=%s target=%s",
-                    self._iid, handle, message.src.get_name(),
-                    "projection" if window is self._video_window()
-                    else "monitor",
-                )
