@@ -115,20 +115,13 @@ EXPECTED = {
 def _relaunch_lisp_with(session_path, expected_cues=None):
     """Stop the running LiSP and relaunch against a saved session.
 
-    Delegates to ``helpers.start_lisp`` so the relaunched process gets
-    the same port-discovery wiring (the harness port is per-worktree
-    and only known after launch); ``start_lisp`` waits for
-    ``has_session=True`` before returning.
-
     ``has_session`` turns True at the *start* of the file load, before
     cues are inserted into the model (see ``helpers.wait_cues_loaded``);
     pass ``expected_cues`` so we also wait for the cues to finish loading
     and avoid reading an empty/partial model.
     """
     _h.stop_lisp()
-    _h.start_lisp(session_path=session_path)
-    if expected_cues:
-        _h.wait_cues_loaded(expected_cues)
+    _h.start_lisp(session_path=session_path, expected_cues=expected_cues)
 
 
 # ── Tests ─────────────────────────────────────────────────────

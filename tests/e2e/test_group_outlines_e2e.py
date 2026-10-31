@@ -28,104 +28,18 @@ Run:
     poetry run python tests/e2e/test_group_outlines_e2e.py
 """
 
-import atexit
-import json
 import os
-import subprocess
 import sys
-import tempfile
 import time
 
-sys.path.insert(
-    0,
-    os.path.join(
-        os.path.dirname(__file__), "..", "..",
-        "lisp", "plugins", "test_harness",
-    ),
-)
-from client import send_request  # noqa: E402
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+from tests.e2e.helpers import call, start_lisp, stop_lisp  # noqa: E402
 
-HOST = "127.0.0.1"
-PORT = 8070
 STARTUP_TIMEOUT = 30
 
 _pass = 0
 _fail = 0
 _errors = []
-_lisp_proc = None
-
-
-def _create_empty_session():
-    session = {
-        "meta": {"version": "0.6"},
-        "session": {"layout_type": "ListLayout"},
-        "cues": [],
-    }
-    fd, path = tempfile.mkstemp(suffix=".lsp")
-    with os.fdopen(fd, "w") as f:
-        json.dump(session, f)
-    return path
-
-
-def start_lisp():
-    global _lisp_proc
-    session_path = _create_empty_session()
-    log_fd, log_path = tempfile.mkstemp(suffix=".log")
-    os.close(log_fd)
-    log_file = open(log_path, "w")
-    _lisp_proc = subprocess.Popen(
-        [
-            sys.executable, "-m", "lisp.main",
-            "-l", "warning", "-f", session_path,
-        ],
-        stdout=log_file,
-        stderr=subprocess.STDOUT,
-    )
-    atexit.register(stop_lisp)
-
-    deadline = time.time() + STARTUP_TIMEOUT
-    while time.time() < deadline:
-        if _lisp_proc.poll() is not None:
-            log_file.close()
-            with open(log_path) as f:
-                print("LiSP exited early:", file=sys.stderr)
-                print(f.read(), file=sys.stderr)
-            raise RuntimeError("LiSP process exited during startup")
-        try:
-            # Harness is ready once the socket answers AND the session
-            # file (-f) has finished loading on the main thread.
-            info = send_request(HOST, PORT, "session.info")
-            if info.get("result", {}).get("has_session"):
-                log_file.close()
-                os.unlink(log_path)
-                return
-        except (ConnectionRefusedError, ConnectionError, OSError):
-            pass
-        time.sleep(0.5)
-
-    log_file.close()
-    with open(log_path) as f:
-        print("LiSP startup log:", file=sys.stderr)
-        print(f.read(), file=sys.stderr)
-    raise RuntimeError("LiSP did not start within timeout")
-
-
-def stop_lisp():
-    global _lisp_proc
-    if _lisp_proc is not None:
-        _lisp_proc.terminate()
-        try:
-            _lisp_proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            _lisp_proc.kill()
-        _lisp_proc = None
-
-
-def call(method, params=None):
-    r = send_request(HOST, PORT, method, params or {})
-    if "error" in r:
-        raise RuntimeError(f"{method} failed: {r['error']}")
-    return r.get("result", {})
 
 
 def check(name, cond):
@@ -207,14 +121,18 @@ def test_outline_lifecycle():
     check("group removed", len(group_cues_after) == 0)
 
     # Ping once more — if paint crashed the main thread, this fails.
-    r = send_request(HOST, PORT, "ping")
-    check("app still responsive after ungroup", "result" in r)
+    try:
+        call("ping")
+        responsive = True
+    except Exception:
+        responsive = False
+    check("app still responsive after ungroup", responsive)
 
 
 def main():
     print("Group outline E2E smoke test")
     print("=" * 40)
-    start_lisp()
+    start_lisp(timeout=STARTUP_TIMEOUT)
     try:
         test_outline_lifecycle()
     finally:

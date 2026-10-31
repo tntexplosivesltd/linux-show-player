@@ -77,6 +77,8 @@ def start_lisp(
     log_level="warning",
     log_file=None,
     session_path=None,
+    expected_cues=None,
+    timeout=STARTUP_TIMEOUT,
 ):
     """Start LiSP with the given layout and wait for the harness.
 
@@ -93,6 +95,13 @@ def start_lisp(
     then ignored and the file is left in place.  Restart tests must go
     through here rather than spawning LiSP themselves: the harness
     port is only known via the discovery file this function wires up.
+
+    ``expected_cues`` additionally waits for that many cues to finish
+    loading (see ``wait_cues_loaded``) — needed when ``session_path``
+    is a populated session.  ``timeout`` overrides the startup budget.
+
+    Exits with status 2 if LiSP doesn't come up in time, or as soon as
+    the process dies during startup.
     """
     global _lisp_proc, PORT
 
@@ -129,8 +138,17 @@ def start_lisp(
     )
     atexit.register(stop_lisp)
 
-    deadline = time.time() + STARTUP_TIMEOUT
+    deadline = time.time() + timeout
     while time.time() < deadline:
+        if _lisp_proc.poll() is not None:
+            # Died during startup (crash, import error): fail now
+            # rather than polling a dead process until the deadline.
+            print(
+                f"ERROR: LiSP exited during startup "
+                f"(code {_lisp_proc.returncode})",
+                file=sys.stderr,
+            )
+            break
         found = portfile.read_port(_PORTFILE)
         if found is not None:
             PORT = found
@@ -147,6 +165,8 @@ def start_lisp(
                     if result.get("has_session"):
                         if owns_session:
                             os.unlink(session_path)
+                        if expected_cues:
+                            wait_cues_loaded(expected_cues)
                         return
             except (
                 ConnectionRefusedError,
@@ -160,11 +180,12 @@ def start_lisp(
                 pass
         time.sleep(0.5)
 
+    else:
+        print(
+            f"ERROR: LiSP did not start within {timeout}s",
+            file=sys.stderr,
+        )
     stop_lisp()
-    print(
-        f"ERROR: LiSP did not start within {STARTUP_TIMEOUT}s",
-        file=sys.stderr,
-    )
     sys.exit(2)
 
 
