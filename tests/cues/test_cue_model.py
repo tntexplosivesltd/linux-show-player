@@ -432,3 +432,42 @@ class TestCueModelPopSpliceDrift:
         model.pop("G")
 
         assert "X" not in p.children
+
+
+class TestCorruptChildren:
+    def test_group_cue_drops_non_string_child_ids(self):
+        """children is sanitised whenever it's set (session load
+        included): unhashable/non-str entries are dropped, order kept."""
+        _model, app = _model_app()
+        g = _group_cue(app, "g", [["bad"], "a", {}, "b", 3])
+
+        assert g.children == ["a", "b"]
+
+    def test_pop_with_unhashable_child_entry_completes(self):
+        """Hand-edited children like [["bad"], "a"] must not make pop()
+        fail half-way (cue gone, links half-rewritten, no undo)."""
+        model, app = _model_app()
+        outer = _group_cue(app, "outer", ["inner"])
+        inner = _group_cue(app, "inner", ["a"], "outer")
+        a = _make_cue("a", "inner")
+        for cue in (outer, inner, a):
+            model.add(cue)
+        inner.children = [["bad"], "a"]
+
+        model.pop("inner")
+
+        assert a.group_id == "outer"
+        assert outer.children == ["a"]
+
+    def test_pop_self_parented_group_promotes_children_to_top(self):
+        """Corrupt G.group_id == G.id: children must not be left
+        pointing at the group that is being removed."""
+        model, app = _model_app()
+        g = _group_cue(app, "G", ["a"], group_id="G")
+        a = _make_cue("a", "G")
+        model.add(g)
+        model.add(a)
+
+        model.pop("G")
+
+        assert a.group_id == ""

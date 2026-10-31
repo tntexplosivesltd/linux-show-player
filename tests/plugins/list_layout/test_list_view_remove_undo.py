@@ -93,3 +93,48 @@ def test_undo_delete_nested_group_reparents_rows(wired):
 
     assert view._group_items["i"].parent() is view._group_items["o"]
     assert _item(view, a).parent() is view._group_items["i"]
+
+
+def _tree(view):
+    """The tree as nested (id, [children]) tuples, in display order."""
+    def walk(item):
+        return (
+            item.cue.id,
+            [walk(item.child(j)) for j in range(item.childCount())],
+        )
+
+    return [
+        walk(view.topLevelItem(i))
+        for i in range(view.topLevelItemCount())
+    ]
+
+
+@pytest.mark.parametrize(
+    "order",
+    [("g", "a", "b"), ("a", "b", "g"), ("a", "g", "b"), ("b", "a", "g")],
+)
+def test_undo_multi_select_delete_restores_tree_and_order(wired, order):
+    """Deleting a group together with its children, in any selection
+    order (selected_cues() follows click order), must undo to the exact
+    original tree -- parenting *and* row order, which is GO order."""
+    cue_model, view, app = wired
+    p = GroupCue(id="p", app=app)
+    g = GroupCue(id="g", app=app)
+    a = Cue(id="a", app=app)
+    b = Cue(id="b", app=app)
+    x = Cue(id="x", app=app)
+    g.group_id = x.group_id = "p"
+    a.group_id = b.group_id = "g"
+    p.children = ["g", "x"]
+    g.children = ["a", "b"]
+    for idx, cue in enumerate((p, g, a, b, x)):
+        _add(cue_model, cue, idx)
+    original = _tree(view)
+    cues = {"g": g, "a": a, "b": b}
+
+    cmd = RemoveCuesCommand(cue_model, *(cues[i] for i in order))
+    cmd.do()
+    cmd.undo()
+
+    assert _tree(view) == original
+    assert [c.id for c in g._resolve_children()] == ["a", "b"]

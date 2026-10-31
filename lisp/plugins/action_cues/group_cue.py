@@ -85,12 +85,24 @@ class GroupCue(Cue):
         self.property_changed.connect(self._on_property_changed)
 
     def _on_property_changed(self, _cue, name, value):
-        """Shuffle when the shuffle option transitions to True.
+        """Sanitise `children`; shuffle when shuffle turns on.
 
-        Fires during deserialization as well; that's harmless
-        since _shuffle_on_load will run on session_loaded and
-        double-shuffling remains uniformly random.
+        Fires during deserialization as well. For `children` that is
+        the point: a hand-edited/corrupt session can hold non-string
+        entries (e.g. ``[["x"], {}]``) that load fine but make every
+        id lookup (dict/set hashing) raise later, mid-operation. Drop
+        them once, here, keeping order. For shuffle it's harmless:
+        _shuffle_on_load runs on session_loaded and double-shuffling
+        remains uniformly random.
         """
+        if (
+            name == "children"
+            and isinstance(value, list)
+            and not all(isinstance(i, str) for i in value)
+        ):
+            self.children = [i for i in value if isinstance(i, str)]
+            return
+
         if (
             name == "shuffle"
             and value is True
@@ -157,15 +169,16 @@ class GroupCue(Cue):
         if not isinstance(children, list):
             return False
 
+        listed = set(children)
+        # Ids from which this group is reachable through `children`
+        # (itself included): splicing any of them in would be a cycle.
+        blocked = self._ids_reaching(self.id)
         spliced = []
         for cue_id in new_ids:
-            if (
-                cue_id != self.id
-                and cue_id not in children
-                and cue_id not in spliced
-                and not self._subtree_contains(cue_id, self.id)
-            ):
-                spliced.append(cue_id)
+            if cue_id in listed or cue_id in blocked:
+                continue
+            listed.add(cue_id)
+            spliced.append(cue_id)
 
         if old_id in children:
             index = children.index(old_id)
@@ -178,29 +191,24 @@ class GroupCue(Cue):
             return True
         return False
 
-    def _subtree_contains(self, root_id, target_id):
-        """True if ``target_id`` is reachable from ``root_id`` through
-        `children` lists (cycle-safe)."""
-        stack, seen = [root_id], set()
-        while stack:
-            cue_id = stack.pop()
-            if cue_id == target_id:
-                return True
-            if cue_id in seen:
-                continue
-            seen.add(cue_id)
-            children = getattr(self.app.cue_model.get(cue_id), "children", None)
+    def _ids_reaching(self, target_id):
+        """Ids whose `children` subtree contains ``target_id`` (plus
+        ``target_id`` itself), found with one upward walk over the
+        model -- linear in the model, however many ids get checked."""
+        parents = {}
+        for cue in self.app.cue_model:
+            children = getattr(cue, "children", None)
             if isinstance(children, list):
-                stack.extend(children)
-        return False
+                for child_id in children:
+                    parents.setdefault(child_id, []).append(cue.id)
 
-    @staticmethod
-    def promote(cue, parent_group_id):
-        """Move ``cue`` up to ``parent_group_id`` (its dissolved group's
-        parent), never pointing a cue's group_id at itself -- that only
-        happens with a corrupt group_id cycle; such a cue goes to the
-        top level instead."""
-        cue.group_id = parent_group_id if cue.id != parent_group_id else ""
+        reaching, stack = {target_id}, [target_id]
+        while stack:
+            for parent_id in parents.get(stack.pop(), ()):
+                if parent_id not in reaching:
+                    reaching.add(parent_id)
+                    stack.append(parent_id)
+        return reaching
 
     @staticmethod
     def promotion_order(listed_ids, promoted_ids):

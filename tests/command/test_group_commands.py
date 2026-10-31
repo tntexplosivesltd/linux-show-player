@@ -536,3 +536,36 @@ class TestUngroupCorruptHierarchy:
 
         cmd.undo()
         assert outer.children == ["x"]
+
+
+class TestUngroupCorruptChildren:
+    def test_unhashable_child_entry_completes(
+        self, mock_app, mock_list_model
+    ):
+        from lisp.command.group import UngroupCuesCommand
+
+        outer = _real_group(mock_app, "outer", ["inner"])
+        inner = _real_group(mock_app, "inner", ["a"], group_id="outer")
+        a = _make_cue("a", group_id="inner")
+        for cue in (outer, inner, a):
+            mock_app.cue_model.add(cue)
+        inner.children = [["bad"], "a"]
+
+        UngroupCuesCommand(mock_app, mock_list_model, inner).do()
+
+        assert a.group_id == "outer"
+        assert outer.children == ["a"]
+
+    def test_self_parented_group_promotes_children_to_top(
+        self, mock_app, mock_list_model
+    ):
+        from lisp.command.group import UngroupCuesCommand
+
+        g = _real_group(mock_app, "G", ["a"], group_id="G")
+        a = _make_cue("a", group_id="G")
+        mock_app.cue_model.add(g)
+        mock_app.cue_model.add(a)
+
+        UngroupCuesCommand(mock_app, mock_list_model, g).do()
+
+        assert a.group_id == ""

@@ -268,3 +268,19 @@ def test_multi_group_delete_round_trips(app, build, delete_ids):
 
     cmd.undo()
     assert _hierarchy(app) == original
+
+
+def test_touchable_is_deterministically_ordered(app):
+    """Restore order drives property_changed signal order: it must not
+    depend on set/hash order. Removed cues first (removal order), then
+    the other affected cues in model order."""
+    o = _group(app, "o", ["i"])
+    i = _group(app, "i", ["a", "b"], group_id="o")
+    a = _leaf("a", group_id="i")
+    b = _leaf("b", group_id="i")
+    for cue in (o, i, a, b):
+        app.cue_model.add(cue)
+
+    cmd = _remove(app, i)
+
+    assert [c.id for c in cmd._touchable()] == ["i", "o", "a", "b"]

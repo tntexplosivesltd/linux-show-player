@@ -17,6 +17,7 @@
 
 from lisp.command.command import Command
 from lisp.command.model import ModelRemoveItemsCommand
+from lisp.cues.cue_model import CueModel
 
 
 class GroupCuesCommand(Command):
@@ -94,7 +95,12 @@ class UngroupCuesCommand(Command):
         # is never mutated by do(), but the grandparent could
         # in principle be retargeted between cycles by some
         # other command, so we freeze the value we promote to.
-        self._parent_group_id = group_cue.group_id
+        # A corrupt self-parented group promotes to the top level.
+        self._parent_group_id = (
+            group_cue.group_id
+            if group_cue.group_id != group_cue.id
+            else ""
+        )
         # Snapshot of the grandparent's `children` list, taken in
         # do() so undo() can restore it verbatim. None when do() made
         # no splice (e.g. the parent is top-level and has no list).
@@ -121,12 +127,6 @@ class UngroupCuesCommand(Command):
             self._child_ids, present + self._straggler_ids
         )
 
-        # Promote children to the dissolved group's parent. For
-        # top-level groups this is "" (legacy behavior); for
-        # nested inner groups this is the grandparent's id.
-        for child_id in promoted:
-            GroupCue.promote(model.get(child_id), self._parent_group_id)
-
         # Splice the promoted children into the grandparent GroupCue's
         # explicit `children` list, replacing the dissolved group's id
         # (preserving order). GroupCue playback iterates this list
@@ -134,7 +134,8 @@ class UngroupCuesCommand(Command):
         # back-links, so without this the promoted children silently
         # stop being playable via the grandparent (bug C1). Top-level
         # parents ("") have no children list, hence the isinstance
-        # guard.
+        # guard. Done before promoting, so a failure can't leave the
+        # group_ids half-rewritten.
         parent = model.get(self._parent_group_id)
         if isinstance(parent, GroupCue):
             before = list(parent.children) if isinstance(
@@ -142,6 +143,12 @@ class UngroupCuesCommand(Command):
             ) else None
             if parent.replace_child(group_id, promoted):
                 self._parent_children_before = before
+
+        # Promote children to the dissolved group's parent. For
+        # top-level groups this is "" (legacy behavior); for
+        # nested inner groups this is the grandparent's id.
+        for child_id in promoted:
+            CueModel.promote(model.get(child_id), self._parent_group_id)
 
         # Remove the group cue
         model.remove(self._group_cue)
@@ -206,12 +213,17 @@ class RemoveCuesCommand(ModelRemoveItemsCommand):
         }
 
     def undo(self):
-        # Re-add first, then restore links. Each group_id write fires
-        # property_changed -> the list view reparents the row under the
-        # group's tree item, which only exists once the group is back;
-        # the view never adopts existing rows when a group is re-added,
-        # so restoring first would leave the children drawn top-level.
-        super().undo()
+        # Re-add in *reverse* removal order. Each cue kept the index it
+        # had when it was removed (after the earlier removals), so the
+        # reverse order puts every row back exactly, and a group is
+        # always back before the children removed after it -- the list
+        # view only nests a re-added row under a group row that already
+        # exists, and never adopts existing rows when a group returns.
+        for item in reversed(self._items):
+            self._model.add(item)
+        # Then restore links. Each group_id write fires property_changed
+        # -> the list view reparents the row under the group's tree
+        # item, which only exists once the group is back.
         for cue, (group_id, children) in self._restore.items():
             cue.group_id = group_id
             if children is not None:
@@ -227,14 +239,16 @@ class RemoveCuesCommand(ModelRemoveItemsCommand):
         parents (which receive the splice). Snapshotting just these
         keeps a delete from rebuilding the whole model's hierarchy."""
         removed_ids = {cue.id for cue in self._items}
-        touchable = set(self._items)
+        parent_ids = {cue.group_id for cue in self._items}
+        # Ordered (removed cues in removal order, then the rest in model
+        # order) so undo writes -- and the property_changed signals they
+        # fire -- happen in the same order every run.
+        touchable = list(self._items)
         for cue in self._model:
-            if cue.group_id in removed_ids:
-                touchable.add(cue)
-        for cue in self._items:
-            parent = self._model.get(cue.group_id)
-            if parent is not None:
-                touchable.add(parent)
+            if cue.id in removed_ids:
+                continue
+            if cue.group_id in removed_ids or cue.id in parent_ids:
+                touchable.append(cue)
         return touchable
 
     @staticmethod

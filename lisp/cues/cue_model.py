@@ -52,41 +52,53 @@ class CueModel(Model):
 
         self.item_removed.emit(cue)
 
-        # Promote children of the removed cue to its parent group,
-        # so dissolving an inner group doesn't leave its children
-        # holding a dangling group_id (which survives session
-        # save/load and silently breaks the nested hierarchy on
-        # the next reload). Mirrors UngroupCuesCommand's promotion
-        # — UngroupCuesCommand pre-sets group_ids before calling
-        # remove, so this loop no-ops on that path; it's the
-        # safety net for direct cue_model.remove callers.
-        from lisp.plugins.action_cues.group_cue import GroupCue
-
-        parent_group_id = cue.group_id
-        promoted = []
-        for other in self.__cues.values():
-            if other.group_id == cue_id:
-                GroupCue.promote(other, parent_group_id)
-                promoted.append(other.id)
+        # Promote children of the removed cue to its parent group, so
+        # dissolving an inner group doesn't leave them holding a
+        # dangling group_id (which survives save/load and silently
+        # breaks the nested hierarchy on the next reload). A corrupt
+        # self-parented group promotes to the top level instead.
+        # UngroupCuesCommand pre-promotes before calling remove, so this
+        # no-ops on that path; it's the safety net for direct
+        # cue_model.remove callers.
+        parent_group_id = cue.group_id if cue.group_id != cue_id else ""
+        promoted = [
+            other.id for other in self.__cues.values()
+            if other.group_id == cue_id
+        ]
 
         # When a group is dissolved, splice the promoted ids into the
-        # grandparent GroupCue's explicit `children` list in place of
-        # the removed group's id. Playback iterates that list — not
-        # the group_id back-links — so without this the promoted
-        # children silently stop playing (bug C1). Removing a plain
-        # cue leaves its parent's list alone: `_resolve_children`
-        # skips the missing id, and re-adding the cue (undo) restores
-        # playback. UngroupCuesCommand splices before calling remove,
-        # so this no-ops on that path; it's the safety net for direct
-        # cue_model.remove callers. Undoing a removal of a group is
-        # RemoveCuesCommand's job.
+        # parent group's explicit `children` list in place of the
+        # removed group's id. Playback iterates that list -- not the
+        # group_id back-links -- so without this the promoted children
+        # silently stop playing (bug C1). Done *before* promoting, so a
+        # failure can't leave the links half-rewritten. Removing a plain
+        # cue leaves its parent's list alone: `_resolve_children` skips
+        # the missing id, and re-adding the cue (undo) restores playback.
+        # Undoing a removal of a group is RemoveCuesCommand's job.
+        # Groups are duck-typed -- a cue with a `children` list -- so
+        # core doesn't import the group plugin.
         parent = self.__cues.get(parent_group_id)
-        if isinstance(cue, GroupCue) and isinstance(parent, GroupCue):
+        if self._is_group(cue) and self._is_group(parent):
             parent.replace_child(
-                cue_id, GroupCue.promotion_order(cue.children, promoted)
+                cue_id, cue.promotion_order(cue.children, promoted)
             )
 
+        for other_id in promoted:
+            self.promote(self.__cues[other_id], parent_group_id)
+
         return cue
+
+    @staticmethod
+    def _is_group(cue):
+        return isinstance(getattr(cue, "children", None), list)
+
+    @staticmethod
+    def promote(cue, parent_group_id):
+        """Move ``cue`` up to ``parent_group_id`` (its dissolved group's
+        parent), never pointing a cue's group_id at itself -- that only
+        happens with a corrupt group_id cycle; such a cue goes to the
+        top level instead."""
+        cue.group_id = parent_group_id if cue.id != parent_group_id else ""
 
     def get(self, cue_id, default=None):
         """Return the cue with the given id, or the default value.
