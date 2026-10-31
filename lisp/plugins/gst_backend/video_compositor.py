@@ -28,6 +28,57 @@ COMP_HEIGHT = 1080
 COMP_FPS = 30
 
 
+# appsrc must declare a latency window or glvideomixer cannot configure
+# latency once a live appsrc joins (default max-latency 0 < the
+# background's 1-frame min → endless "clock problem" warnings).
+APPSRC_MAX_LATENCY = Gst.SECOND
+
+
+def query_min_latency(pipeline):
+    """Min latency (ns) of `pipeline` from a latency query, 0 if the
+    query fails (e.g. a non-live cue pipeline before PLAYING).
+
+    Deliberately NOT Pipeline.get_latency(): that returns the user-set
+    'latency' property (CLOCK_TIME_NONE when unset), not the latency
+    the pipeline actually configured.
+    """
+    query = Gst.Query.new_latency()
+    if not pipeline.query(query):
+        return 0
+    _live, min_latency, _max_latency = query.parse_latency()
+    return min_latency
+
+
+def projection_pts(running_time, cue_base, proj_base, latency_offset):
+    """Map a cue buffer's running-time onto the projection pipeline.
+
+    A sink renders at base_time + running_time + latency. Equating the
+    cue's audio render time with the projection's video render time on
+    the shared clock gives:
+
+        pts = running_time + (cue_base − proj_base) + (L_cue − L_proj)
+
+    `latency_offset` is (L_cue − L_proj). Validated by the Phase 1
+    spike to within ±1 frame, no drift, across pause/resume.
+    """
+    return running_time + (cue_base - proj_base) + latency_offset
+
+
+class Registration:
+    """Per-cue projection resources: an appsrc (+ optional glupload)
+    feeding one glvideomixer request pad above the black background."""
+
+    def __init__(self):
+        self.appsrc = None
+        self.upload = None
+        self.mix_pad = None
+        self.caps_set = False
+        # (L_cue − L_proj), cached by the pump; re-queried when the
+        # countdown reaches 0 (0 = query on the next buffer).
+        self.latency_offset = 0
+        self.latency_countdown = 0
+
+
 def _have_factory(name):
     """True if a GStreamer element factory of this name exists."""
     return Gst.ElementFactory.find(name) is not None
@@ -106,6 +157,92 @@ class VideoCompositor:
         """The shared clock every cue pipeline must adopt so pumped
         video stays in sync with the cue's own audio."""
         return self._clock
+
+    def register(self, sink):
+        """Attach a cue to the projection pipeline. Returns a
+        Registration the caller's pump pushes buffers into, or None if
+        the compositor is unavailable."""
+        if not self.available:
+            return None
+        if id(sink) in self._registrations:
+            return self._registrations[id(sink)]
+        reg = self._attach(sink)
+        if reg is not None:
+            self._registrations[id(sink)] = reg
+        return reg
+
+    def unregister(self, sink):
+        """Detach a cue. Idempotent — a stop() after eos() (or vice
+        versa) must not error. Must not be called from a
+        projection-pipeline streaming thread (see _detach)."""
+        reg = self._registrations.pop(id(sink), None)
+        if reg is not None:
+            self._detach(reg)
+
+    def is_registered(self, sink):
+        return id(sink) in self._registrations
+
+    def active_others(self, sink):
+        """True if any cue OTHER than `sink` is currently registered —
+        the single source of truth for VideoExclusiveManager."""
+        return any(k != id(sink) for k in self._registrations)
+
+    def _attach(self, sink):
+        """Live-add appsrc (+glupload on GL) + a mixer request pad."""
+        plan = plan_pipeline()
+        appsrc = Gst.ElementFactory.make("appsrc", None)
+        appsrc.set_property("format", Gst.Format.TIME)
+        appsrc.set_property("is-live", True)
+        appsrc.set_property("do-timestamp", False)
+        appsrc.set_property("min-latency", 0)
+        appsrc.set_property("max-latency", APPSRC_MAX_LATENCY)
+        self.pipeline.add(appsrc)
+
+        reg = Registration()
+        reg.appsrc = appsrc
+
+        tail = appsrc
+        if plan["upload"] is not None:
+            upload = Gst.ElementFactory.make(plan["upload"], None)
+            self.pipeline.add(upload)
+            appsrc.link(upload)
+            reg.upload = upload
+            tail = upload
+
+        tmpl = self.mixer.get_pad_template("sink_%u")
+        mix_pad = self.mixer.request_pad(tmpl, None, None)
+        mix_pad.set_property("zorder", self._next_zorder)
+        self._next_zorder += 1
+        reg.mix_pad = mix_pad
+
+        tail.get_static_pad("src").link(mix_pad)
+        appsrc.sync_state_with_parent()
+        if reg.upload is not None:
+            reg.upload.sync_state_with_parent()
+        return reg
+
+    def _detach(self, reg):
+        """Live-remove a cue's branch. The mixer reverts to the black
+        background = 'black on stop'.
+
+        No pad probe: we own the only upstream element (the appsrc), so
+        NULLing it stops its streaming task and flushes the branch;
+        after that it is inert and can be unlinked and released.
+        Doing this teardown inside a blocking pad-probe callback runs it
+        on a streaming thread and deadlocks glvideomixer (Phase 1
+        spike). Callers must therefore not be on a projection-pipeline
+        streaming thread — VideoSink.stop() runs on cue worker threads
+        and eos() on the cue's bus watch (main loop).
+        """
+        reg.appsrc.set_state(Gst.State.NULL)
+        if reg.upload is not None:
+            reg.upload.set_state(Gst.State.NULL)
+        tail = reg.upload if reg.upload is not None else reg.appsrc
+        tail.get_static_pad("src").unlink(reg.mix_pad)
+        self.mixer.release_request_pad(reg.mix_pad)
+        self.pipeline.remove(reg.appsrc)
+        if reg.upload is not None:
+            self.pipeline.remove(reg.upload)
 
     def _build(self):
         plan = plan_pipeline()
