@@ -275,3 +275,47 @@ class TestShutdown:
                           return_value=False):
             comp = vc.VideoCompositor(out, mon)
         comp.shutdown()  # pipeline None — must not raise
+
+
+class TestFitRect:
+    """Cue video is scaled to fit the canvas, aspect preserved and
+    centred — the mixer otherwise places it at native size at (0,0)."""
+
+    def test_same_aspect_fills_canvas(self):
+        assert vc.fit_rect(640, 360, 1, 1, 1920, 1080) == (0, 0, 1920, 1080)
+
+    def test_small_4_3_is_pillarboxed(self):
+        # 320x240 → height-bound: 1440x1080, centred horizontally.
+        assert vc.fit_rect(320, 240, 1, 1, 1920, 1080) == (240, 0, 1440, 1080)
+
+    def test_wide_is_letterboxed(self):
+        # 2.39:1 → width-bound.
+        x, y, w, h = vc.fit_rect(2390, 1000, 1, 1, 1920, 1080)
+        assert (x, w) == (0, 1920)
+        assert h == round(1920 * 1000 / 2390)
+        assert y == (1080 - h) // 2
+
+    def test_pixel_aspect_ratio_respected(self):
+        # Anamorphic DV PAL 720x576 with PAR 64/45 is 16:9 on screen.
+        assert vc.fit_rect(720, 576, 64, 45, 1920, 1080) == (0, 0, 1920, 1080)
+
+    def test_degenerate_input_falls_back_to_full_canvas(self):
+        assert vc.fit_rect(0, 0, 1, 1, 1920, 1080) == (0, 0, 1920, 1080)
+
+
+class TestFitRegistration:
+    def test_sets_mixer_pad_geometry_from_caps(self):
+        out, mon = _fake_windows()
+        with patch.object(vc.VideoCompositor, "_build", autospec=True,
+                          return_value=True):
+            comp = vc.VideoCompositor(out, mon)
+        reg = vc.Registration()
+        reg.mix_pad = MagicMock()
+        caps = vc.Gst.Caps.from_string(
+            "video/x-raw,width=320,height=240,"
+            "pixel-aspect-ratio=1/1,framerate=30/1")
+        comp.fit_registration(reg, caps)
+        reg.mix_pad.set_property.assert_any_call("xpos", 240)
+        reg.mix_pad.set_property.assert_any_call("ypos", 0)
+        reg.mix_pad.set_property.assert_any_call("width", 1440)
+        reg.mix_pad.set_property.assert_any_call("height", 1080)

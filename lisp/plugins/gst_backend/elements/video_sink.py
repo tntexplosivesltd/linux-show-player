@@ -148,7 +148,9 @@ class VideoSink(GstMediaElement):
 
         buf = sample.get_buffer()
         if not reg.caps_set:
-            reg.appsrc.set_property("caps", sample.get_caps())
+            caps = sample.get_caps()
+            reg.appsrc.set_property("caps", caps)
+            compositor.fit_registration(reg, caps)
             reg.caps_set = True
 
         if reg.latency_countdown <= 0:

@@ -64,6 +64,24 @@ def projection_pts(running_time, cue_base, proj_base, latency_offset):
     return running_time + (cue_base - proj_base) + latency_offset
 
 
+def fit_rect(src_w, src_h, par_n, par_d, dst_w, dst_h):
+    """Aspect-preserving fit of a source into the canvas, centred.
+
+    Returns (xpos, ypos, width, height) for the mixer pad. The mixer
+    otherwise places each input at its native pixel size at (0,0); the
+    old per-cue glimagesink scaled to the window instead, so this
+    restores scale-to-fit (letterbox / pillarbox). `par_n/par_d` is the
+    source pixel-aspect-ratio, so anamorphic video displays correctly.
+    """
+    if src_w <= 0 or src_h <= 0 or par_n <= 0 or par_d <= 0:
+        return 0, 0, dst_w, dst_h
+    display_w = src_w * par_n / par_d
+    scale = min(dst_w / display_w, dst_h / src_h)
+    width = min(dst_w, round(display_w * scale))
+    height = min(dst_h, round(src_h * scale))
+    return (dst_w - width) // 2, (dst_h - height) // 2, width, height
+
+
 class Registration:
     """Per-cue projection resources: an appsrc (+ optional glupload)
     feeding one glvideomixer request pad above the black background."""
@@ -204,6 +222,28 @@ class VideoCompositor:
         """True if any cue OTHER than `sink` is currently registered —
         the single source of truth for VideoExclusiveManager."""
         return any(k != id(sink) for k in self._registrations)
+
+    def fit_registration(self, reg, caps):
+        """Scale-to-fit a cue's mixer pad once its caps are known.
+
+        Called by the pump on the first sample (streaming thread);
+        only touches GObject properties on the pad.
+        """
+        struct = caps.get_structure(0)
+        ok_w, src_w = struct.get_int("width")
+        ok_h, src_h = struct.get_int("height")
+        ok_par, par_n, par_d = struct.get_fraction("pixel-aspect-ratio")
+        if not ok_par:
+            par_n, par_d = 1, 1
+        if not (ok_w and ok_h):
+            src_w = src_h = 0
+        x, y, w, h = fit_rect(
+            src_w, src_h, par_n, par_d, COMP_WIDTH, COMP_HEIGHT
+        )
+        reg.mix_pad.set_property("xpos", x)
+        reg.mix_pad.set_property("ypos", y)
+        reg.mix_pad.set_property("width", w)
+        reg.mix_pad.set_property("height", h)
 
     def _attach(self, sink):
         """Live-add appsrc (+glupload on GL) + a mixer request pad."""

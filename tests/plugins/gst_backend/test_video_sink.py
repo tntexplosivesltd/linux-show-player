@@ -298,6 +298,8 @@ class TestVideoSinkPump:
             sink._VideoSink__on_new_sample(appsink)
         caps = appsink.emit.return_value.get_caps.return_value
         reg.appsrc.set_property.assert_called_once_with("caps", caps)
+        # Scale-to-fit the canvas, as the per-cue glimagesink used to.
+        comp.fit_registration.assert_called_once_with(reg, caps)
         assert reg.caps_set is True
 
     def test_unregistered_sample_is_dropped(self):
