@@ -19,6 +19,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from lisp.backend.media import MediaState
 from lisp.core.configuration import DummyConfiguration
 from lisp.core.signal import Signal
 from lisp.plugins.playback_monitor.monitor_window import (
@@ -116,6 +117,7 @@ class _FakeMedia:
         self.duration = duration
         self.start_time = start_time
         self.stop_time = stop_time
+        self.state = MediaState.Playing
 
 
 class _FakeMediaCue:
@@ -261,3 +263,34 @@ class TestTrimAwarePlaybackMonitor:
         monitor_window._time_updated(160000)
 
         assert monitor_window.remaining_text == "00:00"
+
+
+class TestFreezeOnStop:
+    """Samples are delivered QtQueued from CueTime's 33ms tick. A tick
+    that lands inside ``Cue.stop()`` -- after the pipeline has gone to
+    READY (position query -> 0) but before the cue's state leaves
+    Running -- posts a 0 that would otherwise become the frozen
+    display. Samples whose media is no longer playing/paused must be
+    dropped so the monitor freezes on the last real position."""
+
+    def test_sample_after_media_stopped_is_ignored(self, monitor_window):
+        cue = _FakeMediaCue(duration=180000)
+        monitor_window._tracked_cue = cue
+        monitor_window._time_updated(42000)
+        assert monitor_window.elapsed_text == "00:42"
+
+        cue.media.state = MediaState.Ready
+        monitor_window._time_updated(0)
+
+        assert monitor_window.elapsed_text == "00:42"
+        assert monitor_window.remaining_text == "02:18"
+
+    def test_paused_media_still_updates(self, monitor_window):
+        """Seeking a paused cue must still move the display."""
+        cue = _FakeMediaCue(duration=180000)
+        monitor_window._tracked_cue = cue
+        cue.media.state = MediaState.Paused
+
+        monitor_window._time_updated(5000)
+
+        assert monitor_window.elapsed_text == "00:05"

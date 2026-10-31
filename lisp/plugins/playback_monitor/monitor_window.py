@@ -25,6 +25,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from lisp.backend.media import MediaState
 from lisp.core.signal import Connection
 from lisp.cues.cue_time import CueTime
 from lisp.ui.ui_utils import translate
@@ -193,6 +194,19 @@ class PlaybackMonitorWindow(QWidget):
         if cue is None:
             return
 
+        # Freeze on stop. Samples arrive QtQueued from CueTime's tick,
+        # and a tick landing inside Cue.stop() -- pipeline already in
+        # READY (position query returns 0) but the cue's state not yet
+        # out of Running -- would post a 0 that becomes the frozen
+        # display. By delivery time the media reports not-playing, so
+        # drop it and keep the last real position on screen.
+        media = getattr(cue, "media", None)
+        if media is not None and media.state not in (
+            MediaState.Playing,
+            MediaState.Paused,
+        ):
+            return
+
         if (
             cue.duration > 0 and time == cue.duration
         ) or time < 0:
@@ -204,7 +218,6 @@ class PlaybackMonitorWindow(QWidget):
         # elapsed the instant it starts and 30s remaining the
         # instant it ends. Non-media cues have no ``media`` attr
         # and fall through to the legacy raw-duration formula.
-        media = getattr(cue, "media", None)
         if media is not None:
             effective_end = (
                 media.stop_time
