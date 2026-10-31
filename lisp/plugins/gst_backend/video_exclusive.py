@@ -17,8 +17,6 @@
 
 import logging
 
-from lisp.cues.cue import CueState
-from lisp.plugins.gst_backend.gi_repository import Gst
 from lisp.ui.widgets.notification import NotificationLevel
 
 logger = logging.getLogger(__name__)
@@ -27,9 +25,9 @@ logger = logging.getLogger(__name__)
 class VideoExclusiveManager:
     """Blocks video/image cues from overlapping.
 
-    Only one video/image cue can be active at a time.  When a
-    second video/image cue tries to start, it is blocked —
-    following the same pattern as ExclusiveManager.
+    Only one video/image cue can be active at a time. Backed by a single
+    query against VideoCompositor ("is any cue OTHER than this one
+    currently registered?") — no per-sink pipeline-state introspection.
     """
 
     def __init__(self, app):
@@ -39,42 +37,34 @@ class VideoExclusiveManager:
         """Return True if the cue should be blocked from starting.
 
         A video/image cue is blocked if another video/image cue is
-        currently playing or paused — except when the cue asking to
-        start is the same one that owns the stuck sink (self-resume).
+        registered with the compositor (playing or paused) — except
+        when the asking cue owns that registration (self-resume).
         """
-        if not self._is_video_cue(cue):
+        sink = self._video_sink(cue)
+        if sink is None:
             return False
 
-        from lisp.plugins.gst_backend.elements.video_sink import (
-            VideoSink,
-        )
+        # Lazy import: gst_backend imports this module at top level, so
+        # a top-level `import GstBackend` here would be a cycle.
+        from lisp.plugins.gst_backend.gst_backend import GstBackend
 
-        prev = VideoSink._previous_sink
-        if prev is None:
+        compositor = GstBackend.video_compositor()
+        if compositor is None:
             return False
 
-        # Self-resume guard: if the cue owns the "stuck" sink, let it
-        # through. VideoSink.stop() clears _previous_sink; pause() does
-        # not, so a paused video's own sink sticks around and would
-        # otherwise block its own resume (e.g. via CueAction.Resume
-        # or a Fade & Resume cue following a Fade & Stop).
-        if cue.media.element("VideoSink") is prev:
-            return False
-
-        # Check the previous sink's pipeline state
-        _, state, _ = prev.pipeline.get_state(0)
-        if state not in (Gst.State.PLAYING, Gst.State.PAUSED):
+        # active_others excludes this cue's own sink, so a self-resume
+        # (CueAction.Resume / Fade & Resume of a paused video) is never
+        # blocked by its own registration.
+        if not compositor.active_others(sink):
             return False
 
         message = "Blocked: another video/image cue is playing"
         logger.info(message)
-        self._app.notify.emit(
-            message, NotificationLevel.Info
-        )
+        self._app.notify.emit(message, NotificationLevel.Info)
         return True
 
     @staticmethod
-    def _is_video_cue(cue):
+    def _video_sink(cue):
         if not hasattr(cue, "media"):
-            return False
-        return cue.media.element("VideoSink") is not None
+            return None
+        return cue.media.element("VideoSink")

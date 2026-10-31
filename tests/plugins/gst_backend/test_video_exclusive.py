@@ -1,12 +1,12 @@
-"""Tests for VideoExclusiveManager."""
+"""Tests for VideoExclusiveManager (backed by VideoCompositor)."""
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
-from lisp.cues.cue import CueState
-from lisp.plugins.gst_backend.gi_repository import Gst
 from lisp.plugins.gst_backend.video_exclusive import (
     VideoExclusiveManager,
 )
+
+_CM = "lisp.plugins.gst_backend.gst_backend.GstBackend.video_compositor"
 
 
 def _make_app():
@@ -15,165 +15,60 @@ def _make_app():
     return app
 
 
-def _make_cue(has_video_sink=False, video_sink=None):
-    """Return a mock cue. `video_sink`, if given, is the specific
-    VideoSink mock `cue.media.element("VideoSink")` will return —
-    used to simulate "this cue owns that sink"."""
+def _make_cue(video_sink="__none__"):
     cue = MagicMock()
-    cue.state = CueState.Stop
-    if has_video_sink:
-        sink = video_sink if video_sink is not None else MagicMock()
-        cue.media.element.return_value = sink
-    else:
+    if video_sink == "__none__":
         cue.media.element.return_value = None
+    else:
+        cue.media.element.return_value = video_sink
     return cue
+
+
+def _patch_compositor(active_others=False):
+    comp = MagicMock()
+    comp.active_others.return_value = active_others
+    # Patch the classmethod on the class; the lazy import inside
+    # is_start_blocked resolves to this same class object.
+    return patch(_CM, return_value=comp), comp
 
 
 class TestVideoExclusiveManager:
     def test_non_video_cue_never_blocked(self):
+        mgr = VideoExclusiveManager(_make_app())
+        assert mgr.is_start_blocked(_make_cue(video_sink="__none__")) is False
+
+    def test_blocked_when_another_registered(self):
         app = _make_app()
         mgr = VideoExclusiveManager(app)
-        cue = _make_cue(has_video_sink=False)
-        assert mgr.is_start_blocked(cue) is False
-
-    def test_video_cue_not_blocked_when_nothing_playing(self):
-        app = _make_app()
-        mgr = VideoExclusiveManager(app)
-        cue = _make_cue(has_video_sink=True)
-
-        from lisp.plugins.gst_backend.elements.video_sink \
-            import VideoSink
-        VideoSink._previous_sink = None
-
-        assert mgr.is_start_blocked(cue) is False
-
-    def test_video_cue_blocked_when_another_playing(self):
-        app = _make_app()
-        mgr = VideoExclusiveManager(app)
-        cue = _make_cue(has_video_sink=True)
-
-        # Simulate a previous sink with PLAYING pipeline
-        from lisp.plugins.gst_backend.elements.video_sink \
-            import VideoSink
-
-        mock_prev = MagicMock()
-        mock_prev.pipeline.get_state.return_value = (
-            Gst.StateChangeReturn.SUCCESS,
-            Gst.State.PLAYING,
-            Gst.State.VOID_PENDING,
-        )
-        VideoSink._previous_sink = mock_prev
-
-        try:
-            assert mgr.is_start_blocked(cue) is True
+        sink = object()
+        ctx, comp = _patch_compositor(active_others=True)
+        with ctx:
+            assert mgr.is_start_blocked(_make_cue(video_sink=sink)) is True
+            comp.active_others.assert_called_once_with(sink)
             app.notify.emit.assert_called_once()
-        finally:
-            VideoSink._previous_sink = None
 
-    def test_other_video_cue_blocked_when_previous_paused(self):
-        """A DIFFERENT video cue is still blocked while another is
-        paused — prevents overlap with a temporarily-halted video."""
-        app = _make_app()
-        mgr = VideoExclusiveManager(app)
-        cue = _make_cue(has_video_sink=True)  # fresh sink, not the paused one
-
-        from lisp.plugins.gst_backend.elements.video_sink \
-            import VideoSink
-
-        mock_prev = MagicMock()
-        mock_prev.pipeline.get_state.return_value = (
-            Gst.StateChangeReturn.SUCCESS,
-            Gst.State.PAUSED,
-            Gst.State.VOID_PENDING,
-        )
-        VideoSink._previous_sink = mock_prev
-
-        try:
-            assert mgr.is_start_blocked(cue) is True
-        finally:
-            VideoSink._previous_sink = None
-
-    def test_cue_resuming_its_own_paused_sink_not_blocked(self):
-        """A video cue asking to start while its OWN sink is the paused
-        previous_sink must NOT be blocked — this is the self-resume
-        case hit by CueAction.Resume (or Fade & Resume) on a previously
-        paused video. Before this fix, the cue was blocked by its own
-        stuck sink, making a paused video impossible to resume."""
-        app = _make_app()
-        mgr = VideoExclusiveManager(app)
-
-        from lisp.plugins.gst_backend.elements.video_sink \
-            import VideoSink
-
-        # The paused sink — simulate the leftover from Fade & Stop.
-        own_sink = MagicMock()
-        own_sink.pipeline.get_state.return_value = (
-            Gst.StateChangeReturn.SUCCESS,
-            Gst.State.PAUSED,
-            Gst.State.VOID_PENDING,
-        )
-        VideoSink._previous_sink = own_sink
-
-        # The cue's media.element("VideoSink") IS the paused sink.
-        cue = _make_cue(has_video_sink=True, video_sink=own_sink)
-
-        try:
+    def test_not_blocked_when_none_registered(self):
+        mgr = VideoExclusiveManager(_make_app())
+        ctx, _ = _patch_compositor(active_others=False)
+        with ctx:
+            cue = _make_cue(video_sink=object())
             assert mgr.is_start_blocked(cue) is False
-            app.notify.emit.assert_not_called()
-        finally:
-            VideoSink._previous_sink = None
 
-    def test_cue_resuming_its_own_playing_sink_not_blocked(self):
-        """Edge case: if somehow a video cue's own sink is reported as
-        PLAYING (the block check is called during a spurious
-        re-start attempt), don't block it either. Same principle:
-        a cue never blocks itself."""
-        app = _make_app()
-        mgr = VideoExclusiveManager(app)
+    def test_self_resume_not_blocked(self):
+        # The cue owns the only registered sink → active_others False.
+        mgr = VideoExclusiveManager(_make_app())
+        sink = object()
+        ctx, comp = _patch_compositor(active_others=False)
+        with ctx:
+            assert mgr.is_start_blocked(_make_cue(video_sink=sink)) is False
+            comp.active_others.assert_called_once_with(sink)
 
-        from lisp.plugins.gst_backend.elements.video_sink \
-            import VideoSink
-
-        own_sink = MagicMock()
-        own_sink.pipeline.get_state.return_value = (
-            Gst.StateChangeReturn.SUCCESS,
-            Gst.State.PLAYING,
-            Gst.State.VOID_PENDING,
-        )
-        VideoSink._previous_sink = own_sink
-
-        cue = _make_cue(has_video_sink=True, video_sink=own_sink)
-
-        try:
+    def test_no_compositor_not_blocked(self):
+        mgr = VideoExclusiveManager(_make_app())
+        with patch(_CM, return_value=None):
+            cue = _make_cue(video_sink=object())
             assert mgr.is_start_blocked(cue) is False
-        finally:
-            VideoSink._previous_sink = None
-
-    def test_video_cue_not_blocked_when_previous_stopped(self):
-        app = _make_app()
-        mgr = VideoExclusiveManager(app)
-        cue = _make_cue(has_video_sink=True)
-
-        from lisp.plugins.gst_backend.elements.video_sink \
-            import VideoSink
-
-        mock_prev = MagicMock()
-        mock_prev.pipeline.get_state.return_value = (
-            Gst.StateChangeReturn.SUCCESS,
-            Gst.State.READY,
-            Gst.State.VOID_PENDING,
-        )
-        VideoSink._previous_sink = mock_prev
-
-        try:
-            assert mgr.is_start_blocked(cue) is False
-        finally:
-            VideoSink._previous_sink = None
 
     def test_cue_without_media_not_blocked(self):
-        """Non-media cues (e.g. GroupCue) should never be
-        blocked."""
-        app = _make_app()
-        mgr = VideoExclusiveManager(app)
-        cue = MagicMock(spec=[])  # no media attribute
-        assert mgr.is_start_blocked(cue) is False
+        mgr = VideoExclusiveManager(_make_app())
+        assert mgr.is_start_blocked(MagicMock(spec=[])) is False
