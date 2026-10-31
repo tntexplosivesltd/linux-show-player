@@ -21,11 +21,16 @@ from lisp.plugins.gst_backend.gi_repository import Gst
 
 logger = logging.getLogger(__name__)
 
-# Projection format. Kept modest; the later mixing spec may make this
-# configurable. Background layer + both sinks negotiate against this.
+# Default canvas, used until the projection screen is known (and as a
+# fallback for a degenerate screen). The live canvas follows the target
+# screen — see canvas_size_for_screen() / set_canvas_size().
 COMP_WIDTH = 1920
 COMP_HEIGHT = 1080
 COMP_FPS = 30
+
+# The black background source is tiny; its mixer pad is scaled to the
+# canvas, so resizing the canvas never renegotiates the source.
+BG_SIZE = 16
 
 
 # appsrc must declare a latency window or glvideomixer cannot configure
@@ -64,6 +69,33 @@ def projection_pts(running_time, cue_base, proj_base, latency_offset):
     return running_time + (cue_base - proj_base) + latency_offset
 
 
+def canvas_size_for_screen(screen):
+    """Canvas size for a projection QScreen, in physical pixels.
+
+    Matching the canvas to the screen makes the canvas→window scale
+    1:1, so a cue's fit-to-canvas is its fit-to-screen (no stacked
+    letterbox + pillarbox on non-16:9 outputs). Rounded down to even
+    dimensions for chroma-subsampled formats.
+    """
+    if screen is None:
+        return COMP_WIDTH, COMP_HEIGHT
+    geo = screen.geometry()
+    dpr = screen.devicePixelRatio()
+    width = int(geo.width() * dpr) & ~1
+    height = int(geo.height() * dpr) & ~1
+    if width <= 0 or height <= 0:
+        return COMP_WIDTH, COMP_HEIGHT
+    return width, height
+
+
+def _canvas_caps(width, height):
+    # ANY features: matches GL memory on the GL path and system memory
+    # on the fallback path alike.
+    return Gst.Caps.from_string(
+        f"video/x-raw(ANY),width={width},height={height}"
+    )
+
+
 def fit_rect(src_w, src_h, par_n, par_d, dst_w, dst_h):
     """Aspect-preserving fit of a source into the canvas, centred.
 
@@ -91,6 +123,8 @@ class Registration:
         self.upload = None
         self.mix_pad = None
         self.caps_set = False
+        # The cue's video caps, kept so a canvas resize can re-fit.
+        self.caps = None
         # (L_cue − L_proj), cached by the pump; re-queried when the
         # countdown reaches 0 (0 = query on the next buffer).
         self.latency_offset = 0
@@ -143,7 +177,12 @@ class VideoCompositor:
     lifetime.
     """
 
-    def __init__(self, output_window, monitor_window):
+    def __init__(
+        self,
+        output_window,
+        monitor_window,
+        canvas_size=(COMP_WIDTH, COMP_HEIGHT),
+    ):
         self._output_window = output_window
         self._monitor_window = monitor_window
         # Resolve the native handles now, on the constructing (main)
@@ -158,6 +197,9 @@ class VideoCompositor:
         self._proj_sink = None
         self._mon_sink = None
         self._sync_handler = None
+        self._canvas = tuple(canvas_size)
+        self._canvas_filter = None
+        self._bg_pad = None
         # Monotonic zorder allocator: each registered cue sits above
         # the background (zorder 0) and above earlier registrations.
         self._next_zorder = 1
@@ -175,6 +217,31 @@ class VideoCompositor:
         """The shared clock every cue pipeline must adopt so pumped
         video stays in sync with the cue's own audio."""
         return self._clock
+
+    def canvas_size(self):
+        return self._canvas
+
+    def set_canvas_size(self, width, height):
+        """Resize the canvas live (main thread). No-op when unchanged.
+
+        Re-pins the post-mixer canvas caps, rescales the background
+        pad, and re-fits every cue whose caps are already known.
+        """
+        if (width, height) == self._canvas:
+            return
+        self._canvas = (width, height)
+        if self.pipeline is None:
+            return
+        logger.debug("VideoCompositor: canvas -> %dx%d", width, height)
+        self._canvas_filter.set_property(
+            "caps", _canvas_caps(width, height)
+        )
+        self._bg_pad.set_property("width", width)
+        self._bg_pad.set_property("height", height)
+        # Snapshot: registrations may change on cue worker threads.
+        for reg in list(self._registrations.values()):
+            if reg.caps is not None:
+                self._apply_fit(reg)
 
     def shutdown(self):
         """Stop the projection pipeline for good. Idempotent.
@@ -227,9 +294,14 @@ class VideoCompositor:
         """Scale-to-fit a cue's mixer pad once its caps are known.
 
         Called by the pump on the first sample (streaming thread);
-        only touches GObject properties on the pad.
+        only touches GObject properties on the pad. The caps are kept
+        on the registration so set_canvas_size() can re-fit it.
         """
-        struct = caps.get_structure(0)
+        reg.caps = caps
+        self._apply_fit(reg)
+
+    def _apply_fit(self, reg):
+        struct = reg.caps.get_structure(0)
         ok_w, src_w = struct.get_int("width")
         ok_h, src_h = struct.get_int("height")
         ok_par, par_n, par_d = struct.get_fraction("pixel-aspect-ratio")
@@ -237,9 +309,7 @@ class VideoCompositor:
             par_n, par_d = 1, 1
         if not (ok_w and ok_h):
             src_w = src_h = 0
-        x, y, w, h = fit_rect(
-            src_w, src_h, par_n, par_d, COMP_WIDTH, COMP_HEIGHT
-        )
+        x, y, w, h = fit_rect(src_w, src_h, par_n, par_d, *self._canvas)
         reg.mix_pad.set_property("xpos", x)
         reg.mix_pad.set_property("ypos", y)
         reg.mix_pad.set_property("width", w)
@@ -325,12 +395,16 @@ class VideoCompositor:
         caps.set_property(
             "caps",
             Gst.Caps.from_string(
-                f"video/x-raw,width={COMP_WIDTH},height={COMP_HEIGHT},"
+                f"video/x-raw,width={BG_SIZE},height={BG_SIZE},"
                 f"framerate={COMP_FPS}/1"
             ),
         )
 
         self.mixer = Gst.ElementFactory.make(plan["mixer"], "mix")
+        # Pins the mixer's output to the canvas size; set_canvas_size()
+        # re-pins it live.
+        self._canvas_filter = Gst.ElementFactory.make("capsfilter", None)
+        self._canvas_filter.set_property("caps", _canvas_caps(*self._canvas))
         tee = Gst.ElementFactory.make("tee", None)
         proj_q = Gst.ElementFactory.make("queue", None)
         self._proj_sink = Gst.ElementFactory.make(plan["sink"], None)
@@ -346,7 +420,13 @@ class VideoCompositor:
             bg_upload = Gst.ElementFactory.make(plan["upload"], None)
             elems.append(bg_upload)
         elems += [
-            self.mixer, tee, proj_q, self._proj_sink, mon_q, self._mon_sink
+            self.mixer,
+            self._canvas_filter,
+            tee,
+            proj_q,
+            self._proj_sink,
+            mon_q,
+            self._mon_sink,
         ]
         for e in elems:
             if e is None:
@@ -362,9 +442,14 @@ class VideoCompositor:
                 return False
         elif not caps.link(self.mixer):
             return False
-        # mixer → tee → {projection, monitor}
+        bg_tail = bg_upload if bg_upload is not None else caps
+        self._bg_pad = bg_tail.get_static_pad("src").get_peer()
+        self._bg_pad.set_property("width", self._canvas[0])
+        self._bg_pad.set_property("height", self._canvas[1])
+        # mixer → canvas filter → tee → {projection, monitor}
         if not (
-            self.mixer.link(tee)
+            self.mixer.link(self._canvas_filter)
+            and self._canvas_filter.link(tee)
             and tee.link(proj_q)
             and proj_q.link(self._proj_sink)
             and tee.link(mon_q)

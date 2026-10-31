@@ -99,9 +99,12 @@ class GstBackend(Plugin, BaseBackend):
         # pumps into (no per-cue sink, so no surface hand-off).
         from lisp.plugins.gst_backend.video_compositor import (
             VideoCompositor,
+            canvas_size_for_screen,
         )
         GstBackend._video_compositor = VideoCompositor(
-            GstBackend._video_window, GstBackend._monitor_window
+            GstBackend._video_window,
+            GstBackend._monitor_window,
+            canvas_size=canvas_size_for_screen(self.__target_screen()),
         )
         if not GstBackend._video_compositor.available:
             self.app.notify.emit(
@@ -440,28 +443,42 @@ class GstBackend(Plugin, BaseBackend):
         if window is None:
             return
 
+        target = self.__target_screen()
+        window.set_display_screen(target)
+
+        is_secondary = target is not QApplication.primaryScreen()
+        fullscreen = GstBackend.Config.get(
+            "video_fullscreen", True
+        )
+        window.set_fullscreen(fullscreen and is_secondary)
+
+        # The canvas follows the projection screen so a cue's
+        # fit-to-canvas is its fit-to-screen (see VideoCompositor).
+        compositor = GstBackend.video_compositor()
+        if compositor is not None:
+            from lisp.plugins.gst_backend.video_compositor import (
+                canvas_size_for_screen,
+            )
+            compositor.set_canvas_size(*canvas_size_for_screen(target))
+
+    @staticmethod
+    def __target_screen():
+        """The QScreen the projection window should use.
+
+        * ``video_screen = -1`` (auto): the first non-primary screen if
+          one is connected, otherwise the primary screen.
+        * ``0..N``: that specific screen index.
+        """
         screens = QApplication.screens()
         primary = QApplication.primaryScreen()
         screen_cfg = GstBackend.Config.get("video_screen", -1)
 
         if screen_cfg >= 0 and screen_cfg < len(screens):
-            target = screens[screen_cfg]
-        elif len(screens) > 1:
+            return screens[screen_cfg]
+        if len(screens) > 1:
             # Auto: pick first non-primary screen
-            target = next(
-                (s for s in screens if s is not primary),
-                primary,
-            )
-        else:
-            target = primary
-
-        window.set_display_screen(target)
-
-        is_secondary = target is not primary
-        fullscreen = GstBackend.Config.get(
-            "video_fullscreen", True
-        )
-        window.set_fullscreen(fullscreen and is_secondary)
+            return next((s for s in screens if s is not primary), primary)
+        return primary
 
     def __update_video_window_visibility(self, cue=None):
         """Show the video window if any video/image cues exist.

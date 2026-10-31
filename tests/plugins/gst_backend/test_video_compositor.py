@@ -319,3 +319,118 @@ class TestFitRegistration:
         reg.mix_pad.set_property.assert_any_call("ypos", 0)
         reg.mix_pad.set_property.assert_any_call("width", 1440)
         reg.mix_pad.set_property.assert_any_call("height", 1080)
+
+
+def _screen(width, height, dpr=1.0):
+    screen = MagicMock()
+    screen.geometry.return_value.width.return_value = width
+    screen.geometry.return_value.height.return_value = height
+    screen.devicePixelRatio.return_value = dpr
+    return screen
+
+
+class TestCanvasSizeForScreen:
+    def test_plain_1080p(self):
+        assert vc.canvas_size_for_screen(_screen(1920, 1080)) == (1920, 1080)
+
+    def test_4_3_projector(self):
+        assert vc.canvas_size_for_screen(_screen(1024, 768)) == (1024, 768)
+
+    def test_hidpi_uses_physical_pixels(self):
+        assert vc.canvas_size_for_screen(
+            _screen(1280, 800, dpr=2.0)) == (2560, 1600)
+
+    def test_odd_dimensions_rounded_down_to_even(self):
+        assert vc.canvas_size_for_screen(_screen(1365, 767)) == (1364, 766)
+
+    def test_degenerate_screen_falls_back(self):
+        assert vc.canvas_size_for_screen(_screen(0, 0)) == (
+            vc.COMP_WIDTH, vc.COMP_HEIGHT)
+
+    def test_none_screen_falls_back(self):
+        assert vc.canvas_size_for_screen(None) == (
+            vc.COMP_WIDTH, vc.COMP_HEIGHT)
+
+
+def _caps(width, height):
+    return vc.Gst.Caps.from_string(
+        f"video/x-raw,width={width},height={height},"
+        "pixel-aspect-ratio=1/1,framerate=30/1")
+
+
+class TestCanvasSizing:
+    def _comp(self, canvas_size=None):
+        out, mon = _fake_windows()
+
+        def fake_build(self):
+            self.pipeline = MagicMock()
+            self.mixer = MagicMock()
+            self._canvas_filter = MagicMock()
+            self._bg_pad = MagicMock()
+            return True
+
+        kwargs = {} if canvas_size is None else {"canvas_size": canvas_size}
+        with patch.object(vc.VideoCompositor, "_build", fake_build):
+            return vc.VideoCompositor(out, mon, **kwargs)
+
+    def _reg(self, comp, caps):
+        reg = vc.Registration()
+        reg.mix_pad = MagicMock()
+        comp.fit_registration(reg, caps)
+        reg.mix_pad.reset_mock()
+        return reg
+
+    def test_default_canvas_size(self):
+        comp = self._comp()
+        assert comp.canvas_size() == (vc.COMP_WIDTH, vc.COMP_HEIGHT)
+
+    def test_fit_uses_current_canvas(self):
+        # A 4:3 clip on a 4:3 canvas fills it — no stacked bars.
+        comp = self._comp(canvas_size=(1024, 768))
+        reg = vc.Registration()
+        reg.mix_pad = MagicMock()
+        comp.fit_registration(reg, _caps(320, 240))
+        reg.mix_pad.set_property.assert_any_call("width", 1024)
+        reg.mix_pad.set_property.assert_any_call("height", 768)
+        assert reg.caps is not None
+
+    def test_set_canvas_size_updates_filter_and_background(self):
+        comp = self._comp()
+        comp.set_canvas_size(1024, 768)
+        assert comp.canvas_size() == (1024, 768)
+        caps = comp._canvas_filter.set_property.call_args[0][1]
+        struct = caps.get_structure(0)
+        assert struct.get_int("width") == (True, 1024)
+        assert struct.get_int("height") == (True, 768)
+        comp._bg_pad.set_property.assert_any_call("width", 1024)
+        comp._bg_pad.set_property.assert_any_call("height", 768)
+
+    def test_set_canvas_size_refits_registrations(self):
+        comp = self._comp()
+        with patch.object(comp, "_attach",
+                          side_effect=lambda s: self._reg(comp, _caps(320,
+                                                                      240))):
+            comp.register(object())
+        reg = next(iter(comp._registrations.values()))
+        comp.set_canvas_size(1024, 768)
+        reg.mix_pad.set_property.assert_any_call("xpos", 0)
+        reg.mix_pad.set_property.assert_any_call("width", 1024)
+
+    def test_set_canvas_size_skips_unfitted_registration(self):
+        comp = self._comp()
+        reg = vc.Registration()
+        reg.mix_pad = MagicMock()
+        with patch.object(comp, "_attach", return_value=reg):
+            comp.register(object())
+        comp.set_canvas_size(1024, 768)  # reg.caps None — not fitted yet
+        reg.mix_pad.set_property.assert_not_called()
+
+    def test_set_canvas_size_noop_when_unchanged(self):
+        comp = self._comp(canvas_size=(1024, 768))
+        comp.set_canvas_size(1024, 768)
+        comp._canvas_filter.set_property.assert_not_called()
+
+    def test_set_canvas_size_after_shutdown_is_safe(self):
+        comp = self._comp()
+        comp.shutdown()
+        comp.set_canvas_size(1024, 768)  # must not raise
