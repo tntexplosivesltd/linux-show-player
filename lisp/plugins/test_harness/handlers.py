@@ -59,13 +59,22 @@ def register_all(dispatcher, app, signal_manager):
     # --- Session ---
 
     def handle_session_info(params):
-        if app.session is None:
-            return {"has_session": False}
-        return {
-            "has_session": True,
-            "session_file": getattr(app.session, "session_file", None),
-            "layout_type": app.layout.__class__.__name__,
-        }
+        # Answered on the main thread so it can't observe a load in
+        # progress: Application.__load_from_file sets app.session at
+        # the *start* of a synchronous main-thread load, before cues
+        # are added and session_loaded handlers (e.g. shuffle-on-load)
+        # run. Queued behind that work, has_session=True means the
+        # session is fully loaded.
+        def info():
+            if app.session is None:
+                return {"has_session": False}
+            return {
+                "has_session": True,
+                "session_file": getattr(app.session, "session_file", None),
+                "layout_type": app.layout.__class__.__name__,
+            }
+
+        return invoke_on_main_thread(info)
 
     def handle_session_new(params):
         layout_type = params.get("layout_type")

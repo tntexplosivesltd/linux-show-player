@@ -115,10 +115,9 @@ EXPECTED = {
 def _relaunch_lisp_with(session_path, expected_cues=None):
     """Stop the running LiSP and relaunch against a saved session.
 
-    ``has_session`` turns True at the *start* of the file load, before
-    cues are inserted into the model (see ``helpers.wait_cues_loaded``);
-    pass ``expected_cues`` so we also wait for the cues to finish loading
-    and avoid reading an empty/partial model.
+    ``start_lisp`` returns once the session has fully loaded; pass
+    ``expected_cues`` to also sanity-check the reloaded cue count (see
+    ``helpers.wait_cues_loaded``).
     """
     _h.stop_lisp()
     _h.start_lisp(session_path=session_path, expected_cues=expected_cues)
