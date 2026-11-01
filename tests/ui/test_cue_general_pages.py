@@ -114,6 +114,42 @@ class TestCueGeneralSettingsPageRoundTrip:
         assert "background" not in css_to_dict(css)
         assert "color:" not in css
 
+class TestCueGeneralCueNumberEmission:
+    """cue_number is single-edit only. Whether it is emitted must
+    depend on that mode, not on whether the page is on screen yet: the
+    inspector snapshots pages before Qt shows them."""
+
+    def test_unshown_single_edit_page_emits_cue_number(self, qtbot):
+        page = CueGeneralSettingsPage(MediaCue)
+        qtbot.addWidget(page)
+        page.loadSettings({"cue_number": "1"})
+
+        assert page.getSettings()["cue_number"] == "1"
+
+    def test_emission_unchanged_by_showing_page(self, qtbot):
+        page = CueGeneralSettingsPage(MediaCue)
+        qtbot.addWidget(page)
+        page.loadSettings({"cue_number": "1", "name": "A"})
+        before = page.getSettings()
+
+        page.show()
+        qtbot.waitExposed(page)
+
+        assert page.getSettings() == before
+
+    @pytest.mark.parametrize("shown", [False, True])
+    def test_multi_edit_omits_cue_number(self, qtbot, shown):
+        page = CueGeneralSettingsPage(MediaCue)
+        qtbot.addWidget(page)
+        page.loadSettings({"cue_number": "1"})
+        page.enableCheck(True)
+        if shown:
+            page.show()
+            qtbot.waitExposed(page)
+
+        assert "cue_number" not in page.getSettings()
+
+
 class TestHexToCanonicalNameMapping:
     """Pin the canonical-hex → name mapping that drives the
     auto-graduation behavior in loadSettings. If palette hexes change,
