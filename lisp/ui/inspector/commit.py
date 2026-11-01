@@ -36,8 +36,11 @@ Both paths funnel into `flush()`, which:
 
 1. Re-runs `page.getSettings()`.
 2. Recursively diffs against the stored snapshot.
-3. On a non-empty diff, dispatches the appropriate update command
-   and refreshes the snapshot.
+3. Drops values every bound cue already holds (a widget can drift
+   from the snapshot without the cue changing; committing that would
+   mark the session unsaved for nothing).
+4. On a non-empty remainder, dispatches the appropriate update
+   command. The snapshot is refreshed either way.
 
 Additional `flush()` calls are issued externally at selection
 change, inspector hide, session save, and app quit (Step 4 will
@@ -85,6 +88,32 @@ def _dict_diff(old: dict, new: dict) -> dict:
         elif new_value != old_value:
             diff[key] = new_value
     return diff
+
+
+_MISSING = object()
+
+
+def _drop_applied(diff: dict, current: list) -> dict:
+    """Drop the leaves of *diff* that every dict in *current* already
+    holds.
+
+    *current* is one ``cue.properties()`` dict per bound cue. A leaf
+    is kept when any cue lacks it or holds a different value, so a
+    multi-cue edit still reaches the cues that need it. Nested dicts
+    are descended only when every cue has a dict there too.
+    """
+    kept = {}
+    for key, value in diff.items():
+        values = [props.get(key, _MISSING) for props in current]
+        if isinstance(value, dict) and all(
+            isinstance(v, dict) for v in values
+        ):
+            sub = _drop_applied(value, values)
+            if sub:
+                kept[key] = sub
+        elif any(v != value for v in values):
+            kept[key] = value
+    return kept
 
 
 class InspectorCommitEngine:
@@ -161,7 +190,8 @@ class InspectorCommitEngine:
         """Push any accumulated delta as an undoable command.
 
         No-op when nothing is bound, when the cue list is empty, or
-        when the current `getSettings()` matches the snapshot.
+        when the current `getSettings()` matches the snapshot or
+        every changed value is one the cues already hold.
         """
         if self._page is None or not self._cues:
             return
@@ -170,7 +200,17 @@ class InspectorCommitEngine:
 
         current = self._page.getSettings()
         diff = _dict_diff(self._snapshot, current)
+        if diff:
+            # The widgets moved, but a value every cue already holds
+            # changes nothing. Pushing it would still land on the undo
+            # stack and mark the session unsaved with nothing to save.
+            diff = _drop_applied(
+                diff, [cue.properties() for cue in self._cues]
+            )
         if not diff:
+            # Advance the snapshot so a skipped no-op isn't re-diffed
+            # on every later flush.
+            self._snapshot = copy.deepcopy(current)
             return
 
         stack = self._commands_stack

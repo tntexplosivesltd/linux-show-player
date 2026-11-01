@@ -497,3 +497,128 @@ class TestSuppressingCommits:
         # the exit path where snapshot refresh would otherwise run.
         with engine.suppressing_commits():
             pass
+
+
+# ---------------------------------------------------------------------------
+# No-op guard: never push a value every bound cue already has. Such a
+# command changes nothing yet lands on the undo stack, so the session
+# reads as unsaved ("*" in the title) with nothing to save.
+# ---------------------------------------------------------------------------
+
+
+def _cue_with(props, name="Cue"):
+    cue = _make_cue(name)
+    cue.properties.return_value = props
+    return cue
+
+
+class TestNoOpGuard:
+    def test_value_cue_already_has_pushes_nothing(self, engine_and_page):
+        engine, page, stack = engine_and_page
+        engine.bind(page, [_cue_with({"section": {"name": "same"}})])
+
+        page.line.setText("same")
+        engine.flush()
+
+        stack.do.assert_not_called()
+
+    def test_snapshot_advances_past_skipped_value(self, engine_and_page):
+        """A skipped no-op must not be re-diffed on every later flush,
+        and a real edit afterwards still commits only itself."""
+        engine, page, stack = engine_and_page
+        engine.bind(page, [_cue_with({"section": {"name": "same"}})])
+
+        page.line.setText("same")
+        engine.flush()
+        engine.flush()
+        stack.do.assert_not_called()
+
+        page.line.setText("other")
+        engine.flush()
+        command = stack.do.call_args.args[0]
+        assert command._UpdateCueCommand__new == {
+            "section": {"name": "other"}
+        }
+
+    def test_only_values_cue_lacks_are_pushed(self, engine_and_page):
+        engine, page, stack = engine_and_page
+        engine.bind(page, [_cue_with({"section": {"name": "same"}})])
+
+        page.line.setText("same")
+        page.spin.setValue(5)
+        engine.flush()
+
+        command = stack.do.call_args.args[0]
+        assert command._UpdateCueCommand__new == {"section": {"count": 5}}
+
+    def test_multi_cue_keeps_value_any_cue_lacks(self, engine_and_page):
+        engine, page, stack = engine_and_page
+        cues = [
+            _cue_with({"section": {"name": "x"}}, "a"),
+            _cue_with({"section": {"name": "y"}}, "b"),
+        ]
+        engine.bind(page, cues)
+
+        page.line.setText("x")
+        engine.flush()
+
+        command = stack.do.call_args.args[0]
+        assert isinstance(command, UpdateCuesCommand)
+        assert command._UpdateCuesCommand__new == {"section": {"name": "x"}}
+
+    def test_multi_cue_value_all_cues_have_pushes_nothing(
+        self, engine_and_page
+    ):
+        engine, page, stack = engine_and_page
+        cues = [
+            _cue_with({"section": {"name": "x"}}, "a"),
+            _cue_with({"section": {"name": "x"}}, "b"),
+        ]
+        engine.bind(page, cues)
+
+        page.line.setText("x")
+        engine.flush()
+
+        stack.do.assert_not_called()
+
+    def test_dict_value_over_scalar_property_is_kept(self, engine_and_page):
+        engine, page, stack = engine_and_page
+        engine.bind(page, [_cue_with({"section": "not-a-dict"})])
+
+        page.line.setText("renamed")
+        engine.flush()
+
+        command = stack.do.call_args.args[0]
+        assert command._UpdateCueCommand__new == {
+            "section": {"name": "renamed"}
+        }
+
+
+def test_general_page_bound_before_shown_commits_nothing(qtbot):
+    """Regression: the inspector binds freshly built pages before Qt
+    has shown them. cue_number used to be emitted only once the page
+    was on screen, so the first flush after it appeared pushed a no-op
+    {"cue_number": ...} and marked the session unsaved."""
+    from lisp.cues.media_cue import MediaCue
+    from lisp.ui.icons import IconTheme
+    from lisp.ui.settings.cue_pages.cue_general import (
+        CueGeneralSettingsPage,
+    )
+
+    IconTheme.set_theme_name("lisp")
+    page = CueGeneralSettingsPage(MediaCue)
+    qtbot.addWidget(page)
+    cue = _cue_with({"cue_number": "1", "name": "tone_A"}, "tone_A")
+    page.loadSettings(cue.properties())
+
+    stack = MagicMock()
+    engine = InspectorCommitEngine(commands_stack=stack)
+    engine.bind(page, [cue])
+    try:
+        page.show()
+        qtbot.waitExposed(page)
+        engine.flush()
+    finally:
+        engine.unbind()
+
+    stack.do.assert_not_called()
