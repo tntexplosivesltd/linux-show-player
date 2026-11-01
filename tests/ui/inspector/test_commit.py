@@ -25,6 +25,7 @@ from lisp.ui.inspector.commit import (
     InspectorCommitEngine,
     _dict_diff,
     _cue_update,
+    _drop_held,
 )
 from lisp.ui.settings.pages import SettingsPage
 
@@ -1418,3 +1419,275 @@ class TestSuppressingCommits:
         # the exit path where snapshot refresh would otherwise run.
         with engine.suppressing_commits():
             pass
+
+
+# ---------------------------------------------------------------------------
+# No-op guard: never push a value a cue already holds. Such a command
+# changes nothing yet lands on the undo stack, so the session reads as
+# unsaved ("*" in the title) with nothing to save.
+# ---------------------------------------------------------------------------
+
+
+def _nested_with(**section):
+    """A cue whose section is a properties object (merged into)."""
+    cue = _NestedSectionCue()
+    cue.section.update_properties(section)
+    return cue
+
+
+def _plain_with(**section):
+    """A cue whose section is a plain dict property (replaced whole)."""
+    cue = _PlainSectionCue()
+    cue.section = dict(_SECTION, **section)
+    return cue
+
+
+class _ScalarSectionCue(HasProperties):
+    section = Property(default="not-a-dict")
+
+
+class _RowsCue(HasProperties):
+    rows = Property(default={})
+
+
+class TestNoOpGuard:
+    def test_value_cue_already_has_pushes_nothing(self, engine_and_page):
+        engine, page, stack = engine_and_page
+        engine.bind(page, [_nested_with(name="same")])
+
+        page.line.setText("same")
+        engine.flush()
+
+        stack.do.assert_not_called()
+
+    def test_snapshot_advances_past_skipped_value(self, engine_and_page):
+        """A skipped no-op must not be re-diffed on every later flush,
+        and a real edit afterwards still commits only itself."""
+        engine, page, stack = engine_and_page
+        engine.bind(page, [_nested_with(name="same")])
+
+        page.line.setText("same")
+        engine.flush()
+        engine.flush()
+        stack.do.assert_not_called()
+
+        page.line.setText("other")
+        engine.flush()
+        assert _committed(stack) == {"section": {"name": "other"}}
+
+    def test_only_values_cue_lacks_are_pushed(self, engine_and_page):
+        engine, page, stack = engine_and_page
+        engine.bind(page, [_nested_with(name="same")])
+
+        page.line.setText("same")
+        page.spin.setValue(5)
+        engine.flush()
+
+        assert _committed(stack) == {"section": {"count": 5}}
+
+    def test_multi_cue_value_reaches_only_cues_lacking_it(
+        self, engine_and_page
+    ):
+        engine, page, stack = engine_and_page
+        engine.bind(page, [_nested_with(name="x"), _nested_with(name="y")])
+
+        page.line.setText("x")
+        engine.flush()
+
+        assert _committed(stack, UpdateCuesCommand) == [
+            {},
+            {"section": {"name": "x"}},
+        ]
+
+    def test_multi_cue_value_all_cues_have_pushes_nothing(
+        self, engine_and_page
+    ):
+        engine, page, stack = engine_and_page
+        engine.bind(page, [_nested_with(name="x"), _nested_with(name="x")])
+
+        page.line.setText("x")
+        engine.flush()
+
+        stack.do.assert_not_called()
+
+    def test_cue_changed_after_bind_then_matched_pushes_nothing(
+        self, engine_and_page
+    ):
+        # A stale snapshot: the cue changes outside the page, and the
+        # user then types the same value.
+        engine, page, stack = engine_and_page
+        cue = _nested_with()
+        engine.bind(page, [cue])
+
+        cue.section.name = "external"
+        page.line.setText("external")
+        engine.flush()
+
+        stack.do.assert_not_called()
+
+    @pytest.mark.parametrize("cue_cls", [_ScalarSectionCue, _BareCue])
+    def test_dict_over_scalar_or_absent_property_is_kept(
+        self, engine_and_page, cue_cls
+    ):
+        engine, page, stack = engine_and_page
+        engine.bind(page, [cue_cls()])
+
+        page.line.setText("renamed")
+        engine.flush()
+
+        assert _committed(stack) == {"section": {"name": "renamed"}}
+
+    def test_multi_cue_mixing_dict_and_scalar(self, engine_and_page):
+        engine, page, stack = engine_and_page
+        engine.bind(page, [_nested_with(name="x"), _ScalarSectionCue()])
+
+        page.line.setText("x")
+        engine.flush()
+
+        assert _committed(stack, UpdateCuesCommand) == [
+            {},
+            {"section": {"name": "x"}},
+        ]
+
+    def test_plain_dict_property_is_never_trimmed(self, engine_and_page):
+        # Review finding on #11: trimming the sub-key the cue already
+        # holds (`name`) would leave a partial dict, and
+        # `update_properties` would then replace the whole property,
+        # deleting `name` and the key the page never shows.
+        engine, page, stack = engine_and_page
+        cue = _plain_with(name="same", unloaded=["x"])
+        engine.bind(page, [cue])
+
+        page.line.setText("same")
+        page.spin.setValue(5)
+        engine.flush()
+        stack.do.call_args.args[0].do()
+
+        assert cue.section == dict(
+            _SECTION, name="same", count=5, unloaded=["x"]
+        )
+
+    def test_plain_dict_property_already_held_pushes_nothing(
+        self, engine_and_page
+    ):
+        engine, page, stack = engine_and_page
+        engine.bind(page, [_plain_with(name="same")])
+
+        page.line.setText("same")
+        engine.flush()
+
+        stack.do.assert_not_called()
+
+
+class TestDropHeld:
+    def test_saved_show_rows_equal_to_page_tuples_are_dropped(self):
+        # After `json.load` a cue holds rows as lists; pages emit
+        # tuples. Equal content is still "already held".
+        cue = _RowsCue()
+        cue.rows = _loaded({"Started": [("B", "Start")]})
+
+        assert _drop_held(cue, {"rows": {"Started": [("B", "Start")]}}) == {}
+
+    def test_different_rows_are_kept_whole(self):
+        cue = _RowsCue()
+        cue.rows = _loaded({"Started": [("B", "Start")], "Ended": []})
+        update = {"rows": {"Started": [("B", "Stop")], "Ended": []}}
+
+        assert _drop_held(cue, update) == update
+
+    def test_name_that_isnt_a_property_is_kept(self):
+        assert _drop_held(_BareCue(), {"bogus": 1}) == {"bogus": 1}
+
+    def test_nested_none_is_compared_not_descended(self):
+        cue = _ScalarSectionCue()
+        cue.section = None
+
+        assert _drop_held(cue, {"section": None}) == {}
+        assert _drop_held(cue, {"section": {"name": "x"}}) == {
+            "section": {"name": "x"}
+        }
+
+
+@pytest.fixture
+def icon_theme():
+    """The general page reads icons; set a theme, then put the
+    process-wide one back."""
+    from PyQt5.QtGui import QIcon
+
+    from lisp.ui.icons import IconTheme
+
+    theme, cache = IconTheme._GlobalTheme, dict(IconTheme._GlobalCache)
+    qt_theme = QIcon.themeName()
+    IconTheme.set_theme_name("lisp")
+    yield
+    IconTheme._GlobalTheme = theme
+    IconTheme._GlobalCache.clear()
+    IconTheme._GlobalCache.update(cache)
+    QIcon.setThemeName(qt_theme)
+
+
+def _bind_shown(qtbot, page, cue):
+    """Bind *page* to *cue* the way the inspector does: loaded and
+    bound before Qt has shown it, then shown."""
+    qtbot.addWidget(page)
+    page.loadSettings(cue.properties())
+    stack = MagicMock()
+    engine = InspectorCommitEngine(commands_stack=stack)
+    engine.bind(page, [cue])
+    page.show()
+    qtbot.waitExposed(page)
+    return engine, stack
+
+
+def test_general_page_bound_before_shown_commits_nothing(
+    qtbot, mock_app, icon_theme
+):
+    """Regression: the inspector binds freshly built pages before Qt
+    has shown them. cue_number used to be emitted only once the page
+    was on screen, so the first flush after it appeared pushed a no-op
+    {"cue_number": ...} and marked the session unsaved."""
+    from lisp.cues.cue import Cue
+    from lisp.ui.settings.cue_pages.cue_general import (
+        CueGeneralSettingsPage,
+    )
+
+    cue = Cue(mock_app)
+    cue.cue_number, cue.name = "1", "tone_A"
+    page = CueGeneralSettingsPage(Cue)
+    engine, stack = _bind_shown(qtbot, page, cue)
+    # The cue moves on without the page reloading. If the bind-time
+    # snapshot lacked cue_number (the bug), the shown page's "1" would
+    # read as an edit that differs from the cue's "2", and be pushed;
+    # the no-op guard alone can't hide that.
+    cue.cue_number = "2"
+    try:
+        engine.flush()
+    finally:
+        engine.unbind()
+
+    stack.do.assert_not_called()
+
+
+@pytest.mark.parametrize("page_name", ["general", "timing"])
+def test_real_pages_without_edits_commit_nothing(
+    qtbot, mock_app, icon_theme, page_name
+):
+    from lisp.cues.cue import Cue
+    from lisp.ui.settings.cue_pages.cue_general import (
+        CueGeneralSettingsPage,
+        CueTimingPage,
+    )
+
+    page_cls = {
+        "general": CueGeneralSettingsPage,
+        "timing": CueTimingPage,
+    }[page_name]
+    cue = Cue(mock_app)
+    cue.cue_number, cue.name = "3", "real"
+    engine, stack = _bind_shown(qtbot, page_cls(Cue), cue)
+    try:
+        engine.flush()
+    finally:
+        engine.unbind()
+
+    stack.do.assert_not_called()

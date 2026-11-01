@@ -42,9 +42,13 @@ Both paths funnel into `flush()`, which:
    page stops emitting means "don't touch" at the top level (a group
    dropped by `enableCheck()`) but "removed" inside a plain dict
    property (a deleted trigger type); see `_three_way`.
-3. Returns if no cue's update has anything in it.
-4. Otherwise dispatches the appropriate update command and refreshes
-   the snapshot.
+3. Drops from each update the values that cue already holds (see
+   `_drop_held`): a widget can drift from the snapshot without the
+   cue changing, and committing that would put a no-op on the undo
+   stack and mark the session unsaved for nothing.
+4. If no cue's update has anything left, refreshes the snapshot and
+   returns; otherwise dispatches the appropriate update command and
+   refreshes the snapshot.
 
 Additional `flush()` calls are issued externally at selection
 change, inspector hide, session save, and app quit (Step 4 will
@@ -210,6 +214,49 @@ def _three_way(base: dict, snapshot: dict, current: dict) -> dict:
     return merged
 
 
+def _canon(value):
+    """*value* with every tuple turned into a list, at any depth.
+
+    A cue loaded from a session holds rows as lists (`json.load`)
+    while pages emit tuples, and `("B", "Start") != ["B", "Start"]`.
+    """
+    if isinstance(value, dict):
+        return {key: _canon(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_canon(item) for item in value]
+    return value
+
+
+def _drop_held(owner, update: dict) -> dict:
+    """Return *update* (from `_cue_update`) without the values *owner*
+    already holds.
+
+    * a properties object is descended into, matching how
+      `update_properties` merges a partial dict into it;
+    * any other value -- a scalar, or a plain dict property's whole
+      new value -- is dropped only when *owner* holds an equal value
+      (compared via `_canon`). A plain dict is never trimmed key by
+      key: `update_properties` replaces it, so a partial dict would
+      delete the keys left out.
+    * a name that isn't a property of *owner* is kept, as before;
+      only values the cue provably holds are dropped.
+
+    A dropped value isn't written back, so it no longer fires
+    `property_changed` / `changed(name)` for a value that didn't
+    change.
+    """
+    kept = {}
+    for key, value in update.items():
+        target = _property_value(owner, key)
+        if isinstance(value, dict) and isinstance(target, HasProperties):
+            sub = _drop_held(target, value)
+            if sub:
+                kept[key] = sub
+        elif target is _MISSING or _canon(target) != _canon(value):
+            kept[key] = value
+    return kept
+
+
 class InspectorCommitEngine:
     """Owns the active `SettingsPage` and pushes diffs as commands.
 
@@ -284,7 +331,9 @@ class InspectorCommitEngine:
         """Push any accumulated delta as an undoable command.
 
         No-op when nothing is bound, when the cue list is empty, or
-        when the current `getSettings()` changes nothing on any cue.
+        when the current `getSettings()` changes nothing on any cue:
+        no edits since the snapshot, or only values each cue already
+        holds.
         """
         if self._page is None or not self._cues:
             return
@@ -293,11 +342,16 @@ class InspectorCommitEngine:
 
         current = self._page.getSettings()
         # One update per cue: each applies the page's edits to that
-        # cue's own values (see `_cue_update`).
+        # cue's own values (see `_cue_update`), minus what the cue
+        # already holds (see `_drop_held`).
         updates = [
-            _cue_update(cue, self._snapshot, current) for cue in self._cues
+            _drop_held(cue, _cue_update(cue, self._snapshot, current))
+            for cue in self._cues
         ]
         if not any(updates):
+            # Advance the snapshot so a skipped no-op isn't re-diffed
+            # on every later flush.
+            self._snapshot = copy.deepcopy(current)
             return
 
         stack = self._commands_stack
