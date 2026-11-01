@@ -11,12 +11,32 @@ class TestPlanPipeline:
         with patch.object(vc, "_have_factory", return_value=True):
             plan = vc.plan_pipeline()
         assert plan["gl"] is True
-        assert plan["upload"] == "glupload"
-        assert plan["mixer"] == "glvideomixer"
+        assert plan["upload"] == "glupload ! glcolorconvert"
         assert plan["sink"] == "glimagesink"
 
+    def test_gl_plan_uses_mixer_element_not_bin(self):
+        # glvideomixer is a GstGLMixerBin whose release_pad over-unrefs
+        # on GStreamer 1.24: the first cue release frees the mixer and
+        # the next cue's attach segfaults. Use the element directly.
+        with patch.object(vc, "_have_factory", return_value=True):
+            plan = vc.plan_pipeline()
+        assert plan["mixer"] == "glvideomixerelement"
+
+    def test_gl_plan_probes_the_factories_it_uses(self):
+        probed = []
+
+        def fake(name):
+            probed.append(name)
+            return True
+
+        with patch.object(vc, "_have_factory", side_effect=fake):
+            vc.plan_pipeline()
+        for name in ("glupload", "glcolorconvert", "glvideomixerelement",
+                     "glimagesink"):
+            assert name in probed
+
     def test_fallback_plan_when_no_gl(self):
-        # glvideomixer missing → system-memory fallback, no upload.
+        # GL mixer missing → system-memory fallback, no upload.
         def fake(name):
             return name in ("compositor", "xvimagesink")
 
@@ -346,6 +366,28 @@ class TestCanvasSizeFor:
     def test_zero_falls_back(self):
         assert vc.canvas_size_for(0, 0, 1.0) == (
             vc.COMP_WIDTH, vc.COMP_HEIGHT)
+
+
+class TestCanvasCaps:
+    """Canvas caps name the exact memory type. ``(ANY)`` features break
+    live renegotiation on GStreamer 1.24: glvideomixer's internal
+    glcolorconvert cannot fixate them and the pipeline errors with
+    not-negotiated on the first canvas resize."""
+
+    def test_gl_path_pins_gl_memory(self):
+        caps = vc._canvas_caps(640, 480, gl=True)
+        assert caps.get_features(0).contains("memory:GLMemory")
+        assert not caps.get_features(0).is_any()
+
+    def test_fallback_path_is_system_memory(self):
+        caps = vc._canvas_caps(640, 480, gl=False)
+        assert caps.get_features(0).contains("memory:SystemMemory")
+        assert not caps.get_features(0).is_any()
+
+    def test_size(self):
+        struct = vc._canvas_caps(640, 480, gl=True).get_structure(0)
+        assert struct.get_int("width") == (True, 640)
+        assert struct.get_int("height") == (True, 480)
 
 
 def _caps(width, height):

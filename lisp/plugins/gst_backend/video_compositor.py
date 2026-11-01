@@ -105,11 +105,14 @@ def canvas_size_for(width, height, dpr):
     return width, height
 
 
-def _canvas_caps(width, height):
-    # ANY features: matches GL memory on the GL path and system memory
-    # on the fallback path alike.
+def _canvas_caps(width, height, gl):
+    # Name the exact memory type. (ANY) features negotiate once but
+    # break the live re-pin on GStreamer 1.24: glvideomixer's internal
+    # glcolorconvert cannot fixate them, the mixer goes not-negotiated
+    # and the whole projection pipeline errors out (1.28 copes).
+    memory = "memory:GLMemory" if gl else "memory:SystemMemory"
     return Gst.Caps.from_string(
-        f"video/x-raw(ANY),width={width},height={height}"
+        f"video/x-raw({memory}),width={width},height={height}"
     )
 
 
@@ -132,8 +135,8 @@ def fit_rect(src_w, src_h, par_n, par_d, dst_w, dst_h):
 
 
 class Registration:
-    """Per-cue projection resources: an appsrc (+ optional glupload)
-    feeding one glvideomixer request pad above the black background."""
+    """Per-cue projection resources: an appsrc (+ the GL upload bin)
+    feeding one mixer request pad above the black background."""
 
     def __init__(self):
         self.appsrc = None
@@ -155,24 +158,41 @@ def _have_factory(name):
     return Gst.ElementFactory.find(name) is not None
 
 
+def _make_upload(description):
+    """One input's upload chain as a single bin with ghost pads, so a
+    registration adds, NULLs and removes it as one element."""
+    return Gst.parse_bin_from_description(description, True)
+
+
 def plan_pipeline():
     """Decide the projection pipeline's element factories.
 
-    Primary path is GL (glupload → glvideomixer → glimagesink), which
-    keeps compositing on the GPU and pairs natively with glimagesink.
-    When GL is unavailable, fall back to a system-memory pipeline
-    (compositor → xvimagesink/autovideosink) with no glupload on the
-    inputs. Mirrors the factory-probe pattern in video_sink.py.
+    Primary path is GL (glupload ! glcolorconvert → glvideomixerelement
+    → glimagesink), which keeps compositing on the GPU and pairs
+    natively with glimagesink. When GL is unavailable, fall back to a
+    system-memory pipeline (compositor → xvimagesink/autovideosink)
+    with no upload on the inputs. Mirrors the factory-probe pattern in
+    video_sink.py.
+
+    The mixer is glvideomixerELEMENT, not the glvideomixer convenience
+    bin: the bin's release_pad over-unrefs on GStreamer 1.24 (the
+    first cue release frees the mixer; the next attach segfaults). The
+    bin only adds a per-pad upload + convert, which "upload" provides.
     """
-    if (
-        _have_factory("glupload")
-        and _have_factory("glvideomixer")
-        and _have_factory("glimagesink")
+    if all(
+        _have_factory(name)
+        for name in (
+            "glupload",
+            "glcolorconvert",
+            "glvideomixerelement",
+            "glimagesink",
+        )
     ):
         return {
             "gl": True,
-            "upload": "glupload",
-            "mixer": "glvideomixer",
+            # A bin description (see _make_upload), one per input.
+            "upload": "glupload ! glcolorconvert",
+            "mixer": "glvideomixerelement",
             "sink": "glimagesink",
         }
 
@@ -187,7 +207,7 @@ class VideoCompositor:
     """Owns the single persistent projection pipeline.
 
     One always-PLAYING pipeline with a permanent black background
-    layer, a glvideomixer, a tee, and two glimagesinks (projection +
+    layer, a GL mixer, a tee, and two glimagesinks (projection +
     monitor). Because the mixer always produces frames the sinks are
     warm from process start and never cold-present — this is what
     dissolves the video→video first-transition flicker (Symptom B) and
@@ -219,6 +239,8 @@ class VideoCompositor:
         self._canvas = tuple(canvas_size)
         self._canvas_filter = None
         self._bg_pad = None
+        # GL vs system-memory path; set from the build plan.
+        self._gl = True
         # Monotonic zorder allocator: each registered cue sits above
         # the background (zorder 0) and above earlier registrations.
         self._next_zorder = 1
@@ -261,7 +283,7 @@ class VideoCompositor:
             return
         logger.debug("VideoCompositor: canvas -> %dx%d", width, height)
         self._canvas_filter.set_property(
-            "caps", _canvas_caps(width, height)
+            "caps", _canvas_caps(width, height, self._gl)
         )
         self._bg_pad.set_property("width", width)
         self._bg_pad.set_property("height", height)
@@ -412,7 +434,7 @@ class VideoCompositor:
 
         tail = appsrc
         if plan["upload"] is not None:
-            upload = Gst.ElementFactory.make(plan["upload"], None)
+            upload = _make_upload(plan["upload"])
             self.pipeline.add(upload)
             appsrc.link(upload)
             reg.upload = upload
@@ -456,6 +478,7 @@ class VideoCompositor:
     def _build(self):
         plan = plan_pipeline()
         logger.debug("VideoCompositor: build plan %s", plan)
+        self._gl = plan["gl"]
 
         self.pipeline = Gst.Pipeline.new("projection")
         # Single shared clock. Cue pipelines call pipeline.use_clock(
@@ -485,7 +508,9 @@ class VideoCompositor:
         # Pins the mixer's output to the canvas size; set_canvas_size()
         # re-pins it live.
         self._canvas_filter = Gst.ElementFactory.make("capsfilter", None)
-        self._canvas_filter.set_property("caps", _canvas_caps(*self._canvas))
+        self._canvas_filter.set_property(
+            "caps", _canvas_caps(*self._canvas, self._gl)
+        )
         tee = Gst.ElementFactory.make("tee", None)
         proj_q = Gst.ElementFactory.make("queue", None)
         self._proj_sink = Gst.ElementFactory.make(plan["sink"], None)
@@ -498,7 +523,7 @@ class VideoCompositor:
         bg_upload = None
         elems = [bg, caps]
         if plan["upload"] is not None:
-            bg_upload = Gst.ElementFactory.make(plan["upload"], None)
+            bg_upload = _make_upload(plan["upload"])
             elems.append(bg_upload)
         elems += [
             self.mixer,
