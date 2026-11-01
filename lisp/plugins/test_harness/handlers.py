@@ -1008,22 +1008,26 @@ def register_all(dispatcher, app, signal_manager):
         except Exception:
             return {"loaded": False}
 
-        window = plugin._window
-        if window is None:
+        # Widget reads belong on the main thread with the widget.
+        def read():
+            window = plugin._window
+            if window is None:
+                return {
+                    "loaded": True,
+                    "visible": False,
+                }
+
+            cue = window._tracked_cue
             return {
                 "loaded": True,
-                "visible": False,
+                "visible": window.isVisible(),
+                "cue_name": window._name_label.text(),
+                "elapsed": window.elapsed_text,
+                "remaining": window.remaining_text,
+                "tracked_cue_id": cue.id if cue else None,
             }
 
-        cue = window._tracked_cue
-        return {
-            "loaded": True,
-            "visible": window.isVisible(),
-            "cue_name": window._name_label.text(),
-            "elapsed": window.elapsed_text,
-            "remaining": window.remaining_text,
-            "tracked_cue_id": cue.id if cue else None,
-        }
+        return invoke_on_main_thread(read)
 
     def handle_playback_monitor_toggle(params):
         """Toggle the playback monitor window."""
@@ -1033,13 +1037,21 @@ def register_all(dispatcher, app, signal_manager):
             plugin = get_plugin("PlaybackMonitor")
         except Exception:
             return {"error": "PlaybackMonitor not loaded"}
-        plugin._toggle_window()
-        window = plugin._window
-        return {
-            "visible": (
-                window.isVisible() if window else False
-            ),
-        }
+        # Must run on the main thread: the first toggle creates the
+        # monitor's QWidget, and a widget created on this RPC thread has
+        # no event loop to process its paint events -- the window stays
+        # frozen on its first frame while its label text (what
+        # playback_monitor.state reports) keeps updating.
+        def toggle():
+            plugin._toggle_window()
+            window = plugin._window
+            return {
+                "visible": (
+                    window.isVisible() if window else False
+                ),
+            }
+
+        return invoke_on_main_thread(toggle)
 
     # --- Inspector ---
     #
