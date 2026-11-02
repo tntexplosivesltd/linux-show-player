@@ -36,7 +36,9 @@ Both paths funnel into `flush()`, which:
 
 1. Re-runs `page.getSettings()`.
 2. Recursively diffs against the stored snapshot.
-3. On a non-empty diff, dispatches the appropriate update command
+3. Widens the diff back to whole values wherever the cue can't merge
+   a partial dict (see `_whole_unmergeable`).
+4. On a non-empty diff, dispatches the appropriate update command
    and refreshes the snapshot.
 
 Additional `flush()` calls are issued externally at selection
@@ -57,6 +59,7 @@ from PyQt5.QtWidgets import (
 )
 
 from lisp.command.cue import UpdateCueCommand, UpdateCuesCommand
+from lisp.core.has_properties import HasProperties
 from lisp.ui.widgets.cue_color_palette import CueColorPalette
 
 
@@ -85,6 +88,30 @@ def _dict_diff(old: dict, new: dict) -> dict:
         elif new_value != old_value:
             diff[key] = new_value
     return diff
+
+
+def _whole_unmergeable(diff: dict, current: dict, owners: list) -> dict:
+    """Swap partial sub-dicts in *diff* for their whole value in
+    *current* wherever an owner can't merge them.
+
+    `HasProperties.update_properties` merges a dict into a nested
+    properties object (`GstMediaCue.media`, its elements) but replaces
+    any other property outright, so a partial dict for a plain dict
+    property (`Cue.controller`) would delete every key the user didn't
+    touch. *owners* are the objects the diff applies to (the bound cues
+    at the top level); a level is kept partial only when every owner
+    holds a properties object there.
+    """
+    widened = {}
+    for key, value in diff.items():
+        if isinstance(value, dict):
+            targets = [getattr(owner, key, None) for owner in owners]
+            if all(isinstance(t, HasProperties) for t in targets):
+                value = _whole_unmergeable(value, current[key], targets)
+            else:
+                value = copy.deepcopy(current[key])
+        widened[key] = value
+    return widened
 
 
 class InspectorCommitEngine:
@@ -172,6 +199,7 @@ class InspectorCommitEngine:
         diff = _dict_diff(self._snapshot, current)
         if not diff:
             return
+        diff = _whole_unmergeable(diff, current, self._cues)
 
         stack = self._commands_stack
         if stack is None:
