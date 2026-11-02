@@ -16,6 +16,8 @@ from PyQt5.QtWidgets import (
 )
 
 from lisp.command.cue import UpdateCueCommand, UpdateCuesCommand
+from lisp.core.has_properties import HasProperties
+from lisp.core.properties import Property
 from lisp.ui.inspector.commit import InspectorCommitEngine, _dict_diff
 from lisp.ui.settings.pages import SettingsPage
 
@@ -400,18 +402,134 @@ def test_unbind_stops_focus_commits(qtbot, engine_and_page):
 # ---------------------------------------------------------------------------
 
 
+_SECTION = {
+    "name": "",
+    "count": 0,
+    "volume": 0,
+    "mode": "alpha",
+    "enabled": False,
+}
+
+
+class _Section(HasProperties):
+    """`FakePage`'s section as a nested properties object, the way
+    `GstMediaCue.media` is: `update_properties` merges into it."""
+
+    name = Property(default="")
+    count = Property(default=0)
+    volume = Property(default=0)
+    mode = Property(default="alpha")
+    enabled = Property(default=False)
+
+
+class _NestedSectionCue(HasProperties):
+    name = Property(default="Cue")
+    section = Property(default=_Section.class_defaults())
+
+    def __init__(self):
+        super().__init__()
+        self.section = _Section()
+
+
+class _PlainSectionCue(HasProperties):
+    """`FakePage`'s section as a plain dict property, the way
+    `Cue.controller` is: `update_properties` replaces it whole."""
+
+    name = Property(default="Cue")
+    section = Property(default={})
+
+    def __init__(self):
+        super().__init__()
+        self.section = dict(_SECTION)
+
+
+def _committed(stack, command_cls=UpdateCueCommand):
+    command = stack.do.call_args.args[0]
+    assert isinstance(command, command_cls)
+    # The commands keep their new-properties dict on the name-mangled
+    # __new attribute.
+    return getattr(command, f"_{command_cls.__name__}__new")
+
+
 def test_commit_contains_only_changed_keys(engine_and_page):
     engine, page, stack = engine_and_page
-    engine.bind(page, [_make_cue()])
+    engine.bind(page, [_NestedSectionCue()])
 
     page.line.setText("renamed")
     engine.flush()
 
-    command = stack.do.call_args.args[0]
-    # `UpdateCueCommand` stores its new-properties dict on the
-    # __new attribute (name-mangled under the class).
-    new_props = command._UpdateCueCommand__new
-    assert new_props == {"section": {"name": "renamed"}}
+    assert _committed(stack) == {"section": {"name": "renamed"}}
+
+
+class TestPlainDictProperties:
+    """A plain dict property is replaced, not merged, by
+    `update_properties`, so a commit must carry its whole value."""
+
+    def test_commit_carries_whole_plain_dict(self, engine_and_page):
+        engine, page, stack = engine_and_page
+        engine.bind(page, [_PlainSectionCue()])
+
+        page.line.setText("renamed")
+        engine.flush()
+
+        assert _committed(stack) == {
+            "section": dict(_SECTION, name="renamed")
+        }
+
+    def test_applying_commit_keeps_unedited_keys(self, engine_and_page):
+        engine, page, stack = engine_and_page
+        cue = _PlainSectionCue()
+        cue.section = dict(_SECTION, count=7, mode="beta")
+        page.loadSettings({"section": cue.section})
+        engine.bind(page, [cue])
+
+        page.line.setText("renamed")
+        engine.flush()
+        stack.do.call_args.args[0].do()
+
+        assert cue.section == dict(
+            _SECTION, count=7, mode="beta", name="renamed"
+        )
+
+    def test_multi_cue_applies_whole_plain_dict(self, engine_and_page):
+        engine, page, stack = engine_and_page
+        cues = [_PlainSectionCue(), _PlainSectionCue()]
+        engine.bind(page, cues)
+
+        page.spin.setValue(3)
+        engine.flush()
+        stack.do.call_args.args[0].do()
+
+        for cue in cues:
+            assert cue.section == dict(_SECTION, count=3)
+
+    def test_mixed_targets_fall_back_to_whole_value(self, engine_and_page):
+        # Descending is only safe when every cue merges.
+        engine, page, stack = engine_and_page
+        engine.bind(page, [_NestedSectionCue(), _PlainSectionCue()])
+
+        page.line.setText("renamed")
+        engine.flush()
+
+        assert _committed(stack, UpdateCuesCommand) == {
+            "section": dict(_SECTION, name="renamed")
+        }
+
+    def test_unknown_target_falls_back_to_whole_value(
+        self, engine_and_page
+    ):
+        # A key the cue doesn't hold as a properties object (absent,
+        # or a mock) gets the whole value: never a partial dict that
+        # could replace a richer one.
+        engine, page, stack = engine_and_page
+        engine.bind(page, [_make_cue()])
+
+        page.line.setText("renamed")
+        engine.flush()
+
+        assert _committed(stack) == {
+            "section": dict(_SECTION, name="renamed")
+        }
 
 
 # ---------------------------------------------------------------------------
