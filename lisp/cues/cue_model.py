@@ -15,8 +15,12 @@
 # You should have received a copy of the GNU General Public License
 # along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
+import logging
+
 from lisp.core.model import Model
 from lisp.cues.cue import Cue, CueAction
+
+logger = logging.getLogger(__name__)
 
 
 class CueModel(Model):
@@ -43,13 +47,7 @@ class CueModel(Model):
     def pop(self, cue_id):
         """:rtype: Cue"""
         cue = self.__cues.pop(cue_id)
-
-        # Try to interrupt/stop the cue
-        if CueAction.Interrupt in cue.CueActions:
-            cue.interrupt()
-        elif CueAction.Stop in cue.CueActions:
-            cue.stop()
-
+        self._halt(cue)
         self.item_removed.emit(cue)
 
         # Promote children of the removed cue to its parent group, so
@@ -116,8 +114,31 @@ class CueModel(Model):
         return self.__cues.keys()
 
     def reset(self):
+        # Halt every cue before dropping it, as pop() does. Session
+        # teardown (Session.finalize) ends here: without this, running
+        # cues are orphaned -- never interrupted, never emitting
+        # interrupted/stopped -- and one kept alive (e.g. by a running
+        # fade) keeps playing and its projection sink, blocking every
+        # video/image cue of the next session. Halt while the cues are
+        # still in the model, so their signal handlers can look them up.
+        for cue in list(self.__cues.values()):
+            try:
+                self._halt(cue)
+            except Exception:
+                logger.exception(
+                    "Failed to halt cue %r on model reset", cue.id
+                )
+
         self.__cues.clear()
         self.model_reset.emit()
+
+    @staticmethod
+    def _halt(cue):
+        """Interrupt the cue, or stop it if it can't be interrupted."""
+        if CueAction.Interrupt in cue.CueActions:
+            cue.interrupt()
+        elif CueAction.Stop in cue.CueActions:
+            cue.stop()
 
     def filter(self, cue_class=Cue):
         """Return an iterator over cues that are instances of the given class"""
