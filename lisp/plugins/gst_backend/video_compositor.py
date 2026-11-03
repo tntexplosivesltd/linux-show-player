@@ -237,14 +237,20 @@ def plan_pipeline():
 class VideoCompositor:
     """Owns the single persistent projection pipeline.
 
-    One always-PLAYING pipeline with a permanent black background
-    layer, a GL mixer, a tee, and two glimagesinks (projection +
-    monitor). Because the mixer always produces frames the sinks are
-    warm from process start and never cold-present — this is what
-    dissolves the video→video first-transition flicker (Symptom B) and
-    the image→video wedge (Symptom A): there is no per-cue sink and no
-    hand-off. Both sinks' XIDs are bound ONCE, here, for the process
-    lifetime.
+    One always-PLAYING pipeline: a permanent black background layer, a
+    mixer (glvideomixerelement, or compositor without GL), a canvas
+    capsfilter, a tee, and two video sinks (projection + monitor).
+    Because the mixer always produces frames the sinks are warm from
+    process start and never cold-present — this is what dissolves the
+    video→video first-transition flicker (Symptom B) and the
+    image→video wedge (Symptom A): there is no per-cue sink, so no
+    sink/surface hand-off. Both sinks' XIDs are bound ONCE, here, for
+    the process lifetime.
+
+    Cues join as mixer inputs (register → appsrc branch, pumped by
+    VideoSink) and leave after a short linger, so a playlist's next cue
+    takes over the canvas without a black gap (see LINGER_*). Threading
+    rules: docs/threading.md, "VideoCompositor — the projection pump".
     """
 
     def __init__(
