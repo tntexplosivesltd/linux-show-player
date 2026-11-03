@@ -493,6 +493,21 @@ class GstMedia(Media):
                 f"GStreamer: {error.message}", exc_info=GstError(debug)
             )
 
+            # Release per-element resources as stop() would. VideoSink
+            # registered with the projection compositor in play(); left
+            # registered, an errored cue counts as active forever and
+            # VideoExclusiveManager refuses every later video cue. Each
+            # element is guarded so one failure cannot skip the rest or
+            # the error signal below.
+            for element in self.elements:
+                try:
+                    element.stop()
+                except Exception:
+                    logger.exception(
+                        "GstMedia: %s.stop() failed during error teardown",
+                        type(element).__name__,
+                    )
+
             # Set the pipeline to NULL
             self.__pipeline.set_state(Gst.State.NULL)
             self.__pipeline.get_state(Gst.SECOND)
