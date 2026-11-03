@@ -18,7 +18,8 @@
 import logging
 import threading
 
-from lisp.plugins.gst_backend.gi_repository import GLib, Gst
+from lisp.core.signal import Signal
+from lisp.plugins.gst_backend.gi_repository import GLib, GstApp, Gst
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,14 @@ BG_SIZE = 16
 # latency once a live appsrc joins (default max-latency 0 < the
 # background's 1-frame min → endless "clock problem" warnings).
 APPSRC_MAX_LATENCY = Gst.SECOND
+
+# Bound on each cue's appsrc queue, by time. The pump runs PUMP_LEAD
+# (100ms) ahead, so a healthy queue holds ~100ms whatever the frame
+# rate; a stalled projection would otherwise grow it without limit.
+# Leaky-downstream drops the oldest frame past this. Deliberately not
+# max-buffers (60fps legitimately queues ~6 frames) nor the default
+# max-bytes (200kB is smaller than one 1080p frame).
+APPSRC_MAX_QUEUE_TIME = 500 * Gst.MSECOND
 
 
 def query_min_latency(pipeline):
@@ -164,6 +173,20 @@ def _make_upload(description):
     return Gst.parse_bin_from_description(description, True)
 
 
+def _configure_appsrc(appsrc):
+    """A cue's projection input: live, pre-timestamped by the pump,
+    and bounded by time (see APPSRC_MAX_QUEUE_TIME)."""
+    appsrc.set_property("format", Gst.Format.TIME)
+    appsrc.set_property("is-live", True)
+    appsrc.set_property("do-timestamp", False)
+    appsrc.set_property("min-latency", 0)
+    appsrc.set_property("max-latency", APPSRC_MAX_LATENCY)
+    appsrc.set_property("max-bytes", 0)
+    appsrc.set_property("max-buffers", 0)
+    appsrc.set_property("max-time", APPSRC_MAX_QUEUE_TIME)
+    appsrc.set_property("leaky-type", GstApp.AppLeakyType.DOWNSTREAM)
+
+
 def plan_pipeline():
     """Decide the projection pipeline's element factories.
 
@@ -244,16 +267,27 @@ class VideoCompositor:
         # Monotonic zorder allocator: each registered cue sits above
         # the background (zorder 0) and above earlier registrations.
         self._next_zorder = 1
-        # id(sink) -> registration handle; the exclusive-manager truth.
+        # sink -> registration handle; the exclusive-manager truth.
+        # Keyed on the sink object itself (not id()): an id can be
+        # reused by a new object once the old one is collected.
         self._registrations = {}
         # Unregistered but still on screen (handoff linger).
         self._lingering = []
-        # Guards the two collections above: touched from the main loop,
+        # Pending linger/handoff GLib timeout ids, removed at shutdown.
+        self._timers = set()
+        # Guards the collections above: touched from the main loop,
         # cue worker threads (stop) and the pump's streaming thread.
         self._lock = threading.Lock()
         # Thread-safe; callbacks run on the main loop, which is where
         # _detach must run (never on a projection streaming thread).
         self._schedule = GLib.timeout_add
+        self._unschedule = GLib.source_remove
+        # The build plan (factories, GL or not), fixed for the process.
+        self._plan = None
+        self._bus_handler = None
+        # Emitted (main loop) when a runtime error kills the projection
+        # pipeline; GstBackend turns it into a user notification.
+        self.failed = Signal()
 
         self.available = self._build()
         if not self.available:
@@ -261,6 +295,9 @@ class VideoCompositor:
                 "VideoCompositor: projection pipeline unavailable; "
                 "video cues will play audio only"
             )
+            # Drop the half-built pipeline (_build may fail after
+            # creating it) so nothing later mistakes it for a live one.
+            self.shutdown()
 
     def clock(self):
         """The shared clock every cue pipeline must adopt so pumped
@@ -279,7 +316,7 @@ class VideoCompositor:
         if (width, height) == self._canvas:
             return
         self._canvas = (width, height)
-        if self.pipeline is None:
+        if not self.available or self.pipeline is None:
             return
         logger.debug("VideoCompositor: canvas -> %dx%d", width, height)
         self._canvas_filter.set_property(
@@ -301,31 +338,40 @@ class VideoCompositor:
         keep rendering into dying X windows during interpreter exit
         (MESA BadDrawable errors, intermittent segfault).
         """
+        self.available = False
         if self.pipeline is None:
             return
-        self.available = False
         with self._lock:
             self._registrations.clear()
             self._lingering.clear()
+            timers = list(self._timers)
+            self._timers.clear()
+        for timer in timers:
+            self._unschedule(timer)
+        bus = self.pipeline.get_bus()
         if self._sync_handler is not None:
-            self.pipeline.get_bus().disconnect(self._sync_handler)
+            bus.disconnect(self._sync_handler)
             self._sync_handler = None
+        if self._bus_handler is not None:
+            bus.disconnect(self._bus_handler)
+            bus.remove_signal_watch()
+            self._bus_handler = None
         self.pipeline.set_state(Gst.State.NULL)
         self.pipeline = None
 
     def register(self, sink):
         """Attach a cue to the projection pipeline. Returns a
         Registration the caller's pump pushes buffers into, or None if
-        the compositor is unavailable."""
+        the compositor is unavailable or the attach failed."""
         if not self.available:
             return None
         with self._lock:
-            reg = self._registrations.get(id(sink))
+            reg = self._registrations.get(sink)
             if reg is not None:
                 return reg
             reg = self._attach(sink)
             if reg is not None:
-                self._registrations[id(sink)] = reg
+                self._registrations[sink] = reg
         return reg
 
     def unregister(self, sink):
@@ -338,32 +384,54 @@ class VideoCompositor:
         the successor is not blocked by it.
         """
         with self._lock:
-            reg = self._registrations.pop(id(sink), None)
+            reg = self._registrations.pop(sink, None)
             if reg is None:
                 return
             self._lingering.append(reg)
-        self._schedule(LINGER_MS, self._on_linger_timeout, reg)
-        self._schedule(LINGER_CAP_MS, self._release, reg)
+        self._schedule_once(LINGER_MS, self._on_linger_timeout, reg)
+        self._schedule_once(LINGER_CAP_MS, self._release, reg)
 
     def frame_ready(self, reg):
         """Pump hook (streaming thread): `reg` pushed its first frame.
-        Hand off from every lingering predecessor once it is shown."""
+        Hand off from every lingering predecessor once it is shown.
+        A reg that was already unregistered (its stop raced the first
+        frame) is lingering itself and must not release its peers."""
         with self._lock:
+            if not any(r is reg for r in self._registrations.values()):
+                return
             reg.frame_seen = True
             lingering = list(self._lingering)
         if lingering:
-            self._schedule(HANDOFF_RELEASE_MS, self._release, *lingering)
+            self._schedule_once(
+                HANDOFF_RELEASE_MS, self._release, *lingering
+            )
 
     def is_registered(self, sink):
         with self._lock:
-            return id(sink) in self._registrations
+            return sink in self._registrations
 
     def active_others(self, sink):
         """True if any cue OTHER than `sink` is currently registered —
         the single source of truth for VideoExclusiveManager. Lingering
         cues do not count."""
         with self._lock:
-            return any(k != id(sink) for k in self._registrations)
+            return any(k is not sink for k in self._registrations)
+
+    def _schedule_once(self, ms, fn, *args):
+        """One-shot main-loop timer whose id is tracked, so shutdown()
+        can cancel what is still pending. Callable from any thread."""
+        timer = []
+
+        def fire():
+            with self._lock:
+                if timer:
+                    self._timers.discard(timer[0])
+            fn(*args)
+            return False
+
+        with self._lock:
+            timer.append(self._schedule(ms, fire))
+            self._timers.add(timer[0])
 
     def _on_linger_timeout(self, reg):
         """Main loop. With no successor, release now (black on stop).
@@ -374,7 +442,7 @@ class VideoCompositor:
             self._release(reg)
         elif all(r.frame_seen for r in active):
             # Successor already showing (its frame_ready came first).
-            self._schedule(HANDOFF_RELEASE_MS, self._release, reg)
+            self._schedule_once(HANDOFF_RELEASE_MS, self._release, reg)
         # else: the successor's frame_ready() releases us (cap: backstop)
         return False
 
@@ -419,42 +487,55 @@ class VideoCompositor:
         reg.mix_pad.set_property("height", h)
 
     def _attach(self, sink):
-        """Live-add appsrc (+glupload on GL) + a mixer request pad."""
-        plan = plan_pipeline()
-        appsrc = Gst.ElementFactory.make("appsrc", None)
-        appsrc.set_property("format", Gst.Format.TIME)
-        appsrc.set_property("is-live", True)
-        appsrc.set_property("do-timestamp", False)
-        appsrc.set_property("min-latency", 0)
-        appsrc.set_property("max-latency", APPSRC_MAX_LATENCY)
-        self.pipeline.add(appsrc)
+        """Live-add appsrc (+ the upload bin on GL) + a mixer request
+        pad. Returns the Registration, or None on failure.
 
+        Every step is checked. On failure whatever was already added is
+        removed again, so a cue that cannot attach plays audio only
+        instead of aborting its start or leaving orphan elements (and a
+        dangling mixer pad) in the projection pipeline.
+        """
         reg = Registration()
-        reg.appsrc = appsrc
+        try:
+            appsrc = Gst.ElementFactory.make("appsrc", None)
+            if appsrc is None:
+                raise RuntimeError("cannot create appsrc")
+            _configure_appsrc(appsrc)
+            self.pipeline.add(appsrc)
+            reg.appsrc = appsrc
 
-        tail = appsrc
-        if plan["upload"] is not None:
-            upload = _make_upload(plan["upload"])
-            self.pipeline.add(upload)
-            appsrc.link(upload)
-            reg.upload = upload
-            tail = upload
+            tail = appsrc
+            if self._plan["upload"] is not None:
+                reg.upload = _make_upload(self._plan["upload"])
+                self.pipeline.add(reg.upload)
+                if not appsrc.link(reg.upload):
+                    raise RuntimeError("cannot link appsrc to upload")
+                tail = reg.upload
 
-        tmpl = self.mixer.get_pad_template("sink_%u")
-        mix_pad = self.mixer.request_pad(tmpl, None, None)
-        mix_pad.set_property("zorder", self._next_zorder)
-        self._next_zorder += 1
-        reg.mix_pad = mix_pad
+            tmpl = self.mixer.get_pad_template("sink_%u")
+            reg.mix_pad = self.mixer.request_pad(tmpl, None, None)
+            if reg.mix_pad is None:
+                raise RuntimeError("mixer refused a sink pad")
+            reg.mix_pad.set_property("zorder", self._next_zorder)
+            self._next_zorder += 1
 
-        tail.get_static_pad("src").link(mix_pad)
-        appsrc.sync_state_with_parent()
-        if reg.upload is not None:
-            reg.upload.sync_state_with_parent()
+            result = tail.get_static_pad("src").link(reg.mix_pad)
+            if result != Gst.PadLinkReturn.OK:
+                raise RuntimeError(f"cannot link to mixer: {result}")
+            for element in (appsrc, reg.upload):
+                if element is not None and not element.sync_state_with_parent():
+                    raise RuntimeError(f"cannot start {element.get_name()}")
+        except Exception:
+            logger.exception("VideoCompositor: attach failed")
+            self._detach(reg)
+            return None
         return reg
 
     def _detach(self, reg):
-        """Live-remove a cue's branch. The mixer reverts to the black
-        background = 'black on stop'.
+        """Remove a cue's branch (or what exists of it, after a failed
+        attach). The mixer reverts to the black background = 'black on
+        stop'. Every step runs even if an earlier one fails, so one
+        GStreamer hiccup cannot strand the rest in the pipeline.
 
         No pad probe: we own the only upstream element (the appsrc), so
         NULLing it stops its streaming task and flushes the branch;
@@ -462,22 +543,36 @@ class VideoCompositor:
         Doing this teardown inside a blocking pad-probe callback runs it
         on a streaming thread and deadlocks glvideomixer (Phase 1
         spike). Callers must therefore not be on a projection-pipeline
-        streaming thread — VideoSink.stop() runs on cue worker threads
-        and eos() on the cue's bus watch (main loop).
+        streaming thread: releases run from GLib timeouts on the main
+        loop (see unregister), and a failed attach is undone on the
+        registering thread before any data flowed.
         """
-        reg.appsrc.set_state(Gst.State.NULL)
-        if reg.upload is not None:
-            reg.upload.set_state(Gst.State.NULL)
         tail = reg.upload if reg.upload is not None else reg.appsrc
-        tail.get_static_pad("src").unlink(reg.mix_pad)
-        self.mixer.release_request_pad(reg.mix_pad)
-        self.pipeline.remove(reg.appsrc)
+        steps = []
+        if reg.appsrc is not None:
+            steps.append(lambda: reg.appsrc.set_state(Gst.State.NULL))
         if reg.upload is not None:
-            self.pipeline.remove(reg.upload)
+            steps.append(lambda: reg.upload.set_state(Gst.State.NULL))
+        if reg.mix_pad is not None:
+            if tail is not None:
+                steps.append(
+                    lambda: tail.get_static_pad("src").unlink(reg.mix_pad)
+                )
+            steps.append(lambda: self.mixer.release_request_pad(reg.mix_pad))
+        if reg.appsrc is not None:
+            steps.append(lambda: self.pipeline.remove(reg.appsrc))
+        if reg.upload is not None:
+            steps.append(lambda: self.pipeline.remove(reg.upload))
+        for step in steps:
+            try:
+                step()
+            except Exception:
+                logger.exception("VideoCompositor: detach step failed")
 
     def _build(self):
         plan = plan_pipeline()
         logger.debug("VideoCompositor: build plan %s", plan)
+        self._plan = plan
         self._gl = plan["gl"]
 
         self.pipeline = Gst.Pipeline.new("projection")
@@ -571,6 +666,9 @@ class VideoCompositor:
         self._sync_handler = bus.connect(
             "sync-message::element", self.__on_sync_message
         )
+        # Async watch (dispatched on the main loop) for runtime errors.
+        bus.add_signal_watch()
+        self._bus_handler = bus.connect("message", self._on_bus_message)
 
         ret = self.pipeline.set_state(Gst.State.PLAYING)
         if ret == Gst.StateChangeReturn.FAILURE:
@@ -583,6 +681,56 @@ class VideoCompositor:
             self.pipeline.set_state(Gst.State.NULL)
             return False
         return True
+
+    def _on_bus_message(self, bus, message):
+        """Main loop. A WARNING is logged. An ERROR from one cue's
+        branch (its appsrc or upload bin) drops just that cue's video;
+        any other ERROR means the shared pipeline is gone, so the
+        compositor shuts down and every video cue plays audio only."""
+        if message.type == Gst.MessageType.WARNING:
+            warning, debug = message.parse_warning()
+            logger.warning(
+                "VideoCompositor: %s (%s)", warning.message, debug
+            )
+        elif message.type == Gst.MessageType.ERROR:
+            error, debug = message.parse_error()
+            reg = self._branch_of(message.src)
+            if reg is not None:
+                logger.error(
+                    "VideoCompositor: cue video branch failed, dropping "
+                    "it: %s (%s)", error.message, debug,
+                )
+                self._drop_branch(reg)
+                return
+            logger.error(
+                "VideoCompositor: projection pipeline failed: %s (%s)",
+                error.message, debug,
+            )
+            self.shutdown()
+            self.failed.emit()
+
+    def _branch_of(self, element):
+        """The registration whose appsrc/upload bin owns `element`."""
+        with self._lock:
+            regs = list(self._registrations.values()) + self._lingering
+        while element is not None:
+            for reg in regs:
+                if element == reg.appsrc or element == reg.upload:
+                    return reg
+            element = element.get_parent()
+        return None
+
+    def _drop_branch(self, reg):
+        """Main loop. Forget and detach one failed registration. Its
+        cue keeps playing audio; its pump's pushes now return FLUSHING
+        and are dropped."""
+        with self._lock:
+            for sink, other in list(self._registrations.items()):
+                if other is reg:
+                    del self._registrations[sink]
+            if reg in self._lingering:
+                self._lingering.remove(reg)
+        self._detach(reg)
 
     def __on_sync_message(self, bus, message):
         """Bind each sink's XID once, for the process lifetime.

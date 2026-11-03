@@ -481,16 +481,24 @@ class _FakeScheduler:
 
     def __init__(self, comp):
         self.pending = []
+        self.removed = []
+        self._next_id = 0
         comp._schedule = self.add
+        comp._unschedule = self.remove
 
     def add(self, ms, fn, *args):
-        self.pending.append((ms, fn, args))
-        return len(self.pending)
+        self._next_id += 1
+        self.pending.append((ms, fn, args, self._next_id))
+        return self._next_id
+
+    def remove(self, timer_id):
+        self.removed.append(timer_id)
+        self.pending = [p for p in self.pending if p[3] != timer_id]
 
     def fire(self, ms):
         due = [p for p in self.pending if p[0] == ms]
         self.pending = [p for p in self.pending if p[0] != ms]
-        for _ms, fn, args in due:
+        for _ms, fn, args, _id in due:
             fn(*args)
 
 
@@ -604,3 +612,288 @@ class TestHandoffLinger:
             sched.fire(vc.LINGER_MS)
             sched.fire(vc.LINGER_CAP_MS)
         detach.assert_not_called()
+
+    def test_frame_ready_from_unregistered_reg_releases_nothing(self):
+        # A's stop raced its own first frame: A is lingering, and its
+        # late frame_ready must not hand off (release) its peers.
+        comp, sched = self._comp()
+        a, b = object(), object()
+        reg_a = self._register(comp, a)
+        comp.unregister(a)
+        self._register(comp, b)
+        sched.pending.clear()
+        comp.frame_ready(reg_a)
+        assert sched.pending == []
+        assert reg_a.frame_seen is False
+
+    def test_shutdown_cancels_pending_timers(self):
+        comp, sched = self._comp()
+        a = object()
+        self._register(comp, a)
+        comp.unregister(a)  # schedules linger + cap
+        assert len(sched.pending) == 2
+        comp.shutdown()
+        assert sched.pending == []
+        assert len(sched.removed) == 2
+
+    def test_fired_timer_is_not_cancelled_again(self):
+        comp, sched = self._comp()
+        a = object()
+        self._register(comp, a)
+        comp.unregister(a)
+        sched.fire(vc.LINGER_MS)  # releases (no successor)
+        comp.shutdown()
+        assert len(sched.removed) == 1  # only the cap timer
+
+
+class TestFailedBuild:
+    """_build can fail after creating the pipeline (Phase 7 #3)."""
+
+    def _comp(self):
+        out, mon = _fake_windows()
+        built = {}
+
+        def fake_build(self):
+            self.pipeline = built["pipeline"] = MagicMock()
+            return False  # e.g. a link failed after Pipeline.new()
+
+        with patch.object(vc.VideoCompositor, "_build", fake_build):
+            comp = vc.VideoCompositor(out, mon)
+        return comp, built["pipeline"]
+
+    def test_half_built_pipeline_is_dropped(self):
+        comp, pipeline = self._comp()
+        assert comp.available is False
+        assert comp.pipeline is None
+        pipeline.set_state.assert_called_once_with(vc.Gst.State.NULL)
+
+    def test_set_canvas_size_after_failed_build_is_safe(self):
+        comp, _ = self._comp()
+        comp.set_canvas_size(1024, 768)  # must not raise
+        assert comp.canvas_size() == (1024, 768)
+
+
+class TestAppsrcBounds:
+    """Each cue's appsrc queue is bounded by time and leaks the
+    oldest frame, so a stalled projection cannot grow it forever."""
+
+    def test_real_appsrc_configuration(self):
+        appsrc = vc.Gst.ElementFactory.make("appsrc", None)
+        vc._configure_appsrc(appsrc)
+        assert appsrc.get_property("max-time") == vc.APPSRC_MAX_QUEUE_TIME
+        # Neither the 200kB byte default (< one 1080p frame) nor a
+        # buffer count (frame-rate dependent) may trigger the leak.
+        assert appsrc.get_property("max-bytes") == 0
+        assert appsrc.get_property("max-buffers") == 0
+        assert (appsrc.get_property("leaky-type")
+                == vc.GstApp.AppLeakyType.DOWNSTREAM)
+        assert appsrc.get_property("is-live") is True
+        assert appsrc.get_property("max-latency") == vc.APPSRC_MAX_LATENCY
+
+    def test_queue_bound_exceeds_pump_lead(self):
+        from lisp.plugins.gst_backend.elements.video_sink import PUMP_LEAD
+
+        assert vc.APPSRC_MAX_QUEUE_TIME >= 3 * PUMP_LEAD
+
+
+class TestAttachRollback:
+    """A failed attach must leave the projection pipeline as it was
+    and return None (the cue then plays audio only) — Phase 7 #7."""
+
+    GL_PLAN = {"gl": True, "upload": "glupload ! glcolorconvert",
+               "mixer": "glvideomixerelement", "sink": "glimagesink"}
+
+    def _comp(self):
+        out, mon = _fake_windows()
+
+        def fake_build(self):
+            self.pipeline = MagicMock()
+            self.mixer = MagicMock()
+            self._plan = TestAttachRollback.GL_PLAN
+            return True
+
+        with patch.object(vc.VideoCompositor, "_build", fake_build):
+            comp = vc.VideoCompositor(out, mon)
+        return comp
+
+    def _attach(self, comp, appsrc, upload):
+        with patch.object(vc.Gst.ElementFactory, "make",
+                          return_value=appsrc), \
+                patch.object(vc, "_make_upload", return_value=upload), \
+                patch.object(vc, "_configure_appsrc"):
+            return comp.register(object())
+
+    def _parts(self):
+        appsrc = MagicMock()
+        upload = MagicMock()
+        appsrc.link.return_value = True
+        upload.get_static_pad.return_value.link.return_value = (
+            vc.Gst.PadLinkReturn.OK)
+        appsrc.sync_state_with_parent.return_value = True
+        upload.sync_state_with_parent.return_value = True
+        return appsrc, upload
+
+    def test_success_returns_registration(self):
+        comp = self._comp()
+        appsrc, upload = self._parts()
+        reg = self._attach(comp, appsrc, upload)
+        assert reg is not None
+        assert reg.appsrc is appsrc and reg.upload is upload
+        assert reg.mix_pad is comp.mixer.request_pad.return_value
+        comp.pipeline.remove.assert_not_called()
+
+    def test_attach_does_not_replan(self):
+        comp = self._comp()
+        appsrc, upload = self._parts()
+        with patch.object(vc, "plan_pipeline") as plan:
+            self._attach(comp, appsrc, upload)
+        plan.assert_not_called()
+
+    def test_no_mixer_pad_rolls_back(self):
+        comp = self._comp()
+        appsrc, upload = self._parts()
+        comp.mixer.request_pad.return_value = None
+        assert self._attach(comp, appsrc, upload) is None
+        comp.pipeline.remove.assert_any_call(appsrc)
+        comp.pipeline.remove.assert_any_call(upload)
+        comp.mixer.release_request_pad.assert_not_called()
+        assert comp.active_others(object()) is False
+
+    def test_mixer_link_failure_releases_pad(self):
+        comp = self._comp()
+        appsrc, upload = self._parts()
+        upload.get_static_pad.return_value.link.return_value = (
+            vc.Gst.PadLinkReturn.NOFORMAT)
+        assert self._attach(comp, appsrc, upload) is None
+        mix_pad = comp.mixer.request_pad.return_value
+        comp.mixer.release_request_pad.assert_called_once_with(mix_pad)
+        comp.pipeline.remove.assert_any_call(appsrc)
+        comp.pipeline.remove.assert_any_call(upload)
+
+    def test_upload_link_failure_rolls_back(self):
+        comp = self._comp()
+        appsrc, upload = self._parts()
+        appsrc.link.return_value = False
+        assert self._attach(comp, appsrc, upload) is None
+        comp.mixer.request_pad.assert_not_called()
+        comp.pipeline.remove.assert_any_call(appsrc)
+        comp.pipeline.remove.assert_any_call(upload)
+
+    def test_state_sync_failure_rolls_back(self):
+        comp = self._comp()
+        appsrc, upload = self._parts()
+        upload.sync_state_with_parent.return_value = False
+        assert self._attach(comp, appsrc, upload) is None
+        comp.mixer.release_request_pad.assert_called_once()
+
+    def test_no_appsrc_returns_none(self):
+        comp = self._comp()
+        assert self._attach(comp, None, MagicMock()) is None
+        comp.pipeline.add.assert_not_called()
+
+
+class TestDetachResilience:
+    def test_failing_step_does_not_skip_the_rest(self):
+        out, mon = _fake_windows()
+        with patch.object(vc.VideoCompositor, "_build", autospec=True,
+                          return_value=True):
+            comp = vc.VideoCompositor(out, mon)
+        comp.pipeline = MagicMock()
+        comp.mixer = MagicMock()
+        reg = vc.Registration()
+        reg.appsrc = MagicMock()
+        reg.upload = MagicMock()
+        reg.mix_pad = MagicMock()
+        reg.appsrc.set_state.side_effect = RuntimeError("boom")
+        comp._detach(reg)
+        comp.mixer.release_request_pad.assert_called_once_with(reg.mix_pad)
+        comp.pipeline.remove.assert_any_call(reg.appsrc)
+        comp.pipeline.remove.assert_any_call(reg.upload)
+
+
+def _bus_message(kind, src):
+    message = MagicMock()
+    message.type = kind
+    message.src = src
+    err = MagicMock()
+    err.message = "simulated"
+    message.parse_error.return_value = (err, "dbg")
+    message.parse_warning.return_value = (err, "dbg")
+    return message
+
+
+class TestBusErrors:
+    """The projection bus is watched (Phase 7 #2): a pipeline-level
+    ERROR disables the compositor and notifies; an ERROR inside one
+    cue's branch drops only that cue's video."""
+
+    def _comp(self):
+        out, mon = _fake_windows()
+
+        def fake_build(self):
+            self.pipeline = MagicMock()
+            self.mixer = MagicMock()
+            return True
+
+        with patch.object(vc.VideoCompositor, "_build", fake_build):
+            comp = vc.VideoCompositor(out, mon)
+        _FakeScheduler(comp)
+        return comp
+
+    def _register(self, comp, sink):
+        def attach(_sink):
+            reg = vc.Registration()
+            reg.appsrc = MagicMock()
+            reg.upload = MagicMock()
+            reg.mix_pad = MagicMock()
+            return reg
+
+        with patch.object(comp, "_attach", side_effect=attach):
+            return comp.register(sink)
+
+    def test_pipeline_error_disables_and_notifies(self):
+        comp = self._comp()
+        pipeline = comp.pipeline
+        self._register(comp, object())
+        fired = []
+
+        def on_failed():
+            fired.append(True)
+
+        comp.failed.connect(on_failed)
+        mixer_element = MagicMock()
+        mixer_element.get_parent.return_value = None
+        comp._on_bus_message(
+            None, _bus_message(vc.Gst.MessageType.ERROR, mixer_element))
+        assert fired == [True]
+        assert comp.available is False
+        assert comp.pipeline is None
+        pipeline.set_state.assert_called_with(vc.Gst.State.NULL)
+        assert comp.active_others(object()) is False
+        assert comp.register(object()) is None
+
+    def test_branch_error_drops_only_that_cue(self):
+        comp = self._comp()
+        a, b = object(), object()
+        reg_a = self._register(comp, a)
+        self._register(comp, b)
+        # The error comes from an element inside A's upload bin.
+        child = MagicMock()
+        child.get_parent.return_value = reg_a.upload
+        with patch.object(comp, "_detach") as detach:
+            comp._on_bus_message(
+                None, _bus_message(vc.Gst.MessageType.ERROR, child))
+        detach.assert_called_once_with(reg_a)
+        assert comp.available is True
+        assert comp.is_registered(a) is False
+        assert comp.is_registered(b) is True
+
+    def test_warning_is_only_logged(self, caplog):
+        comp = self._comp()
+        self._register(comp, object())
+        src = MagicMock()
+        src.get_parent.return_value = None
+        comp._on_bus_message(
+            None, _bus_message(vc.Gst.MessageType.WARNING, src))
+        assert comp.available is True
+        assert "simulated" in caplog.text

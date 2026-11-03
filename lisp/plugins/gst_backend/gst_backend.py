@@ -120,6 +120,10 @@ class GstBackend(Plugin, BaseBackend):
                 ),
                 NotificationLevel.Warning,
             )
+        # A runtime error can still take the pipeline down later.
+        GstBackend._video_compositor.failed.connect(
+            self.__on_compositor_failed
+        )
 
         # Block overlapping video/image cue playback.
         self.app.video_exclusive_manager = (
@@ -186,6 +190,16 @@ class GstBackend(Plugin, BaseBackend):
         )
 
         backend.set_backend(self)
+
+    def __on_compositor_failed(self):
+        self.app.notify.emit(
+            translate(
+                "GstBackend",
+                "Video projection stopped after an error — video cues "
+                "will play audio only",
+            ),
+            NotificationLevel.Warning,
+        )
 
     def finalize(self):
         # Stop the projection pipeline before the session and windows
