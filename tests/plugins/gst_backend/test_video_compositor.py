@@ -897,3 +897,62 @@ class TestBusErrors:
             None, _bus_message(vc.Gst.MessageType.WARNING, src))
         assert comp.available is True
         assert "simulated" in caplog.text
+
+
+class TestLatencyCache:
+    """One cached projection latency for every cue's pump (Phase 7
+    #4), instead of each pump walking the GL pipeline."""
+
+    _QL = "lisp.plugins.gst_backend.video_compositor.query_min_latency"
+
+    def _comp(self):
+        out, mon = _fake_windows()
+
+        def fake_build(self):
+            self.pipeline = MagicMock()
+            self.mixer = MagicMock()
+            return True
+
+        with patch.object(vc.VideoCompositor, "_build", fake_build):
+            return vc.VideoCompositor(out, mon)
+
+    def test_cached_within_ttl(self):
+        comp = self._comp()
+        with patch(self._QL, return_value=86) as query:
+            assert comp.latency() == 86
+            assert comp.latency() == 86
+        query.assert_called_once_with(comp.pipeline)
+
+    def test_requeried_after_ttl(self):
+        comp = self._comp()
+        with patch(self._QL, return_value=86) as query, \
+                patch.object(vc.time, "monotonic_ns",
+                             side_effect=[0, vc.LATENCY_CACHE_NS + 1]):
+            comp.latency()
+            comp.latency()
+        assert query.call_count == 2
+
+    def test_latency_message_invalidates(self):
+        comp = self._comp()
+        with patch(self._QL, return_value=86) as query:
+            comp.latency()
+            comp._on_bus_message(
+                None, _bus_message(vc.Gst.MessageType.LATENCY, None))
+            comp.latency()
+        assert query.call_count == 2
+
+    def test_detach_invalidates(self):
+        comp = self._comp()
+        reg = vc.Registration()
+        reg.appsrc = MagicMock()
+        reg.mix_pad = MagicMock()
+        with patch(self._QL, return_value=86) as query:
+            comp.latency()
+            comp._detach(reg)
+            comp.latency()
+        assert query.call_count == 2
+
+    def test_zero_when_shut_down(self):
+        comp = self._comp()
+        comp.shutdown()
+        assert comp.latency() == 0

@@ -29,6 +29,16 @@ from lisp.plugins.gst_backend.video_compositor import (
     query_min_latency,
 )
 
+
+def cue_latency_due(buffers_seen):
+    """True when the pump should re-query the cue pipeline's latency
+    for its `buffers_seen`-th buffer (0-based) — see
+    LATENCY_WARMUP_BUFFERS."""
+    return (
+        buffers_seen < LATENCY_WARMUP_BUFFERS
+        or buffers_seen % LATENCY_REFRESH_BUFFERS == 0
+    )
+
 logger = logging.getLogger(__name__)
 
 # The appsink releases each frame this long before its render time, so
@@ -37,9 +47,13 @@ logger = logging.getLogger(__name__)
 # appsrc: at most PUMP_LEAD is stranded by a pause/seek/stop.
 PUMP_LEAD = 100 * Gst.MSECOND
 
-# Re-query both pipelines' latency every N buffers (~1s at 30fps).
-# Latency only changes when elements join/leave, so per-buffer queries
-# would be wasted traversals.
+# The cue pipeline's latency is re-queried on every buffer for the
+# first LATENCY_WARMUP_BUFFERS (~2s at 30fps), while the pipeline is
+# still settling — a value cached from the very first buffer put the
+# first second of video ~50ms off the audio — then every
+# LATENCY_REFRESH_BUFFERS (~1s). The projection's latency comes from
+# the compositor's shared cache (VideoCompositor.latency()).
+LATENCY_WARMUP_BUFFERS = 60
 LATENCY_REFRESH_BUFFERS = 30
 
 
@@ -95,17 +109,25 @@ class VideoSink(GstMediaElement):
 
         # Projection registration + pump state.
         self._registration = None
+        # Cached in play() so the pump never does the lazy import on
+        # its streaming thread.
+        self._compositor = None
         self._sample_handler = self.video_appsink.connect(
             "new-sample", self.__on_new_sample
+        )
+        # A paused seek (or pause()'s own flush-seek) re-prerolls the
+        # cue: the frame arrives as a preroll, not a sample.
+        self._preroll_handler = self.video_appsink.connect(
+            "new-preroll", self.__on_new_preroll
         )
 
     def play(self):
         """Register with the compositor; the pump starts with the
-        first sample once the pipeline reaches PLAYING."""
-        compositor = _compositor()
-        if compositor is None:
+        first frame (the preroll, then samples once PLAYING)."""
+        self._compositor = _compositor()
+        if self._compositor is None:
             return
-        self._registration = compositor.register(self)
+        self._registration = self._compositor.register(self)
 
     def stop(self):
         self.__unregister()
@@ -122,60 +144,91 @@ class VideoSink(GstMediaElement):
             compositor.unregister(self)
 
     def __on_new_sample(self, appsink):
-        """Pull each sample and push the SAME buffer into this cue's
-        appsrc on the projection pipeline, preserving PTS and offsetting
-        it onto the projection running-time.
+        """Streaming thread (PLAYING): pump the next timed frame."""
+        sample = appsink.pull_sample()
+        if sample is not None:
+            self.__pump(sample, preroll=False)
+        return Gst.FlowReturn.OK
 
-        Runs on a GStreamer streaming thread. Touches only GStreamer
-        objects — never Qt. The offset formula (validated by the Phase-1
-        spike, see projection_pts): out.pts = running_time +
-        (cue_base − proj_base) + (L_cue − L_proj), with both pipelines
-        on the compositor's shared clock. The latency term is cached on
-        the registration and re-queried every LATENCY_REFRESH_BUFFERS.
+    def __on_new_preroll(self, appsink):
+        """Streaming thread (PAUSED/preroll): show this frame now."""
+        sample = appsink.pull_preroll()
+        if sample is not None:
+            self.__pump(sample, preroll=True)
+        return Gst.FlowReturn.OK
+
+    def __pump(self, sample, preroll):
+        """Copy a cue frame into this cue's appsrc on the projection
+        pipeline, re-timestamped onto the projection's running time.
+
+        Runs on a cue streaming thread. Touches only GStreamer objects —
+        never Qt. A timed sample is mapped with projection_pts():
+        out.pts = running_time + (cue_base − proj_base) +
+        (L_cue − L_proj), both pipelines on the compositor's shared
+        clock. A preroll frame has no meaningful running time (the cue
+        is paused), so it is stamped "now" on the projection.
         """
-        sample = appsink.emit("pull-sample")
-        if sample is None:
-            return Gst.FlowReturn.OK
-
         reg = self._registration
-        if reg is None or reg.appsrc is None:
-            # Not registered (or torn down mid-stream) — drop.
-            return Gst.FlowReturn.OK
-
-        compositor = _compositor()
-        if compositor is None or compositor.pipeline is None:
-            return Gst.FlowReturn.OK
-
+        compositor = self._compositor
+        if reg is None or compositor is None:
+            # Not registered (prearm preroll, or torn down) — drop.
+            return
+        # Read once: shutdown() may clear it concurrently.
+        projection = compositor.pipeline
+        if projection is None:
+            return
         buf = sample.get_buffer()
-        first = not reg.caps_set
-        if first:
-            caps = sample.get_caps()
+        if buf is None:
+            return
+
+        caps = sample.get_caps()
+        if caps is not None and (
+            reg.caps is None or not caps.is_equal(reg.caps)
+        ):
+            # First frame, or a mid-stream change (resolution/aspect).
             reg.appsrc.set_property("caps", caps)
             compositor.fit_registration(reg, caps)
-            reg.caps_set = True
 
-        if reg.latency_countdown <= 0:
-            reg.latency_offset = query_min_latency(
-                self.pipeline
-            ) - query_min_latency(compositor.pipeline)
-            reg.latency_countdown = LATENCY_REFRESH_BUFFERS
-        reg.latency_countdown -= 1
+        if preroll:
+            if reg.pushed:
+                # Re-preroll = the cue flushed (seek, or pause()). Drop
+                # the up-to-PUMP_LEAD of frames already queued for the
+                # old position so the new frame shows at once.
+                reg.appsrc.send_event(Gst.Event.new_flush_start())
+                reg.appsrc.send_event(Gst.Event.new_flush_stop(False))
+            pts = (
+                compositor.clock().get_time()
+                - projection.get_base_time()
+            )
+        else:
+            running_time = sample.get_segment().to_running_time(
+                Gst.Format.TIME, buf.pts
+            )
+            if running_time == Gst.CLOCK_TIME_NONE:
+                # Outside the segment (or no PTS): nothing to map.
+                return
+            if cue_latency_due(reg.latency_buffers):
+                reg.cue_latency = query_min_latency(self.pipeline)
+            reg.latency_buffers += 1
+            pts = projection_pts(
+                running_time,
+                self.pipeline.get_base_time(),
+                projection.get_base_time(),
+                reg.cue_latency - compositor.latency(),
+            )
 
-        segment = sample.get_segment()
-        running_time = segment.to_running_time(Gst.Format.TIME, buf.pts)
         out = buf.copy()
-        out.pts = projection_pts(
-            running_time,
-            self.pipeline.get_base_time(),
-            compositor.pipeline.get_base_time(),
-            reg.latency_offset,
-        )
+        out.pts = pts
         out.dts = Gst.CLOCK_TIME_NONE
-        reg.appsrc.emit("push-buffer", out)
-        if first:
+        ret = reg.appsrc.push_buffer(out)
+        if ret != Gst.FlowReturn.OK and not reg.push_warned:
+            # FLUSHING is expected for a branch the compositor dropped.
+            reg.push_warned = True
+            logger.warning("VideoSink: projection push returned %s", ret)
+        if not reg.pushed:
+            reg.pushed = True
             # Lets a lingering predecessor hand off (no black gap).
             compositor.frame_ready(reg)
-        return Gst.FlowReturn.OK
 
     def sink(self):
         """Audio sink -- connected by the linear chain."""
@@ -245,6 +298,9 @@ class VideoSink(GstMediaElement):
         if self._sample_handler is not None:
             self.video_appsink.disconnect(self._sample_handler)
             self._sample_handler = None
+        if self._preroll_handler is not None:
+            self.video_appsink.disconnect(self._preroll_handler)
+            self._preroll_handler = None
         if not self._video_removed:
             self.pipeline.remove(self.video_queue)
             self.pipeline.remove(self.video_appsink)

@@ -17,6 +17,7 @@
 
 import logging
 import threading
+import time
 
 from lisp.core.signal import Signal
 from lisp.plugins.gst_backend.gi_repository import GLib, GstApp, Gst
@@ -63,6 +64,11 @@ APPSRC_MAX_LATENCY = Gst.SECOND
 # max-buffers (60fps legitimately queues ~6 frames) nor the default
 # max-bytes (200kB is smaller than one 1080p frame).
 APPSRC_MAX_QUEUE_TIME = 500 * Gst.MSECOND
+
+# The projection pipeline's latency is cached for every cue's pump and
+# re-queried after this long, or sooner once invalidated (a cue branch
+# attached/detached, or a LATENCY message on the projection bus).
+LATENCY_CACHE_NS = 250 * Gst.MSECOND
 
 
 def query_min_latency(pipeline):
@@ -151,15 +157,17 @@ class Registration:
         self.appsrc = None
         self.upload = None
         self.mix_pad = None
-        self.caps_set = False
-        # The cue's video caps, kept so a canvas resize can re-fit.
+        # The cue's current video caps (set by fit_registration): the
+        # pump re-sets the appsrc caps and re-fits when they change,
+        # and a canvas resize re-fits from them.
         self.caps = None
         # Set by frame_ready() once the pump pushed the first frame.
         self.frame_seen = False
-        # (L_cue − L_proj), cached by the pump; re-queried when the
-        # countdown reaches 0 (0 = query on the next buffer).
-        self.latency_offset = 0
-        self.latency_countdown = 0
+        # Pump state (cue streaming thread only).
+        self.pushed = False  # at least one frame pushed
+        self.cue_latency = 0  # L_cue, see VideoSink's refresh policy
+        self.latency_buffers = 0  # buffers since registration
+        self.push_warned = False  # a failed push was logged
 
 
 def _have_factory(name):
@@ -285,6 +293,10 @@ class VideoCompositor:
         # The build plan (factories, GL or not), fixed for the process.
         self._plan = None
         self._bus_handler = None
+        # Cached projection min latency (ns) and when it was queried;
+        # None = re-query on the next latency() call.
+        self._latency = None
+        self._latency_at = 0
         # Emitted (main loop) when a runtime error kills the projection
         # pipeline; GstBackend turns it into a user notification.
         self.failed = Signal()
@@ -306,6 +318,33 @@ class VideoCompositor:
 
     def canvas_size(self):
         return self._canvas
+
+    def latency(self):
+        """The projection pipeline's min latency (ns), shared by every
+        cue's pump. Cached so the pumps do not each walk the GL
+        pipeline; re-queried every LATENCY_CACHE_NS or after an
+        invalidation. Callable from any thread; 0 when shut down."""
+        pipeline = self.pipeline
+        if pipeline is None:
+            return 0
+        now = time.monotonic_ns()
+        with self._lock:
+            if (
+                self._latency is not None
+                and now - self._latency_at < LATENCY_CACHE_NS
+            ):
+                return self._latency
+        latency = query_min_latency(pipeline)
+        with self._lock:
+            self._latency = latency
+            self._latency_at = now
+        return latency
+
+    def _invalidate_latency(self):
+        # Lock-free on purpose: a single attribute store is atomic, and
+        # _detach (which calls this) can run under _lock (a failed
+        # _attach inside register()); _lock is not re-entrant.
+        self._latency = None
 
     def set_canvas_size(self, width, height):
         """Resize the canvas live (main thread). No-op when unchanged.
@@ -529,6 +568,7 @@ class VideoCompositor:
             logger.exception("VideoCompositor: attach failed")
             self._detach(reg)
             return None
+        self._invalidate_latency()
         return reg
 
     def _detach(self, reg):
@@ -568,6 +608,7 @@ class VideoCompositor:
                 step()
             except Exception:
                 logger.exception("VideoCompositor: detach step failed")
+        self._invalidate_latency()
 
     def _build(self):
         plan = plan_pipeline()
@@ -687,7 +728,10 @@ class VideoCompositor:
         branch (its appsrc or upload bin) drops just that cue's video;
         any other ERROR means the shared pipeline is gone, so the
         compositor shuts down and every video cue plays audio only."""
-        if message.type == Gst.MessageType.WARNING:
+        if message.type == Gst.MessageType.LATENCY:
+            # The pipeline recalculates its latency; re-query it.
+            self._invalidate_latency()
+        elif message.type == Gst.MessageType.WARNING:
             warning, debug = message.parse_warning()
             logger.warning(
                 "VideoCompositor: %s (%s)", warning.message, debug
