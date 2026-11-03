@@ -25,6 +25,7 @@ from lisp.plugins.gst_backend.gst_element import GstMediaElement
 
 # Cycle-safe: video_compositor imports only gi_repository.
 from lisp.plugins.gst_backend.video_compositor import (
+    APPSRC_MAX_QUEUE_TIME,
     projection_pts,
     query_min_latency,
 )
@@ -48,12 +49,17 @@ logger = logging.getLogger(__name__)
 PUMP_LEAD = 100 * Gst.MSECOND
 
 # The cue pipeline's latency is re-queried on every buffer for the
-# first LATENCY_WARMUP_BUFFERS (~2s at 30fps), while the pipeline is
-# still settling — a value cached from the very first buffer put the
-# first second of video ~50ms off the audio — then every
-# LATENCY_REFRESH_BUFFERS (~1s). The projection's latency comes from
-# the compositor's shared cache (VideoCompositor.latency()).
+# first LATENCY_WARMUP_BUFFERS (~2s at 30fps), while the pipeline may
+# still be settling, then every LATENCY_REFRESH_BUFFERS (~1s). (Measured
+# on the host it is already stable from the first buffer; the first
+# A/V pair's extra ~50ms in the av_sync E2E is not from this term.)
+# The projection's latency comes from the compositor's shared cache
+# (VideoCompositor.latency()).
 LATENCY_WARMUP_BUFFERS = 60
+
+# A timed frame stamped further than this ahead of the projection's
+# clock is dropped (see the pump). Same bound as the appsrc queue.
+MAX_AHEAD = APPSRC_MAX_QUEUE_TIME
 LATENCY_REFRESH_BUFFERS = 30
 
 
@@ -189,17 +195,21 @@ class VideoSink(GstMediaElement):
             reg.appsrc.set_property("caps", caps)
             compositor.fit_registration(reg, caps)
 
+        now = compositor.clock().get_time() - projection.get_base_time()
         if preroll:
-            if reg.pushed:
-                # Re-preroll = the cue flushed (seek, or pause()). Drop
-                # the up-to-PUMP_LEAD of frames already queued for the
-                # old position so the new frame shows at once.
-                reg.appsrc.send_event(Gst.Event.new_flush_start())
-                reg.appsrc.send_event(Gst.Event.new_flush_stop(False))
-            pts = (
-                compositor.clock().get_time()
-                - projection.get_base_time()
-            )
+            if not reg.pushed:
+                # The initial preroll of a starting cue: the same frame
+                # arrives as the first timed sample a moment later.
+                # Pushing it early too leaves the cue's first timed
+                # sample mis-stamped seconds ahead, which parks the
+                # mixer pad and freezes the video (host E2E).
+                return
+            # Re-preroll = the cue flushed (a seek, or pause()'s own
+            # flush-seek). Drop the up-to-PUMP_LEAD of frames queued
+            # for the old position, then show this frame now.
+            reg.appsrc.send_event(Gst.Event.new_flush_start())
+            reg.appsrc.send_event(Gst.Event.new_flush_stop(False))
+            pts = now
         else:
             running_time = sample.get_segment().to_running_time(
                 Gst.Format.TIME, buf.pts
@@ -216,6 +226,16 @@ class VideoSink(GstMediaElement):
                 projection.get_base_time(),
                 reg.cue_latency - compositor.latency(),
             )
+            if pts > now + MAX_AHEAD:
+                # A healthy frame is at most ~PUMP_LEAD ahead. One
+                # stamped further out (the first sample after a pulled
+                # preroll can carry a stale mapping) would park the
+                # mixer pad until then and freeze everything behind it.
+                logger.debug(
+                    "VideoSink: dropping frame %.0fms ahead",
+                    (pts - now) / Gst.MSECOND,
+                )
+                return
 
         out = buf.copy()
         out.pts = pts

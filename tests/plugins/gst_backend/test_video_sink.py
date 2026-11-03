@@ -260,8 +260,9 @@ class TestVideoSinkPump:
         comp = MagicMock()
         comp.pipeline.get_base_time.return_value = 10000 * Gst.MSECOND
         comp.latency.return_value = 86 * Gst.MSECOND
+        # Projection "now" = 3.4s: the 3414ms sample is 14ms ahead.
         comp.clock.return_value.get_time.return_value = (
-            10750 * Gst.MSECOND)
+            13400 * Gst.MSECOND)
 
         def fit(reg, new_caps):
             reg.caps = new_caps
@@ -317,8 +318,8 @@ class TestVideoSinkPump:
             i for i in later if i % LATENCY_REFRESH_BUFFERS == 0]
 
     def test_cue_latency_change_during_warmup_applies_next_buffer(self):
-        # The first-second A/V offset: a latency that settles after the
-        # first buffer must be picked up straight away, not ~1s later.
+        # A cue latency that settles after the first buffer must be
+        # picked up straight away, not ~1s later.
         sink, comp, reg, buf, _, appsink = self._setup()
         self._run(sink, appsink, ql=0)
         self._run(sink, appsink, ql=50 * Gst.MSECOND)
@@ -372,6 +373,21 @@ class TestVideoSinkPump:
                     if "projection push" in r.getMessage()]
         assert len(warnings) == 1
 
+    def test_frame_far_ahead_of_projection_is_dropped(self):
+        # Projection now = 750ms; a frame stamped 3.4s would park the
+        # mixer pad until then and freeze everything queued behind it.
+        sink, comp, reg, buf, sample, appsink = self._setup()
+        comp.clock.return_value.get_time.return_value = 10000 * Gst.MSECOND
+        self._run(sink, appsink)  # pts 3414ms vs now 0 → > MAX_AHEAD
+        reg.appsrc.push_buffer.assert_not_called()
+
+    def test_frame_within_lead_is_pushed(self):
+        sink, comp, reg, buf, sample, appsink = self._setup()
+        # pts 3414ms; now 3400ms → 14ms ahead (a normal lead).
+        comp.clock.return_value.get_time.return_value = 13400 * Gst.MSECOND
+        self._run(sink, appsink)
+        reg.appsrc.push_buffer.assert_called_once()
+
     def test_pump_does_not_look_up_compositor(self):
         # play() caches it; the streaming thread must not do the lazy
         # GstBackend import.
@@ -389,20 +405,28 @@ class TestVideoSinkPreroll:
     _run = TestVideoSinkPump._run
     _QL = TestVideoSinkPump._QL
 
-    def test_preroll_frame_is_stamped_now(self):
+    def test_re_preroll_frame_is_stamped_now(self):
         sink, comp, reg, buf, _, appsink = self._setup()
-        rets, _ = self._run(sink, appsink, preroll=True)
+        self._run(sink, appsink)  # playing
+        reg.appsrc.push_buffer.reset_mock()
+        rets, _ = self._run(sink, appsink, preroll=True)  # paused seek
         out = buf.copy.return_value
-        # clock 10.75s − projection base 10s = 750ms running time.
-        assert out.pts == 750 * Gst.MSECOND
+        # clock 13.4s − projection base 10s = 3.4s running time.
+        assert out.pts == 3400 * Gst.MSECOND
         reg.appsrc.push_buffer.assert_called_once_with(out)
-        comp.frame_ready.assert_called_once_with(reg)
         assert rets == [Gst.FlowReturn.OK]
 
-    def test_first_preroll_does_not_flush(self):
+    def test_initial_preroll_is_not_pushed(self):
+        # A starting cue prerolls before PLAYING; that frame comes
+        # again as the first timed sample. Pushing the preroll too left
+        # that sample stamped seconds ahead and froze the video (host
+        # E2E: av_sync, wedge, image). Nothing is pushed or flushed.
         sink, comp, reg, buf, _, appsink = self._setup()
-        self._run(sink, appsink, preroll=True)
+        rets, _ = self._run(sink, appsink, preroll=True)
+        reg.appsrc.push_buffer.assert_not_called()
         reg.appsrc.send_event.assert_not_called()
+        comp.frame_ready.assert_not_called()
+        assert rets == [Gst.FlowReturn.OK]
 
     def test_re_preroll_flushes_stale_frames_first(self):
         sink, comp, reg, buf, _, appsink = self._setup()
