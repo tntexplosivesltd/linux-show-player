@@ -54,3 +54,16 @@ def test_per_cue_undo_and_redo():
 def test_list_length_must_match_the_cues():
     with pytest.raises(ValueError):
         UpdateCuesCommand([{"name": "x"}], list(_cues()))
+
+
+def test_a_tuple_is_per_cue_too():
+    a, b = _cues()
+
+    UpdateCuesCommand(({"name": "x"}, {"name": "y"}), [a, b]).do()
+
+    assert (a.name, b.name) == ("x", "y")
+
+
+def test_per_cue_elements_must_be_dicts():
+    with pytest.raises(TypeError):
+        UpdateCuesCommand([{"name": "x"}, "oops"], list(_cues()))

@@ -1,5 +1,6 @@
 """Unit tests for `lisp.ui.inspector.commit.InspectorCommitEngine`."""
 
+import copy
 from unittest.mock import MagicMock
 
 import pytest
@@ -18,10 +19,11 @@ from PyQt5.QtWidgets import (
 from lisp.command.cue import UpdateCueCommand, UpdateCuesCommand
 from lisp.core.has_properties import HasProperties
 from lisp.core.properties import Property
+from lisp.cues.cue import Cue
 from lisp.ui.inspector.commit import (
     InspectorCommitEngine,
     _dict_diff,
-    _merge_into,
+    _cue_update,
 )
 from lisp.ui.settings.pages import SettingsPage
 
@@ -652,13 +654,17 @@ class _MediaCue(HasProperties):
         self.media.mapping = {"keyboard": ["k"], "midi": ["m1"]}
 
 
-class TestMergeInto:
-    """`_merge_into` below the top level."""
+class TestCueUpdate:
+    """`_cue_update` / `_three_way` below the top level."""
 
     def test_outer_stays_partial_inner_plain_dict_goes_whole(self):
         cue = _MediaCue()
+        snap = {"media": {"volume": 0, "mapping": dict(cue.media.mapping)}}
+        cur = {"media": {"volume": 0, "mapping": {
+            "keyboard": ["k"], "midi": ["m2"],
+        }}}
 
-        update = _merge_into({"media": {"mapping": {"midi": ["m2"]}}}, cue)
+        update = _cue_update(cue, snap, cur)
 
         assert update == {
             "media": {"mapping": {"keyboard": ["k"], "midi": ["m2"]}}
@@ -669,26 +675,272 @@ class TestMergeInto:
 
     def test_nested_plain_dicts_merge_recursively(self):
         cue = _PlainSectionCue()
-        cue.section = {"proto": {"a": 1, "b": 2}, "other": 3}
+        cue.section = {"proto": {"a": 1, "b": 2, "own": 0}, "other": 3}
 
-        update = _merge_into({"section": {"proto": {"b": 5}}}, cue)
+        update = _cue_update(
+            cue,
+            {"section": {"proto": {"a": 1, "b": 2}}},
+            {"section": {"proto": {"a": 1, "b": 5}}},
+        )
 
-        assert update == {"section": {"proto": {"a": 1, "b": 5}, "other": 3}}
+        assert update == {
+            "section": {"proto": {"a": 1, "b": 5, "own": 0}, "other": 3}
+        }
 
-    def test_does_not_mutate_the_cue_or_the_diff(self):
+    def test_nested_removal_inside_plain_dict(self):
+        cue = _PlainSectionCue()
+        cue.section = {"proto": {"a": 1, "b": 2}}
+
+        update = _cue_update(
+            cue,
+            {"section": {"proto": {"a": 1, "b": 2}}},
+            {"section": {"proto": {"a": 1}}},
+        )
+
+        assert update == {"section": {"proto": {"a": 1}}}
+
+    def test_does_not_mutate_the_cue_or_the_inputs(self):
         cue = _PlainSectionCue()
         cue.section = {"proto": {"a": 1}}
-        diff = {"section": {"proto": {"b": 2}}}
+        snap = {"section": {"proto": {"a": 1}}}
+        cur = {"section": {"proto": {"a": 1, "b": 2}}}
 
-        update = _merge_into(diff, cue)
+        update = _cue_update(cue, snap, cur)
         update["section"]["proto"]["a"] = 99
 
         assert cue.section == {"proto": {"a": 1}}
-        assert diff == {"section": {"proto": {"b": 2}}}
+        assert snap == {"section": {"proto": {"a": 1}}}
+        assert cur == {"section": {"proto": {"a": 1, "b": 2}}}
 
     def test_scalar_values_pass_through(self):
-        assert _merge_into({"name": "x"}, _PlainSectionCue()) == {
+        cue = _PlainSectionCue()
+        assert _cue_update(cue, {"name": "a"}, {"name": "x"}) == {
             "name": "x"
+        }
+
+    def test_unchanged_page_gives_empty_update(self):
+        cue = _PlainSectionCue()
+        snap = {"section": dict(_SECTION)}
+        assert _cue_update(cue, snap, copy.deepcopy(snap)) == {}
+
+    def test_group_dropped_by_the_page_is_left_alone(self):
+        # enableCheck() drops whole top-level groups: "don't touch".
+        cue = _PlainSectionCue()
+        cue.section = dict(_SECTION, count=4)
+
+        assert _cue_update(cue, {"section": dict(_SECTION)}, {}) == {}
+
+    def test_non_dict_target_gets_the_plain_delta(self):
+        # `None` (or a list) is neither merged nor replaced-by-copy:
+        # the cue gets the same delta as before this change.
+        cue = _PlainSectionCue()
+        cue.section = None
+
+        update = _cue_update(
+            cue,
+            {"section": {"a": 1, "b": 2}},
+            {"section": {"a": 1, "b": 3}},
+        )
+
+        assert update == {"section": {"b": 3}}
+
+    def test_non_property_attribute_is_never_read(self):
+        # Only real properties decide the shape, as in
+        # `update_properties`; a plain attribute holding a dict (or a
+        # getter with side effects) must not be consulted.
+        class _Probe(HasProperties):
+            name = Property(default="")
+
+            @property
+            def extra(self):
+                raise AssertionError("non-property attribute was read")
+
+        update = _cue_update(
+            _Probe(), {"extra": {"a": 1}}, {"extra": {"a": 2}}
+        )
+
+        assert update == {"extra": {"a": 2}}
+
+
+class _TriggerCue(Cue):
+    """A real `Cue` with the plain dict properties the triggers and
+    controller plugins register (`Cue.triggers`, `Cue.controller`)."""
+
+    triggers = Property(default={})
+    controller = Property(default={})
+
+
+class _TriggersPage(SettingsPage):
+    """Emits `TriggersSettings.getSettings()`'s shape: one key per
+    trigger type that still has rows. (The real page needs the
+    Application singleton, so it can't be built in a unit test.)"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.rows = []  # [(trigger, target, action)]
+
+    def loadSettings(self, settings):
+        self.rows = [
+            (trigger, target, action)
+            for trigger, pairs in settings.get("triggers", {}).items()
+            for target, action in pairs
+        ]
+
+    def getSettings(self):
+        triggers = {}
+        for trigger, target, action in self.rows:
+            triggers.setdefault(trigger, []).append((target, action))
+        return {"triggers": triggers}
+
+
+@pytest.fixture
+def triggers_engine(qtbot):
+    page = _TriggersPage()
+    qtbot.addWidget(page)
+    stack = MagicMock()
+    engine = InspectorCommitEngine(commands_stack=stack)
+    yield engine, page, stack
+    engine.unbind()
+
+
+def _apply(stack):
+    stack.do.call_args.args[0].do()
+
+
+class TestTriggersOnRealCues:
+    """The review's repro: a page that *drops* plain-dict keys."""
+
+    def test_changing_a_trigger_type_moves_the_trigger(
+        self, triggers_engine, mock_app
+    ):
+        engine, page, stack = triggers_engine
+        cue = _TriggerCue(mock_app)
+        cue.triggers = {"Started": [("B", "Start")]}
+        page.loadSettings(cue.properties())
+        engine.bind(page, [cue])
+
+        page.rows = [("Ended", "B", "Start")]
+        engine.flush()
+        _apply(stack)
+
+        # The old Started trigger must not keep firing cue B.
+        assert cue.triggers == {"Ended": [("B", "Start")]}
+
+    def test_removing_the_last_trigger_of_a_type(
+        self, triggers_engine, mock_app
+    ):
+        engine, page, stack = triggers_engine
+        cue = _TriggerCue(mock_app)
+        cue.triggers = {
+            "Started": [("B", "Start")],
+            "Ended": [("C", "Start")],
+        }
+        page.loadSettings(cue.properties())
+        engine.bind(page, [cue])
+
+        page.rows = [("Ended", "C", "Start")]
+        engine.flush()
+        _apply(stack)
+
+        assert cue.triggers == {"Ended": [("C", "Start")]}
+
+    def test_removing_the_only_trigger_still_commits(
+        self, triggers_engine, mock_app
+    ):
+        # A removal-only edit has an empty `_dict_diff`; it must still
+        # reach the cue.
+        engine, page, stack = triggers_engine
+        cue = _TriggerCue(mock_app)
+        cue.triggers = {"Started": [("B", "Start")]}
+        page.loadSettings(cue.properties())
+        engine.bind(page, [cue])
+
+        page.rows = []
+        engine.flush()
+        _apply(stack)
+
+        assert cue.triggers == {}
+
+    def test_multi_cue_type_change_keeps_each_cues_other_triggers(
+        self, triggers_engine, mock_app
+    ):
+        engine, page, stack = triggers_engine
+        a, b = _TriggerCue(mock_app), _TriggerCue(mock_app)
+        a.triggers = {
+            "Started": [("X", "Start")],
+            "Paused": [("A-own", "Stop")],
+        }
+        b.triggers = {
+            "Started": [("X", "Start")],
+            "Paused": [("B-own", "Stop")],
+        }
+        for cue in (a, b):
+            page.loadSettings(cue.properties())
+        engine.bind(page, [a, b])
+
+        page.rows = [("Ended", "X", "Start"), ("Paused", "B-own", "Stop")]
+        engine.flush()
+        _apply(stack)
+
+        assert a.triggers == {
+            "Ended": [("X", "Start")],
+            "Paused": [("A-own", "Stop")],
+        }
+        assert b.triggers == {
+            "Ended": [("X", "Start")],
+            "Paused": [("B-own", "Stop")],
+        }
+
+    def test_multi_cue_removal_removes_from_every_cue(
+        self, triggers_engine, mock_app
+    ):
+        engine, page, stack = triggers_engine
+        a, b = _TriggerCue(mock_app), _TriggerCue(mock_app)
+        a.triggers = {"Started": [("X", "Start")], "Ended": [("A", "Stop")]}
+        b.triggers = {"Started": [("X", "Start")], "Ended": [("B", "Stop")]}
+        for cue in (a, b):
+            page.loadSettings(cue.properties())
+        engine.bind(page, [a, b])
+
+        page.rows = [("Ended", "B", "Stop")]
+        engine.flush()
+        _apply(stack)
+
+        assert a.triggers == {"Ended": [("A", "Stop")]}
+        assert b.triggers == {"Ended": [("B", "Stop")]}
+
+    def test_undo_restores_the_removed_trigger(
+        self, triggers_engine, mock_app
+    ):
+        engine, page, stack = triggers_engine
+        cue = _TriggerCue(mock_app)
+        cue.triggers = {"Started": [("B", "Start")]}
+        page.loadSettings(cue.properties())
+        engine.bind(page, [cue])
+
+        page.rows = [("Ended", "B", "Start")]
+        engine.flush()
+        command = stack.do.call_args.args[0]
+        command.do()
+        command.undo()
+
+        assert cue.triggers == {"Started": [("B", "Start")]}
+
+    def test_controller_edit_keeps_other_protocols(
+        self, engine_and_page, mock_app
+    ):
+        # The original bug, on a real `Cue.controller`.
+        cue = _TriggerCue(mock_app)
+        cue.controller = {"keyboard": [("k", "Start")], "midi": [("m1",)]}
+        snap = {"controller": dict(cue.controller)}
+        cur = {"controller": {
+            "keyboard": [("k", "Start")], "midi": [("m2",)],
+        }}
+
+        cue.update_properties(_cue_update(cue, snap, cur))
+
+        assert cue.controller == {
+            "keyboard": [("k", "Start")], "midi": [("m2",)],
         }
 
 

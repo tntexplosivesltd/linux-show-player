@@ -16,6 +16,7 @@
 # along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
 from ast import literal_eval
+from collections.abc import Mapping
 
 from lisp.command.command import Command
 from lisp.ui.ui_utils import translate
@@ -58,8 +59,13 @@ class UpdateCuesCommand(Command):
     __slots__ = ("__cues", "__new", "__old")
 
     def __init__(self, properties, cues):
-        if isinstance(properties, list) and len(properties) != len(cues):
-            raise ValueError("expected one properties dict per cue")
+        if not isinstance(properties, Mapping):
+            # Per-cue: normalised to a list (tuples, generators...).
+            properties = list(properties)
+            if len(properties) != len(cues):
+                raise ValueError("expected one properties dict per cue")
+            if not all(isinstance(p, Mapping) for p in properties):
+                raise TypeError("per-cue properties must be dicts")
 
         self.__cues = cues
         self.__new = properties

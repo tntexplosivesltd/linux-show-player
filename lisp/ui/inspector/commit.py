@@ -35,11 +35,13 @@ interacting with a field.
 Both paths funnel into `flush()`, which:
 
 1. Re-runs `page.getSettings()`.
-2. Recursively diffs against the stored snapshot.
-3. Merges the diff into each bound cue's own values wherever that
-   cue can't merge a partial dict (see `_merge_into`).
-4. On a non-empty diff, dispatches the appropriate update command
-   and refreshes the snapshot.
+2. Builds one update per bound cue from the page's edits since the
+   stored snapshot (see `_cue_update`): partial for properties the
+   cue merges, the whole value -- the cue's own, with the edits
+   applied -- for plain dict properties it would replace.
+3. Returns if no cue's update has anything in it.
+4. Otherwise dispatches the appropriate update command and refreshes
+   the snapshot.
 
 Additional `flush()` calls are issued externally at selection
 change, inspector hide, session save, and app quit (Step 4 will
@@ -90,45 +92,93 @@ def _dict_diff(old: dict, new: dict) -> dict:
     return diff
 
 
-def _merge_into(diff: dict, owner) -> dict:
-    """Return the update that applies *diff* to *owner* without
-    losing anything *owner* already holds.
+_MISSING = object()
+
+
+def _property_value(owner, key):
+    """*owner*'s value for property *key*, or `_MISSING`.
+
+    Only real properties count, matching `update_properties`, which
+    ignores every other name; plain attributes (and descriptor getters
+    with side effects) are never read.
+    """
+    if isinstance(owner, HasProperties) and key in owner.properties_names():
+        return getattr(owner, key)
+    return _MISSING
+
+
+def _cue_update(owner, snapshot: dict, current: dict) -> dict:
+    """Return the update that applies the page's edits (*snapshot* ->
+    *current*) to *owner*, without losing anything *owner* holds.
 
     `HasProperties.update_properties` merges a dict into a nested
     properties object (`GstMediaCue.media`, its elements) but replaces
-    any other property outright, so a partial dict for a plain dict
-    property (`Cue.controller`) would delete every key the user didn't
-    touch. Where *owner* holds a plain dict, the partial dict is
-    therefore deep-merged into a copy of *owner*'s own value. The
-    whole value comes from the cue, not the page: under multi-select
-    the page holds the last-loaded cue's values, and a page never
-    shows keys it doesn't know (e.g. a protocol whose plugin didn't
-    load).
+    any other property outright. So:
 
-    Anything else passes through unchanged: a properties object is
-    descended into, and an absent target is ignored by
-    `update_properties`, so a partial dict is harmless there.
+    * a properties object is descended into and gets a partial dict;
+    * a plain dict property (`Cue.controller`, `Cue.triggers`) gets
+      its whole new value, built by `_three_way` from the cue's *own*
+      value -- under multi-select the page holds the last-loaded cue's
+      values, and a page never shows keys it doesn't know (e.g. a
+      protocol whose plugin didn't load);
+    * anything else (absent, scalar, `None`) gets the plain
+      `_dict_diff` delta, as before; `update_properties` ignores
+      names that aren't properties.
+
+    Keys missing from *current* are left alone at this level: pages
+    drop whole groups via `enableCheck()`, which means "don't touch".
     """
     update = {}
-    for key, value in diff.items():
-        if isinstance(value, dict):
-            target = getattr(owner, key, None)
-            if isinstance(target, HasProperties):
-                value = _merge_into(value, target)
-            elif isinstance(target, dict):
-                value = _deep_merge(target, value)
-        update[key] = copy.deepcopy(value)
+    for key, new in current.items():
+        old = snapshot.get(key, _MISSING)
+        target = _property_value(owner, key)
+        both_dicts = isinstance(new, dict) and isinstance(old, dict)
+
+        if both_dicts and isinstance(target, HasProperties):
+            sub = _cue_update(target, old, new)
+            if sub:
+                update[key] = sub
+        elif both_dicts and isinstance(target, dict):
+            if new != old:
+                update[key] = _three_way(target, old, new)
+        elif both_dicts:
+            sub = _dict_diff(old, new)
+            if sub:
+                update[key] = copy.deepcopy(sub)
+        elif old is _MISSING or new != old:
+            update[key] = copy.deepcopy(new)
     return update
 
 
-def _deep_merge(base: dict, diff: dict) -> dict:
-    """Return a copy of *base* with *diff* merged in, recursively."""
+def _three_way(base: dict, snapshot: dict, current: dict) -> dict:
+    """Apply the page's edits (*snapshot* -> *current*) to a copy of
+    the plain dict *base* (the cue's own value), recursively.
+
+    * a key the page changed or added takes the page's value;
+    * a key the page removed (in *snapshot*, gone from *current*) is
+      removed -- a trigger type whose last row was deleted, or one
+      renamed to another type, must stop firing;
+    * a key the page left unchanged keeps the cue's own value, and a
+      key the page never showed is kept as is.
+    """
     merged = copy.deepcopy(base)
-    for key, value in diff.items():
-        if isinstance(value, dict) and isinstance(merged.get(key), dict):
-            merged[key] = _deep_merge(merged[key], value)
+    for key in snapshot:
+        if key not in current:
+            merged.pop(key, None)
+
+    for key, new in current.items():
+        old = snapshot.get(key, _MISSING)
+        if old is not _MISSING and new == old:
+            continue
+        mine = merged.get(key)
+        if (
+            isinstance(new, dict)
+            and isinstance(old, dict)
+            and isinstance(mine, dict)
+        ):
+            merged[key] = _three_way(mine, old, new)
         else:
-            merged[key] = copy.deepcopy(value)
+            merged[key] = copy.deepcopy(new)
     return merged
 
 
@@ -206,7 +256,7 @@ class InspectorCommitEngine:
         """Push any accumulated delta as an undoable command.
 
         No-op when nothing is bound, when the cue list is empty, or
-        when the current `getSettings()` matches the snapshot.
+        when the current `getSettings()` changes nothing on any cue.
         """
         if self._page is None or not self._cues:
             return
@@ -214,11 +264,13 @@ class InspectorCommitEngine:
             return
 
         current = self._page.getSettings()
-        diff = _dict_diff(self._snapshot, current)
-        if not diff:
+        # One update per cue: each applies the page's edits to that
+        # cue's own values (see `_cue_update`).
+        updates = [
+            _cue_update(cue, self._snapshot, current) for cue in self._cues
+        ]
+        if not any(updates):
             return
-        # One update per cue: each is merged into that cue's own values.
-        updates = [_merge_into(diff, cue) for cue in self._cues]
 
         stack = self._commands_stack
         if stack is None:
