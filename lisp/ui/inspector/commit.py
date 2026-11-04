@@ -36,8 +36,8 @@ Both paths funnel into `flush()`, which:
 
 1. Re-runs `page.getSettings()`.
 2. Recursively diffs against the stored snapshot.
-3. Widens the diff back to whole values wherever the cue can't merge
-   a partial dict (see `_whole_unmergeable`).
+3. Merges the diff into each bound cue's own values wherever that
+   cue can't merge a partial dict (see `_merge_into`).
 4. On a non-empty diff, dispatches the appropriate update command
    and refreshes the snapshot.
 
@@ -90,28 +90,46 @@ def _dict_diff(old: dict, new: dict) -> dict:
     return diff
 
 
-def _whole_unmergeable(diff: dict, current: dict, owners: list) -> dict:
-    """Swap partial sub-dicts in *diff* for their whole value in
-    *current* wherever an owner can't merge them.
+def _merge_into(diff: dict, owner) -> dict:
+    """Return the update that applies *diff* to *owner* without
+    losing anything *owner* already holds.
 
     `HasProperties.update_properties` merges a dict into a nested
     properties object (`GstMediaCue.media`, its elements) but replaces
     any other property outright, so a partial dict for a plain dict
     property (`Cue.controller`) would delete every key the user didn't
-    touch. *owners* are the objects the diff applies to (the bound cues
-    at the top level); a level is kept partial only when every owner
-    holds a properties object there.
+    touch. Where *owner* holds a plain dict, the partial dict is
+    therefore deep-merged into a copy of *owner*'s own value. The
+    whole value comes from the cue, not the page: under multi-select
+    the page holds the last-loaded cue's values, and a page never
+    shows keys it doesn't know (e.g. a protocol whose plugin didn't
+    load).
+
+    Anything else passes through unchanged: a properties object is
+    descended into, and an absent target is ignored by
+    `update_properties`, so a partial dict is harmless there.
     """
-    widened = {}
+    update = {}
     for key, value in diff.items():
         if isinstance(value, dict):
-            targets = [getattr(owner, key, None) for owner in owners]
-            if all(isinstance(t, HasProperties) for t in targets):
-                value = _whole_unmergeable(value, current[key], targets)
-            else:
-                value = copy.deepcopy(current[key])
-        widened[key] = value
-    return widened
+            target = getattr(owner, key, None)
+            if isinstance(target, HasProperties):
+                value = _merge_into(value, target)
+            elif isinstance(target, dict):
+                value = _deep_merge(target, value)
+        update[key] = copy.deepcopy(value)
+    return update
+
+
+def _deep_merge(base: dict, diff: dict) -> dict:
+    """Return a copy of *base* with *diff* merged in, recursively."""
+    merged = copy.deepcopy(base)
+    for key, value in diff.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = copy.deepcopy(value)
+    return merged
 
 
 class InspectorCommitEngine:
@@ -199,7 +217,8 @@ class InspectorCommitEngine:
         diff = _dict_diff(self._snapshot, current)
         if not diff:
             return
-        diff = _whole_unmergeable(diff, current, self._cues)
+        # One update per cue: each is merged into that cue's own values.
+        updates = [_merge_into(diff, cue) for cue in self._cues]
 
         stack = self._commands_stack
         if stack is None:
@@ -209,9 +228,9 @@ class InspectorCommitEngine:
             stack = Application().commands_stack
 
         if len(self._cues) == 1:
-            stack.do(UpdateCueCommand(diff, self._cues[0]))
+            stack.do(UpdateCueCommand(updates[0], self._cues[0]))
         else:
-            stack.do(UpdateCuesCommand(diff, list(self._cues)))
+            stack.do(UpdateCuesCommand(updates, list(self._cues)))
 
         self._snapshot = copy.deepcopy(current)
 

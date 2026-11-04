@@ -48,16 +48,30 @@ class UpdateCueCommand(Command):
 
 
 class UpdateCuesCommand(Command):
+    """Update several cues as one undoable step.
+
+    *properties* is either one dict applied to every cue, or a list
+    of dicts, one per cue in *cues* (for edits that must be merged
+    into each cue's own values).
+    """
+
     __slots__ = ("__cues", "__new", "__old")
 
     def __init__(self, properties, cues):
+        if isinstance(properties, list) and len(properties) != len(cues):
+            raise ValueError("expected one properties dict per cue")
+
         self.__cues = cues
         self.__new = properties
         self.__old = str([cue.properties() for cue in cues])
 
     def do(self):
-        for cue in self.__cues:
-            cue.update_properties(self.__new)
+        if isinstance(self.__new, list):
+            for cue, properties in zip(self.__cues, self.__new):
+                cue.update_properties(properties)
+        else:
+            for cue in self.__cues:
+                cue.update_properties(self.__new)
 
         self.__new = str(self.__new)
 

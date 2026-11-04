@@ -18,7 +18,11 @@ from PyQt5.QtWidgets import (
 from lisp.command.cue import UpdateCueCommand, UpdateCuesCommand
 from lisp.core.has_properties import HasProperties
 from lisp.core.properties import Property
-from lisp.ui.inspector.commit import InspectorCommitEngine, _dict_diff
+from lisp.ui.inspector.commit import (
+    InspectorCommitEngine,
+    _dict_diff,
+    _merge_into,
+)
 from lisp.ui.settings.pages import SettingsPage
 
 
@@ -503,32 +507,188 @@ class TestPlainDictProperties:
         for cue in cues:
             assert cue.section == dict(_SECTION, count=3)
 
-    def test_mixed_targets_fall_back_to_whole_value(self, engine_and_page):
-        # Descending is only safe when every cue merges.
+    def test_multi_cue_keeps_each_cues_own_unedited_keys(
+        self, engine_and_page
+    ):
+        # The page ends up holding the last-loaded cue's values; only
+        # the edited key may reach the other cues, never B's copy of
+        # the keys the user didn't touch (e.g. B's MIDI trigger
+        # landing on A when a keyboard key is added to both).
+        engine, page, stack = engine_and_page
+        a, b = _PlainSectionCue(), _PlainSectionCue()
+        a.section = dict(_SECTION, count=1, mode="beta")
+        b.section = dict(_SECTION, count=2, mode="gamma")
+        for cue in (a, b):
+            page.loadSettings({"section": cue.section})
+        engine.bind(page, [a, b])
+
+        page.line.setText("renamed")
+        engine.flush()
+        stack.do.call_args.args[0].do()
+
+        assert a.section == dict(
+            _SECTION, count=1, mode="beta", name="renamed"
+        )
+        assert b.section == dict(
+            _SECTION, count=2, mode="gamma", name="renamed"
+        )
+
+    def test_keys_the_page_never_emits_survive(self, engine_and_page):
+        # E.g. a controller protocol whose plugin didn't load: no page
+        # shows it, so the page's output can't be the whole value.
+        engine, page, stack = engine_and_page
+        cue = _PlainSectionCue()
+        cue.section = dict(_SECTION, unloaded=["keep", "me"])
+        engine.bind(page, [cue])
+
+        page.line.setText("renamed")
+        engine.flush()
+        stack.do.call_args.args[0].do()
+
+        assert cue.section == dict(
+            _SECTION, unloaded=["keep", "me"], name="renamed"
+        )
+
+    def test_mixed_targets_each_get_their_own_update(
+        self, engine_and_page
+    ):
+        # A cue that merges gets the partial dict; a cue that replaces
+        # gets its own whole value with the edit applied.
         engine, page, stack = engine_and_page
         engine.bind(page, [_NestedSectionCue(), _PlainSectionCue()])
 
         page.line.setText("renamed")
         engine.flush()
 
-        assert _committed(stack, UpdateCuesCommand) == {
-            "section": dict(_SECTION, name="renamed")
-        }
+        assert _committed(stack, UpdateCuesCommand) == [
+            {"section": {"name": "renamed"}},
+            {"section": dict(_SECTION, name="renamed")},
+        ]
 
-    def test_unknown_target_falls_back_to_whole_value(
-        self, engine_and_page
-    ):
-        # A key the cue doesn't hold as a properties object (absent,
-        # or a mock) gets the whole value: never a partial dict that
-        # could replace a richer one.
+    def test_absent_target_keeps_partial_value(self, engine_and_page):
+        # `update_properties` ignores names that aren't properties, so
+        # a cue lacking the key (e.g. a media element another selected
+        # cue's pipeline has) must not widen the edit for anyone.
         engine, page, stack = engine_and_page
-        engine.bind(page, [_make_cue()])
+        nested, bare = _NestedSectionCue(), _BareCue()
+        engine.bind(page, [nested, bare])
 
         page.line.setText("renamed")
         engine.flush()
+        assert _committed(stack, UpdateCuesCommand) == [
+            {"section": {"name": "renamed"}},
+            {"section": {"name": "renamed"}},
+        ]
+        stack.do.call_args.args[0].do()
 
+        assert nested.section.name == "renamed"
+        assert "section" not in bare.properties()
+
+    def test_undo_restores_the_whole_original_dict(self, engine_and_page):
+        engine, page, stack = engine_and_page
+        a, b = _PlainSectionCue(), _PlainSectionCue()
+        a.section = dict(_SECTION, count=1, unloaded=["x"])
+        b.section = dict(_SECTION, count=2)
+        originals = [dict(a.section), dict(b.section)]
+        page.loadSettings({"section": b.section})
+        engine.bind(page, [a, b])
+
+        page.line.setText("renamed")
+        engine.flush()
+        command = stack.do.call_args.args[0]
+        command.do()
+        command.undo()
+
+        assert [a.section, b.section] == originals
+
+        command.redo()
+        assert a.section == dict(
+            _SECTION, count=1, unloaded=["x"], name="renamed"
+        )
+
+    def test_second_edit_builds_on_the_first(self, engine_and_page):
+        engine, page, stack = engine_and_page
+        cue = _PlainSectionCue()
+        cue.section = dict(_SECTION, unloaded=["x"])
+        engine.bind(page, [cue])
+
+        page.line.setText("renamed")
+        engine.flush()
+        stack.do.call_args.args[0].do()
+        page.spin.setValue(9)
+        engine.flush()
+
+        assert stack.do.call_count == 2
         assert _committed(stack) == {
-            "section": dict(_SECTION, name="renamed")
+            "section": dict(
+                _SECTION, unloaded=["x"], name="renamed", count=9
+            )
+        }
+        stack.do.call_args.args[0].do()
+        assert cue.section == dict(
+            _SECTION, unloaded=["x"], name="renamed", count=9
+        )
+
+
+class _BareCue(HasProperties):
+    name = Property(default="Cue")
+
+
+class _Media(HasProperties):
+    """A nested properties object holding a plain dict property,
+    like a `HasProperties` sub-object with its own `controller`."""
+
+    volume = Property(default=0)
+    mapping = Property(default={})
+
+
+class _MediaCue(HasProperties):
+    name = Property(default="Cue")
+    media = Property(default={})
+
+    def __init__(self):
+        super().__init__()
+        self.media = _Media()
+        self.media.mapping = {"keyboard": ["k"], "midi": ["m1"]}
+
+
+class TestMergeInto:
+    """`_merge_into` below the top level."""
+
+    def test_outer_stays_partial_inner_plain_dict_goes_whole(self):
+        cue = _MediaCue()
+
+        update = _merge_into({"media": {"mapping": {"midi": ["m2"]}}}, cue)
+
+        assert update == {
+            "media": {"mapping": {"keyboard": ["k"], "midi": ["m2"]}}
+        }
+        cue.update_properties(update)
+        assert cue.media.mapping == {"keyboard": ["k"], "midi": ["m2"]}
+        assert cue.media.volume == 0
+
+    def test_nested_plain_dicts_merge_recursively(self):
+        cue = _PlainSectionCue()
+        cue.section = {"proto": {"a": 1, "b": 2}, "other": 3}
+
+        update = _merge_into({"section": {"proto": {"b": 5}}}, cue)
+
+        assert update == {"section": {"proto": {"a": 1, "b": 5}, "other": 3}}
+
+    def test_does_not_mutate_the_cue_or_the_diff(self):
+        cue = _PlainSectionCue()
+        cue.section = {"proto": {"a": 1}}
+        diff = {"section": {"proto": {"b": 2}}}
+
+        update = _merge_into(diff, cue)
+        update["section"]["proto"]["a"] = 99
+
+        assert cue.section == {"proto": {"a": 1}}
+        assert diff == {"section": {"proto": {"b": 2}}}
+
+    def test_scalar_values_pass_through(self):
+        assert _merge_into({"name": "x"}, _PlainSectionCue()) == {
+            "name": "x"
         }
 
 
