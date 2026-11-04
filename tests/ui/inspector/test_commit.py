@@ -19,7 +19,7 @@ from PyQt5.QtWidgets import (
 from lisp.command.cue import UpdateCueCommand, UpdateCuesCommand
 from lisp.core.has_properties import HasProperties
 from lisp.core.properties import Property
-from lisp.cues.cue import Cue
+from lisp.cues.cue import Cue, CueAction
 from lisp.ui.inspector.commit import (
     InspectorCommitEngine,
     _dict_diff,
@@ -762,6 +762,90 @@ class TestCueUpdate:
         assert update == {"extra": {"a": 2}}
 
 
+    @pytest.mark.parametrize("old, new", [
+        ({"a": 1}, 5),        # dict -> scalar
+        (5, {"a": 1}),        # scalar -> dict
+        (None, {"a": 1}),     # None -> dict
+        ([1, 2], {"a": 1}),   # list -> dict
+    ])
+    def test_type_change_inside_plain_dict_takes_the_page(self, old, new):
+        cue = _PlainSectionCue()
+        cue.section = {"k": copy.deepcopy(old), "own": 1}
+
+        update = _cue_update(
+            cue, {"section": {"k": old}}, {"section": {"k": new}}
+        )
+
+        assert update == {"section": {"k": new, "own": 1}}
+
+    @pytest.mark.parametrize("old, new", [
+        ({"a": 1}, 5),
+        (5, {"a": 1}),
+        (None, {"a": 1}),
+    ])
+    def test_type_change_of_a_whole_property(self, old, new):
+        cue = _PlainSectionCue()
+        cue.section = copy.deepcopy(old)
+
+        update = _cue_update(cue, {"section": old}, {"section": new})
+
+        assert update == {"section": new}
+
+    def test_removed_scalar_the_cue_holds_differently_is_kept(self):
+        # Multi-select: the page showed (and removed) another cue's
+        # value; this cue's own was never shown.
+        cue = _PlainSectionCue()
+        cue.section = {"k": "mine", "x": 1}
+
+        update = _cue_update(
+            cue, {"section": {"k": "theirs", "x": 1}}, {"section": {"x": 1}}
+        )
+
+        assert update == {"section": {"k": "mine", "x": 1}}
+
+    def test_multi_cue_flush_and_undo_through_nested_plain_dict(
+        self, qtbot
+    ):
+        class _MediaPage(SettingsPage):
+            def __init__(self):
+                super().__init__()
+                self.mapping = {}
+
+            def loadSettings(self, settings):
+                self.mapping = copy.deepcopy(
+                    settings.get("media", {}).get("mapping", {})
+                )
+
+            def getSettings(self):
+                return {"media": {"mapping": copy.deepcopy(self.mapping)}}
+
+        page = _MediaPage()
+        qtbot.addWidget(page)
+        stack = MagicMock()
+        engine = InspectorCommitEngine(commands_stack=stack)
+        a, b = _MediaCue(), _MediaCue()
+        a.media.mapping = {"keyboard": ["ka"], "midi": ["m"]}
+        b.media.mapping = {"keyboard": ["kb"], "midi": ["m"]}
+        a.media.volume = 3
+        for cue in (a, b):
+            page.loadSettings(cue.properties())
+        engine.bind(page, [a, b])
+
+        page.mapping["midi"] = ["m", "m2"]
+        engine.flush()
+        command = stack.do.call_args.args[0]
+        command.do()
+
+        assert a.media.mapping == {"keyboard": ["ka"], "midi": ["m", "m2"]}
+        assert b.media.mapping == {"keyboard": ["kb"], "midi": ["m", "m2"]}
+        assert a.media.volume == 3
+
+        command.undo()
+        assert a.media.mapping == {"keyboard": ["ka"], "midi": ["m"]}
+        assert b.media.mapping == {"keyboard": ["kb"], "midi": ["m"]}
+        engine.unbind()
+
+
 class _TriggerCue(Cue):
     """A real `Cue` with the plain dict properties the triggers and
     controller plugins register (`Cue.triggers`, `Cue.controller`)."""
@@ -942,6 +1026,200 @@ class TestTriggersOnRealCues:
         assert cue.controller == {
             "keyboard": [("k", "Start")], "midi": [("m2",)],
         }
+
+    def test_multi_cue_added_row_keeps_each_cues_own_rows(
+        self, triggers_engine, mock_app
+    ):
+        # Review 3: a changed list was copied whole from the
+        # last-loaded cue, so A lost its row and gained B's.
+        engine, page, stack = triggers_engine
+        a, b = _TriggerCue(mock_app), _TriggerCue(mock_app)
+        a.triggers = {"Started": [("a", "Start")]}
+        b.triggers = {"Started": [("b", "Start")]}
+        for cue in (a, b):
+            page.loadSettings(cue.properties())
+        engine.bind(page, [a, b])
+
+        page.rows.append(("Started", "new", "Start"))
+        engine.flush()
+        _apply(stack)
+
+        assert a.triggers == {"Started": [("a", "Start"), ("new", "Start")]}
+        assert b.triggers == {"Started": [("b", "Start"), ("new", "Start")]}
+
+    def test_multi_cue_removing_a_type_keeps_rows_the_page_never_showed(
+        self, triggers_engine, mock_app
+    ):
+        # Deleting B's last Paused row must not pop A's own Paused.
+        engine, page, stack = triggers_engine
+        a, b = _TriggerCue(mock_app), _TriggerCue(mock_app)
+        a.triggers = {"Paused": [("a", "Stop")], "Ended": [("x", "Start")]}
+        b.triggers = {"Paused": [("b", "Stop")], "Ended": [("x", "Start")]}
+        for cue in (a, b):
+            page.loadSettings(cue.properties())
+        engine.bind(page, [a, b])
+
+        page.rows = [("Ended", "x", "Start")]
+        engine.flush()
+        _apply(stack)
+
+        assert a.triggers == {
+            "Paused": [("a", "Stop")], "Ended": [("x", "Start")],
+        }
+        assert b.triggers == {"Ended": [("x", "Start")]}
+
+    def test_multi_cue_type_change_moves_only_the_shown_row(
+        self, triggers_engine, mock_app
+    ):
+        engine, page, stack = triggers_engine
+        a, b = _TriggerCue(mock_app), _TriggerCue(mock_app)
+        a.triggers = {"Started": [("a", "Start"), ("x", "Start")]}
+        b.triggers = {"Started": [("x", "Start")]}
+        for cue in (a, b):
+            page.loadSettings(cue.properties())
+        engine.bind(page, [a, b])
+
+        page.rows = [("Ended", "x", "Start")]
+        engine.flush()
+        _apply(stack)
+
+        assert a.triggers == {
+            "Started": [("a", "Start")], "Ended": [("x", "Start")],
+        }
+        assert b.triggers == {"Ended": [("x", "Start")]}
+
+    def test_single_cue_takes_the_page_exactly_including_order(
+        self, triggers_engine, mock_app
+    ):
+        engine, page, stack = triggers_engine
+        cue = _TriggerCue(mock_app)
+        cue.triggers = {"Started": [("b", "Start"), ("c", "Stop")]}
+        page.loadSettings(cue.properties())
+        engine.bind(page, [cue])
+
+        page.rows = [("Started", "c", "Stop"), ("Started", "b", "Start")]
+        engine.flush()
+        _apply(stack)
+
+        assert cue.triggers == {"Started": [("c", "Stop"), ("b", "Start")]}
+
+    def test_per_cue_lists_of_tuples_survive_undo_and_redo(
+        self, triggers_engine, mock_app
+    ):
+        # The real trigger shape through str/literal_eval.
+        engine, page, stack = triggers_engine
+        a, b = _TriggerCue(mock_app), _TriggerCue(mock_app)
+        a.triggers = {"Started": [("a", "Start")]}
+        b.triggers = {"Started": [("b", "Start")]}
+        for cue in (a, b):
+            page.loadSettings(cue.properties())
+        engine.bind(page, [a, b])
+
+        page.rows.append(("Ended", "e", "Stop"))
+        engine.flush()
+        command = stack.do.call_args.args[0]
+        command.do()
+        after = (copy.deepcopy(a.triggers), copy.deepcopy(b.triggers))
+        command.undo()
+        assert a.triggers == {"Started": [("a", "Start")]}
+        assert b.triggers == {"Started": [("b", "Start")]}
+
+        command.redo()
+        assert (a.triggers, b.triggers) == after
+        assert a.triggers == {
+            "Started": [("a", "Start")], "Ended": [("e", "Stop")],
+        }
+
+
+class TestRealTriggersPage:
+    """`TriggersSettings` itself, with `Application` patched to a
+    mock holding a real `CueModel` (never the singleton)."""
+
+    @pytest.fixture
+    def setup(self, qtbot, mock_app, monkeypatch):
+        from lisp.cues.cue_model import CueModel
+        from lisp.plugins.triggers import triggers_settings
+
+        model = CueModel()
+        targets = {}
+        for name in ("T1", "T2", "T3"):
+            target = Cue(mock_app)
+            target.name = name
+            model.add(target)
+            targets[name] = target.id
+        app = MagicMock()
+        app.cue_model = model
+        monkeypatch.setattr(triggers_settings, "Application", lambda: app)
+
+        page = triggers_settings.TriggersSettings()
+        qtbot.addWidget(page)
+        stack = MagicMock()
+        engine = InspectorCommitEngine(commands_stack=stack)
+        yield engine, page, stack, targets
+        engine.unbind()
+
+    @staticmethod
+    def _add_row(page, trigger, target_id, action):
+        page.triggersModel.appendRow(Cue, trigger, target_id, action)
+
+    def test_single_cue_type_change_moves_the_trigger(
+        self, setup, mock_app
+    ):
+        engine, page, stack, t = setup
+        cue = _TriggerCue(mock_app)
+        cue.triggers = {"Started": [(t["T1"], "Start")]}
+        page.loadSettings(cue.properties())
+        engine.bind(page, [cue])
+
+        page.triggersModel.rows[0][0] = "Ended"
+        engine.flush()
+        _apply(stack)
+
+        assert cue.triggers == {"Ended": [(t["T1"], "Start")]}
+
+    def test_multi_select_unticked_group_commits_nothing(
+        self, setup, mock_app
+    ):
+        engine, page, stack, t = setup
+        a, b = _TriggerCue(mock_app), _TriggerCue(mock_app)
+        a.triggers = {"Started": [(t["T1"], "Start")]}
+        b.triggers = {"Started": [(t["T2"], "Start")]}
+        page.enableCheck(True)
+        for cue in (a, b):
+            page.loadSettings(cue.properties())
+        engine.bind(page, [a, b])
+
+        engine.flush()
+
+        stack.do.assert_not_called()
+
+    def test_multi_select_ticking_the_group_applies_it_as_shown(
+        self, setup, mock_app
+    ):
+        # Review 3, High: documented, legacy-dialog semantics. With
+        # enableCheck(True) the bind-time snapshot has no `triggers`;
+        # ticking the group means "apply this group, as shown, to
+        # every selected cue", so A gets B's (last-loaded) rows.
+        engine, page, stack, t = setup
+        a, b = _TriggerCue(mock_app), _TriggerCue(mock_app)
+        a.triggers = {"Started": [(t["T1"], "Start")]}
+        b.triggers = {"Started": [(t["T2"], "Start")]}
+        page.enableCheck(True)
+        for cue in (a, b):
+            page.loadSettings(cue.properties())
+        engine.bind(page, [a, b])
+
+        page.triggerGroup.setChecked(True)
+        self._add_row(page, "Ended", t["T3"], CueAction.Stop)
+        engine.flush()
+        _apply(stack)
+
+        shown = {
+            "Started": [(t["T2"], "Start")],
+            "Ended": [(t["T3"], "Stop")],
+        }
+        assert a.triggers == shown
+        assert b.triggers == shown
 
 
 # ---------------------------------------------------------------------------

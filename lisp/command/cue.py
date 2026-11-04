@@ -59,13 +59,21 @@ class UpdateCuesCommand(Command):
     __slots__ = ("__cues", "__new", "__old")
 
     def __init__(self, properties, cues):
-        if not isinstance(properties, Mapping):
+        # Materialise first: `cues` is read twice (old state now, the
+        # update later), so a one-shot iterator would come up empty.
+        cues = list(cues)
+        if isinstance(properties, Mapping):
+            # A plain dict: redo round-trips it through str/literal_eval,
+            # which an OrderedDict or MappingProxyType doesn't survive.
+            properties = dict(properties)
+        else:
             # Per-cue: normalised to a list (tuples, generators...).
             properties = list(properties)
             if len(properties) != len(cues):
                 raise ValueError("expected one properties dict per cue")
             if not all(isinstance(p, Mapping) for p in properties):
                 raise TypeError("per-cue properties must be dicts")
+            properties = [dict(p) for p in properties]
 
         self.__cues = cues
         self.__new = properties

@@ -38,7 +38,10 @@ Both paths funnel into `flush()`, which:
 2. Builds one update per bound cue from the page's edits since the
    stored snapshot (see `_cue_update`): partial for properties the
    cue merges, the whole value -- the cue's own, with the edits
-   applied -- for plain dict properties it would replace.
+   applied -- for plain dict properties it would replace. A key the
+   page stops emitting means "don't touch" at the top level (a group
+   dropped by `enableCheck()`) but "removed" inside a plain dict
+   property (a deleted trigger type); see `_three_way`.
 3. Returns if no cue's update has anything in it.
 4. Otherwise dispatches the appropriate update command and refreshes
    the snapshot.
@@ -127,6 +130,14 @@ def _cue_update(owner, snapshot: dict, current: dict) -> dict:
 
     Keys missing from *current* are left alone at this level: pages
     drop whole groups via `enableCheck()`, which means "don't touch".
+
+    The reverse -- a key absent from *snapshot* that *current* now has
+    -- is a group the user ticked under multi-select (`enableCheck(True)`
+    leaves groups unticked, so the bind-time snapshot lacks them). As
+    in the legacy multi-edit dialog, ticking a group means "apply this
+    group, as shown, to every selected cue": its whole value is sent
+    and replaces each cue's own. Per-cue preservation applies only to
+    edits within groups that were already emitted at bind time.
     """
     update = {}
     for key, new in current.items():
@@ -150,36 +161,95 @@ def _cue_update(owner, snapshot: dict, current: dict) -> dict:
     return update
 
 
-def _three_way(base: dict, snapshot: dict, current: dict) -> dict:
-    """Apply the page's edits (*snapshot* -> *current*) to a copy of
-    the plain dict *base* (the cue's own value), recursively.
+def _three_way(mine, old, new):
+    """Apply the page's edit (*old* -> *new*) to *mine*, the cue's own
+    value inside a plain dict property; return the result.
 
-    * a key the page changed or added takes the page's value;
-    * a key the page removed (in *snapshot*, gone from *current*) is
-      removed -- a trigger type whose last row was deleted, or one
-      renamed to another type, must stop firing;
-    * a key the page left unchanged keeps the cue's own value, and a
-      key the page never showed is kept as is.
+    *old* is what the page showed at bind time, which under
+    multi-select is the last-loaded cue's value, so it only stands for
+    *mine* when the two are equal:
+
+    * ``mine == old`` (single cue, or cues that agree): take *new*
+      exactly, order and all.
+    * dicts: per key -- a key the page changed or added is patched
+      recursively; a key it left unchanged keeps the cue's own value;
+      a key it removed loses what the page showed under it
+      (`_three_way(mine[key], old[key], _REMOVED)`) and is dropped
+      once nothing of the cue's own is left; a key the page never
+      showed is kept.
+    * lists (trigger / controller rows): rows the page removed are
+      removed from the cue's own list, rows it added are appended
+      unless already there. Another cue's rows never land on this one.
+    * anything else (scalars, type changes): take *new*.
+
+    A key missing from *new* means "removed" here, unlike at the top
+    level of a page (see `_cue_update`): the triggers and controller
+    pages emit their whole dict, so a missing trigger type was deleted.
     """
-    merged = copy.deepcopy(base)
-    for key in snapshot:
-        if key not in current:
-            merged.pop(key, None)
+    if new is _REMOVED:
+        new = type(old)() if isinstance(old, (dict, list)) else _REMOVED
+    if mine == old:
+        return new if new is _REMOVED else copy.deepcopy(new)
+    if new is _REMOVED:
+        # Scalars the page removed but this cue holds differently:
+        # the cue's own value was never shown, so it stays.
+        return copy.deepcopy(mine)
 
-    for key, new in current.items():
-        old = snapshot.get(key, _MISSING)
-        if old is not _MISSING and new == old:
-            continue
-        mine = merged.get(key)
-        if (
-            isinstance(new, dict)
-            and isinstance(old, dict)
-            and isinstance(mine, dict)
-        ):
-            merged[key] = _three_way(mine, old, new)
+    if isinstance(mine, dict) and isinstance(old, dict) and \
+            isinstance(new, dict):
+        merged = copy.deepcopy(mine)
+        for key in set(old) | set(new):
+            o = old.get(key, _MISSING)
+            n = new.get(key, _REMOVED)
+            if o is not _MISSING and n == o:
+                continue
+            if key not in merged:
+                if n is not _REMOVED:
+                    merged[key] = copy.deepcopy(n)
+                continue
+            if o is _MISSING:
+                # Added by the page, but the cue already has the key:
+                # patch it as if the page had shown an empty value.
+                o = type(n)() if isinstance(n, (dict, list)) else _MISSING
+            value = _three_way(merged[key], o, n)
+            if value is _REMOVED or (
+                n is _REMOVED and isinstance(value, (dict, list))
+                and not value
+            ):
+                del merged[key]
+            else:
+                merged[key] = value
+        return merged
+
+    if isinstance(mine, list) and isinstance(old, list) and \
+            isinstance(new, list):
+        removed, added = _row_changes(old, new)
+        rows = copy.deepcopy(mine)
+        for row in removed:
+            if row in rows:
+                rows.remove(row)
+        for row in added:
+            if row not in rows:
+                rows.append(copy.deepcopy(row))
+        return rows
+
+    return copy.deepcopy(new)
+
+
+# Stands for "the page no longer emits this key" in `_three_way`.
+_REMOVED = object()
+
+
+def _row_changes(old: list, new: list):
+    """Multiset difference: (rows only in *old*, rows only in *new*).
+    Rows may be unhashable (lists), so this compares with ``==``."""
+    removed, added = list(old), []
+    for row in new:
+        if row in removed:
+            removed.remove(row)
         else:
-            merged[key] = copy.deepcopy(new)
-    return merged
+            added.append(row)
+    return removed, added
 
 
 class InspectorCommitEngine:
