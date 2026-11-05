@@ -16,9 +16,27 @@
 # along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
 from ast import literal_eval
+from collections.abc import Mapping
 
 from lisp.command.command import Command
 from lisp.ui.ui_utils import translate
+
+
+def _plain(value):
+    """*value* with every Mapping rebuilt as a dict and every tuple
+    as a plain tuple, at any depth.
+
+    Redo round-trips a command's properties through `str()` and
+    `literal_eval`, which accepts only literal syntax: an `OrderedDict`,
+    `mappingproxy` or namedtuple anywhere inside would break it.
+    """
+    if isinstance(value, Mapping):
+        return {key: _plain(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_plain(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_plain(item) for item in value)
+    return value
 
 
 class UpdateCueCommand(Command):
@@ -48,16 +66,43 @@ class UpdateCueCommand(Command):
 
 
 class UpdateCuesCommand(Command):
+    """Update several cues as one undoable step.
+
+    *properties* is either one dict applied to every cue, or a list
+    of dicts, one per cue in *cues* (for edits that must be merged
+    into each cue's own values).
+    """
+
     __slots__ = ("__cues", "__new", "__old")
 
     def __init__(self, properties, cues):
+        # Materialise first: `cues` is read twice (old state now, the
+        # update later), so a one-shot iterator would come up empty.
+        cues = list(cues)
+        # Normalised with `_plain` so redo's str/literal_eval round
+        # trip survives any Mapping type, at any depth.
+        if isinstance(properties, Mapping):
+            properties = _plain(properties)
+        else:
+            # Per-cue: normalised to a list (tuples, generators...).
+            properties = list(properties)
+            if len(properties) != len(cues):
+                raise ValueError("expected one properties dict per cue")
+            if not all(isinstance(p, Mapping) for p in properties):
+                raise TypeError("per-cue properties must be dicts")
+            properties = [_plain(p) for p in properties]
+
         self.__cues = cues
         self.__new = properties
         self.__old = str([cue.properties() for cue in cues])
 
     def do(self):
-        for cue in self.__cues:
-            cue.update_properties(self.__new)
+        if isinstance(self.__new, list):
+            for cue, properties in zip(self.__cues, self.__new):
+                cue.update_properties(properties)
+        else:
+            for cue in self.__cues:
+                cue.update_properties(self.__new)
 
         self.__new = str(self.__new)
 

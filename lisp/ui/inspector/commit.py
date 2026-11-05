@@ -35,9 +35,16 @@ interacting with a field.
 Both paths funnel into `flush()`, which:
 
 1. Re-runs `page.getSettings()`.
-2. Recursively diffs against the stored snapshot.
-3. On a non-empty diff, dispatches the appropriate update command
-   and refreshes the snapshot.
+2. Builds one update per bound cue from the page's edits since the
+   stored snapshot (see `_cue_update`): partial for properties the
+   cue merges, the whole value -- the cue's own, with the edits
+   applied -- for plain dict properties it would replace. A key the
+   page stops emitting means "don't touch" at the top level (a group
+   dropped by `enableCheck()`) but "removed" inside a plain dict
+   property (a deleted trigger type); see `_three_way`.
+3. Returns if no cue's update has anything in it.
+4. Otherwise dispatches the appropriate update command and refreshes
+   the snapshot.
 
 Additional `flush()` calls are issued externally at selection
 change, inspector hide, session save, and app quit (Step 4 will
@@ -57,6 +64,7 @@ from PyQt5.QtWidgets import (
 )
 
 from lisp.command.cue import UpdateCueCommand, UpdateCuesCommand
+from lisp.core.has_properties import HasProperties
 from lisp.ui.widgets.cue_color_palette import CueColorPalette
 
 
@@ -85,6 +93,121 @@ def _dict_diff(old: dict, new: dict) -> dict:
         elif new_value != old_value:
             diff[key] = new_value
     return diff
+
+
+_MISSING = object()
+
+
+def _property_value(owner, key):
+    """*owner*'s value for property *key*, or `_MISSING`.
+
+    Only real properties count, matching `update_properties`, which
+    ignores every other name; plain attributes (and descriptor getters
+    with side effects) are never read.
+    """
+    if isinstance(owner, HasProperties) and key in owner.properties_names():
+        return getattr(owner, key)
+    return _MISSING
+
+
+def _cue_update(owner, snapshot: dict, current: dict) -> dict:
+    """Return the update that applies the page's edits (*snapshot* ->
+    *current*) to *owner*, without losing anything *owner* holds.
+
+    `HasProperties.update_properties` merges a dict into a nested
+    properties object (`GstMediaCue.media`, its elements) but replaces
+    any other property outright. So:
+
+    * a properties object is descended into and gets a partial dict;
+    * a plain dict property (`Cue.controller`, `Cue.triggers`) gets
+      its whole new value, built by `_three_way` from the cue's *own*
+      value -- under multi-select the page holds the last-loaded cue's
+      values, and a page never shows keys it doesn't know (e.g. a
+      protocol whose plugin didn't load);
+    * anything else (absent, scalar, `None`) gets the plain
+      `_dict_diff` delta, as before; `update_properties` ignores
+      names that aren't properties.
+
+    Keys missing from *current* are left alone at this level: pages
+    drop whole groups via `enableCheck()`, which means "don't touch".
+
+    The reverse -- a key absent from *snapshot* that *current* now has
+    -- is a group the user ticked under multi-select (`enableCheck(True)`
+    leaves groups unticked, so the bind-time snapshot lacks them). As
+    in the legacy multi-edit dialog, ticking a group means "apply this
+    group, as shown, to every selected cue": its whole value is sent
+    and replaces each cue's own. Per-cue preservation applies only to
+    edits within groups that were already emitted at bind time.
+    """
+    update = {}
+    for key, new in current.items():
+        old = snapshot.get(key, _MISSING)
+        if old is not _MISSING and new == old:
+            # Unchanged: every branch below would send nothing, so
+            # don't read the cue (or walk its media elements) at all.
+            continue
+        target = _property_value(owner, key)
+        both_dicts = isinstance(new, dict) and isinstance(old, dict)
+
+        if both_dicts and isinstance(target, HasProperties):
+            sub = _cue_update(target, old, new)
+            if sub:
+                update[key] = sub
+        elif both_dicts and isinstance(target, dict):
+            update[key] = _three_way(target, old, new)
+        elif both_dicts:
+            sub = _dict_diff(old, new)
+            if sub:
+                update[key] = copy.deepcopy(sub)
+        else:
+            update[key] = copy.deepcopy(new)
+    return update
+
+
+def _three_way(base: dict, snapshot: dict, current: dict) -> dict:
+    """Apply the page's edits (*snapshot* -> *current*) to a copy of
+    the plain dict *base* (the cue's own value), key by key.
+
+    * a key the page changed or added takes the page's value;
+    * a key the page removed (in *snapshot*, gone from *current*) is
+      removed -- a trigger type whose last row was deleted, or one
+      retyped to another type, must stop firing;
+    * a key the page left unchanged keeps the cue's own value, and a
+      key the page never showed (e.g. a protocol whose plugin didn't
+      load) is kept as is.
+
+    "Changed" compares the page with itself (*snapshot* vs *current*),
+    never with *base*: the cue's stored rows are lists after a session
+    load while pages emit tuples, so cue-vs-page equality is unreliable.
+
+    A key missing from *current* means "removed" here, unlike at the
+    top level of a page (see `_cue_update`): the triggers and
+    controller pages emit their whole dict.
+
+    Under multi-select this is per key, not per row: a changed key
+    (e.g. one trigger type's rows) takes the page's value, which holds
+    the last-loaded cue's rows, and a removed key is removed from
+    every cue. Keys the user didn't touch keep each cue's own value.
+    """
+    merged = copy.deepcopy(base)
+    for key in snapshot:
+        if key not in current:
+            merged.pop(key, None)
+
+    for key, new in current.items():
+        old = snapshot.get(key, _MISSING)
+        if old is not _MISSING and new == old:
+            continue
+        mine = merged.get(key)
+        if (
+            isinstance(new, dict)
+            and isinstance(old, dict)
+            and isinstance(mine, dict)
+        ):
+            merged[key] = _three_way(mine, old, new)
+        else:
+            merged[key] = copy.deepcopy(new)
+    return merged
 
 
 class InspectorCommitEngine:
@@ -161,7 +284,7 @@ class InspectorCommitEngine:
         """Push any accumulated delta as an undoable command.
 
         No-op when nothing is bound, when the cue list is empty, or
-        when the current `getSettings()` matches the snapshot.
+        when the current `getSettings()` changes nothing on any cue.
         """
         if self._page is None or not self._cues:
             return
@@ -169,8 +292,12 @@ class InspectorCommitEngine:
             return
 
         current = self._page.getSettings()
-        diff = _dict_diff(self._snapshot, current)
-        if not diff:
+        # One update per cue: each applies the page's edits to that
+        # cue's own values (see `_cue_update`).
+        updates = [
+            _cue_update(cue, self._snapshot, current) for cue in self._cues
+        ]
+        if not any(updates):
             return
 
         stack = self._commands_stack
@@ -181,9 +308,9 @@ class InspectorCommitEngine:
             stack = Application().commands_stack
 
         if len(self._cues) == 1:
-            stack.do(UpdateCueCommand(diff, self._cues[0]))
+            stack.do(UpdateCueCommand(updates[0], self._cues[0]))
         else:
-            stack.do(UpdateCuesCommand(diff, list(self._cues)))
+            stack.do(UpdateCuesCommand(updates, list(self._cues)))
 
         self._snapshot = copy.deepcopy(current)
 
