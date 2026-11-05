@@ -2,7 +2,7 @@
 
 import copy
 import json
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -451,11 +451,23 @@ class _PlainSectionCue(HasProperties):
 
 
 def _committed(stack, command_cls=UpdateCueCommand):
+    """What the last pushed command applies: its properties dict, or
+    for `UpdateCuesCommand` the list of dicts, one per cue.
+
+    Runs a shallow copy of the command with `update_properties`
+    stubbed, so neither the cues nor the pushed command (which some
+    tests `do()` afterwards) change.
+    """
     command = stack.do.call_args.args[0]
     assert isinstance(command, command_cls)
-    # The commands keep their new-properties dict on the name-mangled
-    # __new attribute.
-    return getattr(command, f"_{command_cls.__name__}__new")
+    with patch.object(
+        HasProperties, "update_properties", autospec=True
+    ) as update_properties:
+        copy.copy(command).do()
+    applied = [call.args[1] for call in update_properties.call_args_list]
+    if command_cls is UpdateCueCommand:
+        (applied,) = applied
+    return applied
 
 
 def test_commit_contains_only_changed_keys(engine_and_page):
@@ -771,7 +783,6 @@ class TestCueUpdate:
         )
 
         assert update == {"extra": {"a": 2}}
-
 
     @pytest.mark.parametrize("old, new", [
         ({"a": 1}, 5),        # dict -> scalar
@@ -1144,7 +1155,6 @@ class TestTriggersOnRealCues:
         assert a.triggers == {
             "Started": [("a", "Start")], "Ended": [("e", "Stop")],
         }
-
 
 
 def _loaded(value):

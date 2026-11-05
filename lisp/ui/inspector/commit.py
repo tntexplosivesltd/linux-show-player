@@ -142,6 +142,10 @@ def _cue_update(owner, snapshot: dict, current: dict) -> dict:
     update = {}
     for key, new in current.items():
         old = snapshot.get(key, _MISSING)
+        if old is not _MISSING and new == old:
+            # Unchanged: every branch below would send nothing, so
+            # don't read the cue (or walk its media elements) at all.
+            continue
         target = _property_value(owner, key)
         both_dicts = isinstance(new, dict) and isinstance(old, dict)
 
@@ -150,13 +154,12 @@ def _cue_update(owner, snapshot: dict, current: dict) -> dict:
             if sub:
                 update[key] = sub
         elif both_dicts and isinstance(target, dict):
-            if new != old:
-                update[key] = _three_way(target, old, new)
+            update[key] = _three_way(target, old, new)
         elif both_dicts:
             sub = _dict_diff(old, new)
             if sub:
                 update[key] = copy.deepcopy(sub)
-        elif old is _MISSING or new != old:
+        else:
             update[key] = copy.deepcopy(new)
     return update
 

@@ -22,6 +22,23 @@ from lisp.command.command import Command
 from lisp.ui.ui_utils import translate
 
 
+def _plain(value):
+    """*value* with every Mapping rebuilt as a dict and every tuple
+    as a plain tuple, at any depth.
+
+    Redo round-trips a command's properties through `str()` and
+    `literal_eval`, which accepts only literal syntax: an `OrderedDict`,
+    `mappingproxy` or namedtuple anywhere inside would break it.
+    """
+    if isinstance(value, Mapping):
+        return {key: _plain(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_plain(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_plain(item) for item in value)
+    return value
+
+
 class UpdateCueCommand(Command):
     __slots__ = ("__cue", "__new", "__old")
 
@@ -62,10 +79,10 @@ class UpdateCuesCommand(Command):
         # Materialise first: `cues` is read twice (old state now, the
         # update later), so a one-shot iterator would come up empty.
         cues = list(cues)
+        # Normalised with `_plain` so redo's str/literal_eval round
+        # trip survives any Mapping type, at any depth.
         if isinstance(properties, Mapping):
-            # A plain dict: redo round-trips it through str/literal_eval,
-            # which an OrderedDict or MappingProxyType doesn't survive.
-            properties = dict(properties)
+            properties = _plain(properties)
         else:
             # Per-cue: normalised to a list (tuples, generators...).
             properties = list(properties)
@@ -73,7 +90,7 @@ class UpdateCuesCommand(Command):
                 raise ValueError("expected one properties dict per cue")
             if not all(isinstance(p, Mapping) for p in properties):
                 raise TypeError("per-cue properties must be dicts")
-            properties = [dict(p) for p in properties]
+            properties = [_plain(p) for p in properties]
 
         self.__cues = cues
         self.__new = properties

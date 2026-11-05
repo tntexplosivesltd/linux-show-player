@@ -102,6 +102,38 @@ def test_mapping_types_survive_redo():
     assert (a.name, b.name) == ("z", "z")
 
 
+def test_nested_mapping_types_survive_redo():
+    # `str()` writes a nested OrderedDict / mappingproxy / namedtuple
+    # as a call, which `literal_eval` rejects, so normalising only the
+    # top level isn't enough.
+    from collections import OrderedDict, namedtuple
+    from types import MappingProxyType
+
+    Row = namedtuple("Row", "target action")
+    a, b = _cues()
+    command = UpdateCuesCommand(
+        [
+            {"mapping": OrderedDict(midi=OrderedDict(note=1))},
+            {"mapping": MappingProxyType({"rows": [Row("x", "Start")]})},
+        ],
+        [a, b],
+    )
+    command.do()
+    command.undo()
+    command.redo()
+
+    assert a.mapping == {"midi": {"note": 1}}
+    assert b.mapping == {"rows": [("x", "Start")]}
+
+    shared = UpdateCuesCommand(
+        {"mapping": OrderedDict(midi=MappingProxyType({"note": 2}))}, [a, b]
+    )
+    shared.do()
+    shared.undo()
+    shared.redo()
+    assert a.mapping == b.mapping == {"midi": {"note": 2}}
+
+
 def test_empty_and_non_empty_per_cue_updates_mix():
     a, b = _cues()
     command = UpdateCuesCommand([{}, {"mapping": {"key": 1}}], [a, b])
