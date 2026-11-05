@@ -1176,6 +1176,36 @@ class TestSavedShowRows:
         engine.bind(page, [cue])
         return engine, page, stack, cue
 
+    def test_flush_without_edit_pushes_nothing(
+        self, triggers_engine, mock_app
+    ):
+        engine, page, stack, cue = self._bind(
+            triggers_engine, mock_app, {"Started": [("a", "Start")]}
+        )
+
+        engine.flush()
+
+        stack.do.assert_not_called()
+
+    def test_rows_reentered_as_the_cue_holds_them_push_nothing(
+        self, triggers_engine, mock_app
+    ):
+        # The cue changes outside the page after bind (a stale
+        # snapshot), then the user enters the same rows. The edit runs
+        # through `_cue_update` and `_three_way`, and the no-op guard
+        # must see the page's tuple rows as the cue's list rows.
+        engine, page, stack, cue = self._bind(
+            triggers_engine, mock_app, {"Started": [("a", "Start")]}
+        )
+        cue.triggers = _loaded(
+            {"Started": [("a", "Start")], "Ended": [("x", "Stop")]}
+        )
+
+        page.rows = [("Started", "a", "Start"), ("Ended", "x", "Stop")]
+        engine.flush()
+
+        stack.do.assert_not_called()
+
     def test_deleting_a_trigger(self, triggers_engine, mock_app):
         engine, page, stack, cue = self._bind(
             triggers_engine, mock_app,
@@ -1335,6 +1365,47 @@ class TestRealTriggersPage:
         assert a.triggers == shown
         assert b.triggers == shown
 
+    def test_multi_select_ticking_a_group_every_cue_holds_then_editing(
+        self, setup, mock_app
+    ):
+        # Ticking the group adds `triggers` to the page's output, but
+        # every cue already holds it: nothing is pushed and the
+        # snapshot advances. A later edit then commits only itself
+        # (not "apply the group as shown" again), so a row B gained
+        # outside the page in between survives.
+        engine, page, stack, t = setup
+        a, b = _TriggerCue(mock_app), _TriggerCue(mock_app)
+        for cue in (a, b):
+            cue.triggers = _loaded({"Started": [(t["T1"], "Start")]})
+        page.enableCheck(True)
+        for cue in (a, b):
+            page.loadSettings(cue.properties())
+        engine.bind(page, [a, b])
+
+        page.triggerGroup.setChecked(True)
+        engine.flush()
+        stack.do.assert_not_called()
+
+        b.triggers = _loaded(
+            {
+                "Started": [(t["T1"], "Start")],
+                "Paused": [(t["T2"], "Stop")],
+            }
+        )
+        self._add_row(page, "Ended", t["T3"], CueAction.Stop)
+        engine.flush()
+        _apply(stack)
+
+        assert _loaded(a.triggers) == {
+            "Started": [[t["T1"], "Start"]],
+            "Ended": [[t["T3"], "Stop"]],
+        }
+        assert _loaded(b.triggers) == {
+            "Started": [[t["T1"], "Start"]],
+            "Paused": [[t["T2"], "Stop"]],
+            "Ended": [[t["T3"], "Stop"]],
+        }
+
 
 # ---------------------------------------------------------------------------
 # suppressing_commits — guards against re-entrant flushes during external
@@ -1488,16 +1559,22 @@ class TestNoOpGuard:
     def test_multi_cue_value_reaches_only_cues_lacking_it(
         self, engine_and_page
     ):
+        # Only the cue lacking the value goes into the command: undo
+        # restores every cue it holds in full, so including the other
+        # would rewrite (and signal on) a cue the edit never touched.
         engine, page, stack = engine_and_page
-        engine.bind(page, [_nested_with(name="x"), _nested_with(name="y")])
+        has, lacks = _nested_with(name="x"), _nested_with(name="y")
+        engine.bind(page, [has, lacks])
 
         page.line.setText("x")
         engine.flush()
 
-        assert _committed(stack, UpdateCuesCommand) == [
-            {},
-            {"section": {"name": "x"}},
-        ]
+        assert _committed(stack) == {"section": {"name": "x"}}
+        with patch.object(has, "update_properties") as touched:
+            _apply(stack)
+            stack.do.call_args.args[0].undo()
+        touched.assert_not_called()
+        assert lacks.section.name == "y"
 
     def test_multi_cue_value_all_cues_have_pushes_nothing(
         self, engine_and_page
@@ -1539,15 +1616,15 @@ class TestNoOpGuard:
 
     def test_multi_cue_mixing_dict_and_scalar(self, engine_and_page):
         engine, page, stack = engine_and_page
-        engine.bind(page, [_nested_with(name="x"), _ScalarSectionCue()])
+        scalar = _ScalarSectionCue()
+        engine.bind(page, [_nested_with(name="x"), scalar])
 
         page.line.setText("x")
         engine.flush()
 
-        assert _committed(stack, UpdateCuesCommand) == [
-            {},
-            {"section": {"name": "x"}},
-        ]
+        assert _committed(stack) == {"section": {"name": "x"}}
+        _apply(stack)
+        assert scalar.section == {"name": "x"}
 
     def test_plain_dict_property_is_never_trimmed(self, engine_and_page):
         # Review finding on #11: trimming the sub-key the cue already
@@ -1598,6 +1675,34 @@ class TestDropHeld:
     def test_name_that_isnt_a_property_is_kept(self):
         assert _drop_held(_BareCue(), {"bogus": 1}) == {"bogus": 1}
 
+    @pytest.mark.parametrize("held, value, dropped", [
+        (1, 1, True),
+        (1, True, False),     # same value, different type: an edit
+        (1, 1.0, False),
+        (0, False, False),
+        ([1, 2], (1, 2), True),   # rows: list vs tuple is not an edit
+        ({"a": [1]}, {"a": (1,)}, True),
+        ({"a": 1}, {"a": 1, "b": 2}, False),
+    ])
+    def test_held_means_same_data_and_type(self, held, value, dropped):
+        cue = _ScalarSectionCue()
+        cue.section = held
+
+        assert (_drop_held(cue, {"section": value}) == {}) is dropped
+
+    def test_comparison_that_raises_keeps_the_value(self):
+        class _Strict:
+            def __eq__(self, other):
+                raise ValueError("ambiguous")
+
+            __hash__ = object.__hash__
+
+        cue = _ScalarSectionCue()
+        cue.section = _Strict()
+        value = _Strict()
+
+        assert _drop_held(cue, {"section": value}) == {"section": value}
+
     def test_nested_none_is_compared_not_descended(self):
         cue = _ScalarSectionCue()
         cue.section = None
@@ -1617,12 +1722,13 @@ def icon_theme():
     from lisp.ui.icons import IconTheme
 
     theme, cache = IconTheme._GlobalTheme, dict(IconTheme._GlobalCache)
-    qt_theme = QIcon.themeName()
+    qt_theme, qt_paths = QIcon.themeName(), QIcon.themeSearchPaths()
     IconTheme.set_theme_name("lisp")
     yield
     IconTheme._GlobalTheme = theme
     IconTheme._GlobalCache.clear()
     IconTheme._GlobalCache.update(cache)
+    QIcon.setThemeSearchPaths(qt_paths)
     QIcon.setThemeName(qt_theme)
 
 

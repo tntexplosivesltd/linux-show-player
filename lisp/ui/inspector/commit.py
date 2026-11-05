@@ -47,8 +47,8 @@ Both paths funnel into `flush()`, which:
    cue changing, and committing that would put a no-op on the undo
    stack and mark the session unsaved for nothing.
 4. If no cue's update has anything left, refreshes the snapshot and
-   returns; otherwise dispatches the appropriate update command and
-   refreshes the snapshot.
+   returns; otherwise dispatches the appropriate update command for
+   the cues that have something left, and refreshes the snapshot.
 
 Additional `flush()` calls are issued externally at selection
 change, inspector hide, session save, and app quit (Step 4 will
@@ -214,17 +214,35 @@ def _three_way(base: dict, snapshot: dict, current: dict) -> dict:
     return merged
 
 
-def _canon(value):
-    """*value* with every tuple turned into a list, at any depth.
+def _same(a, b) -> bool:
+    """True when *a* and *b* hold the same data, at any depth.
 
-    A cue loaded from a session holds rows as lists (`json.load`)
-    while pages emit tuples, and `("B", "Start") != ["B", "Start"]`.
+    Lists and tuples count as the same kind: a cue loaded from a
+    session holds rows as lists (`json.load`) while pages emit tuples,
+    and `("B", "Start") != ["B", "Start"]`. Anything else must match
+    in type as well as value, so `True`, `1` and `1.0` differ: an
+    edit that changes only a value's type is still an edit.
     """
-    if isinstance(value, dict):
-        return {key: _canon(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_canon(item) for item in value]
-    return value
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(_same(a[k], b[k]) for k in a)
+    if isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)):
+        return len(a) == len(b) and all(map(_same, a, b))
+    return type(a) is type(b) and bool(a == b)
+
+
+def _holds(target, value) -> bool:
+    """Whether a cue whose value is *target* already holds *value*.
+
+    Any doubt counts as "not held": a comparison that raises (e.g. an
+    `__eq__` returning an array) keeps the value. Sending a value the
+    cue already has costs an undo entry; dropping an edit loses it.
+    """
+    if target is _MISSING:
+        return False
+    try:
+        return _same(target, value)
+    except Exception:
+        return False
 
 
 def _drop_held(owner, update: dict) -> dict:
@@ -234,8 +252,8 @@ def _drop_held(owner, update: dict) -> dict:
     * a properties object is descended into, matching how
       `update_properties` merges a partial dict into it;
     * any other value -- a scalar, or a plain dict property's whole
-      new value -- is dropped only when *owner* holds an equal value
-      (compared via `_canon`). A plain dict is never trimmed key by
+      new value -- is dropped only when *owner* holds the same value
+      (see `_holds`). A plain dict is never trimmed key by
       key: `update_properties` replaces it, so a partial dict would
       delete the keys left out.
     * a name that isn't a property of *owner* is kept, as before;
@@ -252,7 +270,7 @@ def _drop_held(owner, update: dict) -> dict:
             sub = _drop_held(target, value)
             if sub:
                 kept[key] = sub
-        elif target is _MISSING or _canon(target) != _canon(value):
+        elif not _holds(target, value):
             kept[key] = value
     return kept
 
@@ -348,7 +366,11 @@ class InspectorCommitEngine:
             _drop_held(cue, _cue_update(cue, self._snapshot, current))
             for cue in self._cues
         ]
-        if not any(updates):
+        # Only cues with something left to apply go into the command:
+        # undo restores every cue it holds in full, which would
+        # rewrite (and signal on) cues the edit never touched.
+        pairs = [(c, u) for c, u in zip(self._cues, updates) if u]
+        if not pairs:
             # Advance the snapshot so a skipped no-op isn't re-diffed
             # on every later flush.
             self._snapshot = copy.deepcopy(current)
@@ -361,10 +383,12 @@ class InspectorCommitEngine:
             from lisp.application import Application
             stack = Application().commands_stack
 
-        if len(self._cues) == 1:
-            stack.do(UpdateCueCommand(updates[0], self._cues[0]))
+        if len(pairs) == 1:
+            ((cue, update),) = pairs
+            stack.do(UpdateCueCommand(update, cue))
         else:
-            stack.do(UpdateCuesCommand(updates, list(self._cues)))
+            cues, updates = zip(*pairs)
+            stack.do(UpdateCuesCommand(list(updates), list(cues)))
 
         self._snapshot = copy.deepcopy(current)
 
