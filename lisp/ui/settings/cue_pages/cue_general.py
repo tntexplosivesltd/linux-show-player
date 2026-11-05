@@ -545,7 +545,10 @@ class CueGeneralSettingsPage(CueSettingsPage):
         # is visible (single-cue mode). Multi-edit hides the group via
         # enableCheck, so this branch never fires there — guarding
         # against the uniqueness violation at the source.
-        if self.cueNumberGroup.isVisible():
+        # isVisibleTo, not isVisible: the inspector snapshots pages
+        # before Qt has shown them, and isVisible() is False until
+        # then — the key would appear later as a spurious edit.
+        if self.cueNumberGroup.isVisibleTo(self):
             settings["cue_number"] = self.cueNumberEdit.text()
         if self.isGroupEnabled(self.cueNameGroup):
             settings["name"] = self.cueNameEdit.text()
