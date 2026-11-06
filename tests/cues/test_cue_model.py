@@ -355,6 +355,62 @@ class TestCueModelReset:
         model.reset()
         assert reset_called == [True]
 
+    # Session teardown (Session.finalize -> reset) must halt running
+    # cues like pop() does; otherwise they are orphaned, and one held
+    # alive (e.g. by a running fade) keeps playing and its projection.
+
+    def test_reset_interrupts_cues(self):
+        model = CueModel()
+        a, b = _make_cue("a"), _make_cue("b")
+        for cue in (a, b):
+            cue.CueActions = (CueAction.Interrupt,)
+            model.add(cue)
+        model.reset()
+        a.interrupt.assert_called_once()
+        b.interrupt.assert_called_once()
+
+    def test_reset_stops_cue_without_interrupt(self):
+        model = CueModel()
+        cue = _make_cue()
+        cue.CueActions = (CueAction.Stop,)
+        model.add(cue)
+        model.reset()
+        cue.stop.assert_called_once()
+        cue.interrupt.assert_not_called()
+
+    def test_reset_halts_cues_before_clearing(self):
+        """Handlers of the cue's interrupted/stopped signals may look
+        it up in the model, so it must still be there when halted."""
+        model = CueModel()
+        cue = _make_cue("a")
+        cue.CueActions = (CueAction.Interrupt,)
+        seen = []
+        cue.interrupt.side_effect = lambda: seen.append(cue in model)
+        model.add(cue)
+        model.reset()
+        assert seen == [True]
+        assert len(model) == 0
+
+    def test_reset_survives_a_cue_that_fails_to_halt(self):
+        """One broken cue must not leave the rest orphaned or the
+        model half-reset."""
+        model = CueModel()
+        bad, good = _make_cue("bad"), _make_cue("good")
+        for cue in (bad, good):
+            cue.CueActions = (CueAction.Interrupt,)
+            model.add(cue)
+        bad.interrupt.side_effect = RuntimeError("boom")
+        reset_called = []
+
+        def on_reset():
+            reset_called.append(True)
+
+        model.model_reset.connect(on_reset)
+        model.reset()
+        good.interrupt.assert_called_once()
+        assert len(model) == 0
+        assert reset_called == [True]
+
 
 class TestCueModelIteration:
     def test_iter(self):
