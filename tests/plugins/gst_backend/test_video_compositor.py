@@ -764,6 +764,18 @@ class TestAttachRollback:
         assert reg.mix_pad is comp.mixer.request_pad.return_value
         comp.pipeline.remove.assert_not_called()
 
+    def test_upload_started_before_appsrc(self):
+        # Dynamically added elements start downstream first: a live
+        # appsrc started first can push stream-start/caps into the
+        # still-NULL upload bin's flushing ghost pad.
+        comp = self._comp()
+        appsrc, upload = self._parts()
+        order = MagicMock()
+        order.attach_mock(appsrc.sync_state_with_parent, "appsrc")
+        order.attach_mock(upload.sync_state_with_parent, "upload")
+        self._attach(comp, appsrc, upload)
+        assert [c[0] for c in order.mock_calls] == ["upload", "appsrc"]
+
     def test_attach_does_not_replan(self):
         comp = self._comp()
         appsrc, upload = self._parts()

@@ -590,7 +590,9 @@ class VideoCompositor:
             result = tail.get_static_pad("src").link(reg.mix_pad)
             if result != Gst.PadLinkReturn.OK:
                 raise RuntimeError(f"cannot link to mixer: {result}")
-            for element in (appsrc, reg.upload):
+            # Downstream first, so the live appsrc never pushes into a
+            # still-NULL (flushing) upload bin.
+            for element in (reg.upload, appsrc):
                 if element is not None and not element.sync_state_with_parent():
                     raise RuntimeError(f"cannot start {element.get_name()}")
         except Exception:
