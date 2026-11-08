@@ -331,7 +331,14 @@ class VideoCompositor:
         # pipeline; GstBackend turns it into a user notification.
         self.failed = Signal()
 
-        self.available = self._build()
+        try:
+            self.available = self._build()
+        except Exception:
+            # e.g. a GLib.Error from parse_bin_from_description. The
+            # build must degrade (audio only), never take the backend
+            # — and every audio cue — down with it.
+            logger.exception("VideoCompositor: projection build failed")
+            self.available = False
         if not self.available:
             logger.warning(
                 "VideoCompositor: projection pipeline unavailable; "
@@ -649,11 +656,25 @@ class VideoCompositor:
         self.pipeline.use_clock(self._clock)
 
         bg = Gst.ElementFactory.make("videotestsrc", None)
-        if bg is None:
+        caps = Gst.ElementFactory.make("capsfilter", None)
+        self.mixer = Gst.ElementFactory.make(plan["mixer"], "mix")
+        # Pins the mixer's output to the canvas size; set_canvas_size()
+        # re-pins it live.
+        self._canvas_filter = Gst.ElementFactory.make("capsfilter", None)
+        tee = Gst.ElementFactory.make("tee", None)
+        proj_q = Gst.ElementFactory.make("queue", None)
+        self._proj_sink = Gst.ElementFactory.make(plan["sink"], None)
+        mon_q = Gst.ElementFactory.make("queue", None)
+        self._mon_sink = Gst.ElementFactory.make(plan["sink"], None)
+        created = (bg, caps, self.mixer, self._canvas_filter, tee,
+                   proj_q, self._proj_sink, mon_q, self._mon_sink)
+        if any(e is None for e in created):
+            # Before any set_property on them.
+            logger.warning("VideoCompositor: element creation failed")
             return False
+
         bg.set_property("pattern", 2)  # black
         bg.set_property("is-live", True)
-        caps = Gst.ElementFactory.make("capsfilter", None)
         caps.set_property(
             "caps",
             Gst.Caps.from_string(
@@ -662,21 +683,12 @@ class VideoCompositor:
             ),
         )
 
-        self.mixer = Gst.ElementFactory.make(plan["mixer"], "mix")
-        # Pins the mixer's output to the canvas size; set_canvas_size()
-        # re-pins it live.
-        self._canvas_filter = Gst.ElementFactory.make("capsfilter", None)
         self._canvas_filter.set_property(
             "caps", _canvas_caps(*self._canvas, self._gl)
         )
-        tee = Gst.ElementFactory.make("tee", None)
-        proj_q = Gst.ElementFactory.make("queue", None)
-        self._proj_sink = Gst.ElementFactory.make(plan["sink"], None)
         # Monitor branch is leaky so a hidden/slow monitor sink can
         # never back-pressure the projection branch.
-        mon_q = Gst.ElementFactory.make("queue", None)
         mon_q.set_property("leaky", 2)  # downstream (drop-oldest)
-        self._mon_sink = Gst.ElementFactory.make(plan["sink"], None)
 
         bg_upload = None
         elems = [bg, caps]

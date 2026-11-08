@@ -121,6 +121,18 @@ class TestCompositorWiring:
         comp.failed.emit()
         assert len(_warnings(app)) == 1
 
+    def test_compositor_constructor_raising_degrades(self, build):
+        # Audio cues must survive: the backend still loads, without a
+        # compositor, and the operator is told video is unavailable.
+        ctor = MagicMock(side_effect=RuntimeError("no GL"))
+        backend, app, _, _ = build(ctor=ctor)
+        assert GstBackend.video_compositor() is None
+        assert len(_warnings(app)) == 1
+        gb.backend.set_backend.assert_called_once_with(backend)
+        assert isinstance(app.video_exclusive_manager,
+                          VideoExclusiveManager)
+        backend.finalize()  # must not raise either
+
     def test_exclusive_manager_installed(self, build):
         backend, app, comp, _ = build()
         assert isinstance(app.video_exclusive_manager,

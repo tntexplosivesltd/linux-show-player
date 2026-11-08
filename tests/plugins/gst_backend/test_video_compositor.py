@@ -662,6 +662,39 @@ class TestFailedBuild:
         assert comp.canvas_size() == (1024, 768)
 
 
+class TestBuildRaises:
+    """A _build() step that raises rather than returning False must
+    degrade to an unavailable compositor (audio only), not propagate
+    and take the whole GstBackend down. The real _build runs; each
+    failure is injected before the pipeline is started."""
+
+    def test_missing_capsfilter_degrades(self):
+        real_make = vc.Gst.ElementFactory.make
+
+        def make(factory, name):
+            if factory == "capsfilter":
+                return None
+            return real_make(factory, name)
+
+        out, mon = _fake_windows()
+        with patch.object(vc.Gst.ElementFactory, "make",
+                          side_effect=make):
+            comp = vc.VideoCompositor(out, mon)
+        assert comp.available is False
+        assert comp.pipeline is None
+
+    def test_upload_bin_parse_error_degrades(self):
+        plan = {"gl": True, "upload": "glupload ! glcolorconvert",
+                "mixer": "compositor", "sink": "fakesink"}
+        out, mon = _fake_windows()
+        with patch.object(vc, "plan_pipeline", return_value=plan), \
+                patch.object(vc, "_make_upload", side_effect=vc.GLib.Error(
+                    "no element \"glupload\"")):
+            comp = vc.VideoCompositor(out, mon)
+        assert comp.available is False
+        assert comp.pipeline is None
+
+
 class TestAppsrcBounds:
     """Each cue's appsrc queue is bounded by time and leaks the
     oldest frame, so a stalled projection cannot grow it forever."""

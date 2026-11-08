@@ -15,6 +15,7 @@
 # You should have received a copy of the GNU General Public License
 # along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
+import logging
 import os.path
 
 from PyQt5.QtCore import Qt, QT_TRANSLATE_NOOP
@@ -51,6 +52,8 @@ from lisp.plugins.gst_backend.gst_waveform import GstWaveform
 from lisp.ui.settings.app_configuration import AppConfigurationDialog
 from lisp.ui.settings.cue_settings import CueSettingsRegistry
 from lisp.ui.ui_utils import translate, qfile_filters
+
+logger = logging.getLogger(__name__)
 
 
 class GstBackend(Plugin, BaseBackend):
@@ -100,18 +103,19 @@ class GstBackend(Plugin, BaseBackend):
         from lisp.plugins.gst_backend.video_compositor import (
             VideoCompositor,
         )
-        GstBackend._video_compositor = VideoCompositor(
-            GstBackend._video_window,
-            GstBackend._monitor_window,
-            canvas_size=GstBackend._video_window.render_size(),
-        )
-        # The canvas follows the output window's render area, so a
-        # cue's fit-to-canvas is its fit-to-window (fullscreen: the
-        # screen; windowed: the window).
-        GstBackend._video_window.render_size_changed.connect(
-            GstBackend._video_compositor.set_canvas_size
-        )
-        if not GstBackend._video_compositor.available:
+        try:
+            GstBackend._video_compositor = VideoCompositor(
+                GstBackend._video_window,
+                GstBackend._monitor_window,
+                canvas_size=GstBackend._video_window.render_size(),
+            )
+        except Exception:
+            # Degrade to audio only rather than lose the whole backend
+            # (and every audio cue) to a projection problem.
+            logger.exception("GstBackend: cannot create VideoCompositor")
+            GstBackend._video_compositor = None
+        compositor = GstBackend._video_compositor
+        if compositor is None or not compositor.available:
             self.app.notify.emit(
                 translate(
                     "GstBackend",
@@ -120,10 +124,15 @@ class GstBackend(Plugin, BaseBackend):
                 ),
                 NotificationLevel.Warning,
             )
-        # A runtime error can still take the pipeline down later.
-        GstBackend._video_compositor.failed.connect(
-            self.__on_compositor_failed
-        )
+        if compositor is not None:
+            # The canvas follows the output window's render area, so a
+            # cue's fit-to-canvas is its fit-to-window (fullscreen: the
+            # screen; windowed: the window).
+            GstBackend._video_window.render_size_changed.connect(
+                compositor.set_canvas_size
+            )
+            # A runtime error can still take the pipeline down later.
+            compositor.failed.connect(self.__on_compositor_failed)
 
         # Block overlapping video/image cue playback.
         self.app.video_exclusive_manager = (
