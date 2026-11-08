@@ -635,6 +635,83 @@ class TestHandoffLinger:
         assert len(sched.removed) == 1  # only the cap timer
 
 
+def _drain(sched):
+    """Fire every pending timer, earliest delay first, including timers
+    the callbacks schedule, until none are left."""
+    while sched.pending:
+        sched.fire(min(p[0] for p in sched.pending))
+
+
+class TestRegistrationChurn:
+    """Many register/unregister cycles, in the patterns a show
+    produces (playlist hand-offs, standalone stops, a stop racing the
+    first frame, quick restarts), must leave nothing behind: no
+    registrations, lingering regs, tracked timers or pending
+    callbacks, and every branch detached exactly once."""
+
+    def _comp(self):
+        comp, sched = TestHandoffLinger._comp(self)
+        detached = []
+        real_detach = comp._detach
+
+        def detach(reg):
+            detached.append(reg)
+            real_detach(reg)  # against the MagicMock pipeline/mixer
+
+        comp._detach = detach
+        return comp, sched, detached
+
+    def _attach(self, _sink):
+        reg = vc.Registration()
+        reg.appsrc = MagicMock()
+        reg.upload = MagicMock()
+        reg.mix_pad = MagicMock()
+        return reg
+
+    def test_churn_leaks_nothing(self):
+        import random
+
+        rng = random.Random(1234)  # reproducible mix of patterns
+        comp, sched, detached = self._comp()
+        attached = []
+
+        def attach(sink):
+            reg = self._attach(sink)
+            attached.append(reg)
+            return reg
+
+        current = None
+        with patch.object(comp, "_attach", side_effect=attach):
+            for _ in range(300):
+                sink = object()
+                reg = comp.register(sink)
+                pattern = rng.choice(
+                    ("handoff", "standalone", "race", "restart"))
+                if pattern == "race" and current is not None:
+                    comp.unregister(current)  # stop before 1st frame
+                    comp.frame_ready(reg)
+                else:
+                    comp.frame_ready(reg)
+                    if current is not None:
+                        comp.unregister(current)
+                if pattern == "restart":
+                    comp.unregister(sink)
+                    reg = comp.register(sink)  # fresh attach
+                    comp.frame_ready(reg)
+                if rng.random() < 0.5:
+                    _drain(sched)  # sometimes timers interleave
+                current = sink
+            comp.unregister(current)
+        _drain(sched)
+
+        assert comp._registrations == {}
+        assert comp._lingering == []
+        assert comp._timers == set()
+        assert sched.pending == []
+        assert len(attached) == len(detached)
+        assert {id(r) for r in attached} == {id(r) for r in detached}
+
+
 class TestFailedBuild:
     """_build can fail after creating the pipeline (Phase 7 #3)."""
 

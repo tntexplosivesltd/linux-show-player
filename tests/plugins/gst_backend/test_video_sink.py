@@ -1,5 +1,6 @@
 """Tests for VideoSink element."""
 
+import time
 from unittest.mock import MagicMock, patch
 
 from lisp.backend.media_element import ElementType, MediaType
@@ -678,3 +679,119 @@ class TestVideoSinkDispose:
             sink.dispose()
             sink.dispose()  # must not raise
 
+
+
+class TestPumpRealTiming:
+    """The pump against real pipelines on one shared clock: frame n
+    must render on the projection when the cue renders it,
+    base_cue + n·frame + L_cue (A/V sync), through the real appsink,
+    real projection_pts and real latency queries.
+
+    The projection's appsrc declares 200ms of latency so the
+    (L_cue − L_proj) term matters: a sign error would land frames
+    ±400ms off. Video only into fakesinks; the cue's audio sink is
+    removed before it leaves NULL, so nothing is audible."""
+
+    PROJ_LATENCY = 200 * Gst.MSECOND
+    FRAMES = 20
+    FRAME = Gst.SECOND // 30
+    TOLERANCE = 25 * Gst.MSECOND
+    PRIME = 1 << 40  # buffer offset of the priming frame
+
+    def _projection(self, clock):
+        proj = Gst.Pipeline.new("projection-test")
+        proj.use_clock(clock)
+        appsrc = Gst.ElementFactory.make("appsrc", None)
+        vc._configure_appsrc(appsrc)
+        appsrc.set_property("min-latency", self.PROJ_LATENCY)
+        sink = Gst.ElementFactory.make("fakesink", None)
+        sink.set_property("sync", True)
+        sink.set_property("signal-handoffs", True)
+        proj.add(appsrc)
+        proj.add(sink)
+        assert appsrc.link(sink)
+        return proj, appsrc, sink
+
+    def _compositor(self, proj, clock, reg):
+        comp = MagicMock()
+        comp.pipeline = proj
+        comp.clock.return_value = clock
+        comp.latency.side_effect = lambda: vc.query_min_latency(proj)
+        comp.register.return_value = reg
+
+        def fit(r, caps):
+            r.caps = caps
+
+        comp.fit_registration.side_effect = fit
+        return comp
+
+    def test_frames_render_on_cue_schedule(self):
+        clock = Gst.SystemClock.obtain()
+        proj, appsrc, proj_sink = self._projection(clock)
+        reg = vc.Registration()
+        reg.appsrc = appsrc
+        comp = self._compositor(proj, clock, reg)
+
+        rendered = {}
+
+        def on_handoff(_sink, buf, _pad):
+            if buf.offset != self.PRIME:
+                rendered[buf.offset] = clock.get_time()
+
+        proj_sink.connect("handoff", on_handoff)
+
+        cue = Gst.Pipeline.new("cue-test")
+        cue.use_clock(clock)
+        video_sink = VideoSink(cue)
+        cue.remove(video_sink.audio_sink)
+        src = Gst.parse_bin_from_description(
+            f"videotestsrc num-buffers={self.FRAMES} ! capsfilter "
+            "caps=video/x-raw,format=I420,width=64,height=48,"
+            "framerate=30/1",
+            True,
+        )
+        cue.add(src)
+        assert src.link(video_sink.video_queue)
+
+        proj.set_state(Gst.State.PLAYING)
+        try:
+            # In production the projection runs from process start,
+            # its sinks already prerolled by the live background. Do
+            # the same with one priming frame: a sink prerolling on
+            # the first cue frame would re-base the projection (new
+            # base time) under frames already mapped. Then let it get
+            # well past its own latency (see the negative-PTS test).
+            appsrc.set_property("caps", Gst.Caps.from_string(
+                "video/x-raw,format=I420,width=64,height=48,"
+                "framerate=30/1"))
+            prime = Gst.Buffer.new_allocate(None, 64 * 48 * 3 // 2, None)
+            prime.offset = self.PRIME
+            prime.pts = clock.get_time() - proj.get_base_time()
+            appsrc.push_buffer(prime)
+            time.sleep(2 * self.PROJ_LATENCY / Gst.SECOND)
+            with patch(_CM, return_value=comp):
+                video_sink.play()
+            cue.set_state(Gst.State.PLAYING)
+            msg = cue.get_bus().timed_pop_filtered(
+                10 * Gst.SECOND,
+                Gst.MessageType.EOS | Gst.MessageType.ERROR)
+            assert msg is not None and msg.type == Gst.MessageType.EOS
+            # The last frames are still due on the projection.
+            deadline = clock.get_time() + 2 * Gst.SECOND
+            while (len(rendered) < self.FRAMES
+                   and clock.get_time() < deadline):
+                proj.get_bus().timed_pop(10 * Gst.MSECOND)
+            cue_base = cue.get_base_time()
+            cue_latency = vc.query_min_latency(cue)
+        finally:
+            cue.set_state(Gst.State.NULL)
+            proj.set_state(Gst.State.NULL)
+
+        assert len(rendered) == self.FRAMES
+        errors = [
+            rendered[n] - (cue_base + n * self.FRAME + cue_latency)
+            for n in sorted(rendered)
+        ]
+        worst = max(errors, key=abs)
+        assert abs(worst) < self.TOLERANCE, (
+            f"worst A/V offset {worst / Gst.MSECOND:.1f}ms")
