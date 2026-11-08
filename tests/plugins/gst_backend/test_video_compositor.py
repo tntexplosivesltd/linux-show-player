@@ -712,6 +712,73 @@ class TestRegistrationChurn:
         assert {id(r) for r in attached} == {id(r) for r in detached}
 
 
+class TestSessionReload:
+    """A session reload disposes the playing cue while its frame
+    lingers, and the new session can register a cue straight away.
+    The old reg must go exactly once (handed off to the new cue's first
+    frame, or by its own timers), and the new cue must be untouched by
+    the old one's late timers. Real VideoSinks (never started: no
+    audio) drive the dispose → unregister path."""
+
+    _CM = ("lisp.plugins.gst_backend.gst_backend.GstBackend."
+           "video_compositor")
+
+    def _setup(self):
+        from lisp.plugins.gst_backend.elements.video_sink import (
+            VideoSink,
+        )
+
+        comp, sched, detached = TestRegistrationChurn._comp(self)
+        regs = {}
+
+        def attach(sink):
+            reg = TestRegistrationChurn._attach(self, sink)
+            regs[sink] = reg
+            return reg
+
+        comp._attach = attach
+
+        def sink():
+            return VideoSink(vc.Gst.Pipeline())
+
+        return comp, sched, detached, regs, sink
+
+    def test_dispose_during_linger_then_new_registration(self):
+        comp, sched, detached, regs, make_sink = self._setup()
+        old, new = make_sink(), make_sink()
+        with patch(self._CM, return_value=comp):
+            old.play()
+            comp.frame_ready(regs[old])
+            old.dispose()  # session teardown: lingers
+            new.play()  # new session, immediately
+        assert comp.is_registered(new)
+        assert regs[old] in comp._lingering
+        comp.frame_ready(regs[new])  # new cue's first frame
+        _drain(sched)
+        assert detached == [regs[old]]  # once, and only the old one
+        assert comp.is_registered(new)
+        assert comp._lingering == []
+        assert comp._timers == set()
+
+    def test_new_cue_without_frames_old_reg_released_by_cap(self):
+        # The new session's cue never shows a frame (e.g. paused at
+        # once): the old frame must not stay up forever.
+        comp, sched, detached, regs, make_sink = self._setup()
+        old, new = make_sink(), make_sink()
+        with patch(self._CM, return_value=comp):
+            old.play()
+            comp.frame_ready(regs[old])
+            old.dispose()
+            new.play()
+        sched.fire(vc.LINGER_MS)
+        assert detached == []  # waits for the successor's frame
+        sched.fire(vc.LINGER_CAP_MS)
+        assert detached == [regs[old]]
+        assert comp.is_registered(new)
+        _drain(sched)
+        assert detached == [regs[old]]
+
+
 class TestFailedBuild:
     """_build can fail after creating the pipeline (Phase 7 #3)."""
 
