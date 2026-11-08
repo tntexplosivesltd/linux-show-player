@@ -861,8 +861,11 @@ class TestBusErrors:
             fired.append(True)
 
         comp.failed.connect(on_failed)
+        # A shared element: its ancestry reaches the (top-level,
+        # parentless) projection pipeline.
+        pipeline.get_parent.return_value = None
         mixer_element = MagicMock()
-        mixer_element.get_parent.return_value = None
+        mixer_element.get_parent.return_value = pipeline
         comp._on_bus_message(
             None, _bus_message(vc.Gst.MessageType.ERROR, mixer_element))
         assert fired == [True]
@@ -887,6 +890,85 @@ class TestBusErrors:
         assert comp.available is True
         assert comp.is_registered(a) is False
         assert comp.is_registered(b) is True
+
+    def _real_comp(self):
+        """A compositor whose pipeline is a real (never started)
+        Gst.Pipeline, so element parentage behaves as in production:
+        pipeline.remove() really unparents a detached branch."""
+        out, mon = _fake_windows()
+
+        def fake_build(self):
+            self.pipeline = vc.Gst.Pipeline.new("projection")
+            self.mixer = MagicMock()
+            return True
+
+        with patch.object(vc.VideoCompositor, "_build", fake_build):
+            comp = vc.VideoCompositor(out, mon)
+        return comp, _FakeScheduler(comp)
+
+    def _register_real(self, comp, sink):
+        """Register a branch built from real elements: an appsrc and an
+        upload bin (identity stands in for glupload ! glcolorconvert)."""
+
+        def attach(_sink):
+            reg = vc.Registration()
+            reg.appsrc = vc.Gst.ElementFactory.make("appsrc", None)
+            reg.upload = vc.Gst.parse_bin_from_description(
+                "identity name=inner", True
+            )
+            comp.pipeline.add(reg.appsrc)
+            comp.pipeline.add(reg.upload)
+            assert reg.appsrc.link(reg.upload)
+            return reg
+
+        with patch.object(comp, "_attach", side_effect=attach):
+            return comp.register(sink)
+
+    def test_second_error_from_dropped_branch_is_ignored(self):
+        """One failing branch posts two ERRORs before the main loop
+        handles the first: the upload child's, then basesrc's
+        'Internal data stream error' from the appsrc. The first drops
+        the branch; the second must not take the projection down."""
+        comp, _ = self._real_comp()
+        other = object()
+        reg = self._register_real(comp, object())
+        self._register_real(comp, other)
+        appsrc = reg.appsrc
+        inner = reg.upload.get_by_name("inner")
+        fired = []
+
+        def on_failed():
+            fired.append(True)
+
+        comp.failed.connect(on_failed)
+        comp._on_bus_message(
+            None, _bus_message(vc.Gst.MessageType.ERROR, inner))
+        comp._on_bus_message(
+            None, _bus_message(vc.Gst.MessageType.ERROR, appsrc))
+        assert fired == []
+        assert comp.available is True
+        assert comp.is_registered(other) is True
+
+    def test_late_error_after_linger_release_is_ignored(self):
+        comp, sched = self._real_comp()
+        sink = object()
+        reg = self._register_real(comp, sink)
+        appsrc = reg.appsrc
+        comp.unregister(sink)
+        sched.fire(vc.LINGER_MS)  # no successor -> released
+        assert appsrc.get_parent() is None
+        comp._on_bus_message(
+            None, _bus_message(vc.Gst.MessageType.ERROR, appsrc))
+        assert comp.available is True
+
+    def test_error_from_shared_element_still_shuts_down(self):
+        comp, _ = self._real_comp()
+        self._register_real(comp, object())
+        tee = vc.Gst.ElementFactory.make("tee", None)
+        comp.pipeline.add(tee)
+        comp._on_bus_message(
+            None, _bus_message(vc.Gst.MessageType.ERROR, tee))
+        assert comp.available is False
 
     def test_warning_is_only_logged(self, caplog):
         comp = self._comp()

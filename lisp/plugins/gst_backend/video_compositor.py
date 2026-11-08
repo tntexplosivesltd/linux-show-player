@@ -752,6 +752,17 @@ class VideoCompositor:
                 )
                 self._drop_branch(reg)
                 return
+            if not self._in_pipeline(message.src):
+                # A branch already detached (dropped or released). One
+                # failing branch posts several ERRORs (the upload
+                # child's, then the appsrc's "Internal data stream
+                # error") before the first is handled here; the late
+                # ones are not the shared pipeline failing.
+                logger.debug(
+                    "VideoCompositor: ignoring error from a detached "
+                    "branch: %s (%s)", error.message, debug,
+                )
+                return
             logger.error(
                 "VideoCompositor: projection pipeline failed: %s (%s)",
                 error.message, debug,
@@ -769,6 +780,21 @@ class VideoCompositor:
                     return reg
             element = element.get_parent()
         return None
+
+    def _in_pipeline(self, element):
+        """True if `element` is (inside) the live projection pipeline.
+        _detach removes a branch's appsrc/upload bin from the pipeline,
+        which unparents them, so their ancestry no longer reaches it.
+
+        Structural on purpose, not a WeakSet of detached elements: that
+        would hold PyGObject wrappers, and a message can outlive the
+        wrapper (it keeps the GObject alive, then gets a new one)."""
+        pipeline = self.pipeline
+        while element is not None:
+            if element == pipeline:
+                return True
+            element = element.get_parent()
+        return False
 
     def _drop_branch(self, reg):
         """Main loop. Forget and detach one failed registration. Its
