@@ -16,11 +16,16 @@
 # along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
 import logging
+import time
 
 from lisp.core.model import Model
-from lisp.cues.cue import Cue, CueAction
+from lisp.cues.cue import Cue, CueAction, CueState
 
 logger = logging.getLogger(__name__)
+
+# States in which a cue holds resources (media, a projection sink, a
+# fade or wait thread) that halting it releases.
+_ACTIVE = CueState.IsRunning | CueState.IsPaused
 
 
 class CueModel(Model):
@@ -29,6 +34,10 @@ class CueModel(Model):
     The model can be iterated to retrieve the cues, to get id-cue pairs
     use the items() function, to get only the id(s) use the keys() function.
     """
+
+    # Longest `reset()` waits, in seconds, for the cues it halts to
+    # leave their active states.
+    HALT_TIMEOUT = 2.0
 
     def __init__(self):
         super().__init__()
@@ -114,31 +123,66 @@ class CueModel(Model):
         return self.__cues.keys()
 
     def reset(self):
-        # Halt every cue before dropping it, as pop() does. Session
-        # teardown (Session.finalize) ends here: without this, running
-        # cues are orphaned -- never interrupted, never emitting
-        # interrupted/stopped -- and one kept alive (e.g. by a running
-        # fade) keeps playing and its projection sink, blocking every
-        # video/image cue of the next session. Halt while the cues are
-        # still in the model, so their signal handlers can look them up.
-        for cue in list(self.__cues.values()):
-            try:
-                self._halt(cue)
-            except Exception:
-                logger.exception(
-                    "Failed to halt cue %r on model reset", cue.id
-                )
+        """Halt every active cue, then empty the model.
+
+        Session teardown (`Session.finalize`) ends here. Without the
+        halt, running cues are orphaned: never interrupted, never
+        emitting interrupted/stopped, and one kept alive (e.g. by a
+        running fade) keeps playing and keeps its projection sink,
+        blocking every video/image cue of the next session.
+
+        `Cue.interrupt`/`stop` run on their own threads, so this waits
+        -- by polling state, never taking a cue's lock on this thread
+        -- up to `HALT_TIMEOUT` for the halted cues to stop before
+        clearing. So pipelines are released before the next session
+        exists, and handlers connected directly to interrupted/stopped
+        (which run on the halting thread) still find the cue in the
+        model. Queued handlers run later, after the clear. A cue still
+        active at the deadline is logged and dropped anyway.
+        """
+        halting = [cue for cue in self.__cues.values() if self._halt(cue)]
+        self._wait_halted(halting)
 
         self.__cues.clear()
         self.model_reset.emit()
 
     @staticmethod
     def _halt(cue):
-        """Interrupt the cue, or stop it if it can't be interrupted."""
-        if CueAction.Interrupt in cue.CueActions:
-            cue.interrupt()
-        elif CueAction.Stop in cue.CueActions:
-            cue.stop()
+        """Interrupt *cue*, or stop it if it can't be interrupted.
+
+        Only active cues are halted: an idle one has nothing to
+        release, and each halt starts a thread. Returns whether a halt
+        was dispatched. A cue that fails to dispatch is logged, so one
+        broken cue can't stop the others from being halted.
+        """
+        try:
+            if not cue.state & _ACTIVE:
+                return False
+            if CueAction.Interrupt in cue.CueActions:
+                cue.interrupt()
+            elif CueAction.Stop in cue.CueActions:
+                cue.stop()
+            else:
+                return False
+        except Exception:
+            logger.exception("Failed to halt cue %r", cue.id)
+            return False
+        return True
+
+    def _wait_halted(self, cues):
+        """Wait, up to `HALT_TIMEOUT` in all, for *cues* to go idle."""
+        deadline = time.monotonic() + self.HALT_TIMEOUT
+        for cue in cues:
+            while cue.state & _ACTIVE:
+                if time.monotonic() >= deadline:
+                    logger.warning(
+                        "Cue %r still active %ss after being halted; "
+                        "dropping it anyway",
+                        cue.id,
+                        self.HALT_TIMEOUT,
+                    )
+                    break
+                time.sleep(0.005)
 
     def filter(self, cue_class=Cue):
         """Return an iterator over cues that are instances of the given class"""

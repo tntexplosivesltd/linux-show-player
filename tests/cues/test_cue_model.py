@@ -1,8 +1,12 @@
+import logging
+import threading
+import time
+
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from lisp.cues.cue_model import CueModel
-from lisp.cues.cue import CueAction
+from lisp.cues.cue import Cue, CueAction, CueState
 
 
 def _make_cue(cue_id="cue-1", group_id=""):
@@ -355,61 +359,228 @@ class TestCueModelReset:
         model.reset()
         assert reset_called == [True]
 
-    # Session teardown (Session.finalize -> reset) must halt running
-    # cues like pop() does; otherwise they are orphaned, and one held
-    # alive (e.g. by a running fade) keeps playing and its projection.
-
-    def test_reset_interrupts_cues(self):
+    def test_reset_empty_model(self):
         model = CueModel()
-        a, b = _make_cue("a"), _make_cue("b")
-        for cue in (a, b):
-            cue.CueActions = (CueAction.Interrupt,)
-            model.add(cue)
         model.reset()
-        a.interrupt.assert_called_once()
-        b.interrupt.assert_called_once()
-
-    def test_reset_stops_cue_without_interrupt(self):
-        model = CueModel()
-        cue = _make_cue()
-        cue.CueActions = (CueAction.Stop,)
-        model.add(cue)
-        model.reset()
-        cue.stop.assert_called_once()
-        cue.interrupt.assert_not_called()
-
-    def test_reset_halts_cues_before_clearing(self):
-        """Handlers of the cue's interrupted/stopped signals may look
-        it up in the model, so it must still be there when halted."""
-        model = CueModel()
-        cue = _make_cue("a")
-        cue.CueActions = (CueAction.Interrupt,)
-        seen = []
-        cue.interrupt.side_effect = lambda: seen.append(cue in model)
-        model.add(cue)
-        model.reset()
-        assert seen == [True]
         assert len(model) == 0
 
-    def test_reset_survives_a_cue_that_fails_to_halt(self):
-        """One broken cue must not leave the rest orphaned or the
-        model half-reset."""
+
+# ---------------------------------------------------------------------------
+# Session teardown (Session.finalize -> reset) must halt running cues, as
+# pop() does: otherwise they're orphaned, and one held alive (e.g. by a
+# running fade) keeps playing and keeps its projection sink. These use
+# real cues: `Cue.interrupt`/`stop` run on their own threads, so mocks
+# with synchronous methods would test behaviour production doesn't have.
+# ---------------------------------------------------------------------------
+
+
+class _HaltableCue(Cue):
+    """A real cue whose interrupt/stop takes `delay` seconds, as
+    releasing media or a fade does, and can be held by `release`."""
+
+    CueActions = (CueAction.Start, CueAction.Stop, CueAction.Interrupt)
+
+    def __init__(self, app, id=None, delay=0.05):
+        super().__init__(app, id=id)
+        self.delay = delay
+        self.release = threading.Event()
+        self.release.set()
+        self.halts = 0
+
+    def _halting(self):
+        self.halts += 1
+        time.sleep(self.delay)
+        self.release.wait()
+
+    def __interrupt__(self, fade=False):
+        self._halting()
+
+    def __stop__(self, fade=False):
+        self._halting()
+        return True
+
+
+class _StopOnlyCue(_HaltableCue):
+    CueActions = (CueAction.Start, CueAction.Stop)
+
+
+class _NoHaltCue(_HaltableCue):
+    CueActions = (CueAction.Start,)
+
+
+def _active(cls, app, cue_id, state=CueState.Running, **kwargs):
+    cue = cls(app, id=cue_id, **kwargs)
+    cue._state = state
+    return cue
+
+
+class TestCueModelResetHalts:
+    # Running/Pause go through the slow `__interrupt__`, so they pin
+    # the wait. PreWait is set to Stop by `Cue.interrupt` itself, so it
+    # pins only that PreWait counts as active (an `_ACTIVE` of just
+    # Running | Pause would leave it running).
+    @pytest.mark.parametrize(
+        "state", [CueState.Running, CueState.Pause, CueState.PreWait]
+    )
+    def test_active_cues_are_stopped_when_reset_returns(
+        self, mock_app, state
+    ):
         model = CueModel()
-        bad, good = _make_cue("bad"), _make_cue("good")
-        for cue in (bad, good):
-            cue.CueActions = (CueAction.Interrupt,)
+        cues = [
+            _active(_HaltableCue, mock_app, "a", state),
+            _active(_HaltableCue, mock_app, "b", state),
+        ]
+        for cue in cues:
             model.add(cue)
-        bad.interrupt.side_effect = RuntimeError("boom")
+
+        model.reset()
+
+        # Not "eventually": reset waits for the halt threads, so the
+        # next session never starts alongside the old cues.
+        assert [cue.state for cue in cues] == [CueState.Stop] * 2
+        assert len(model) == 0
+
+    @pytest.mark.parametrize(
+        "state",
+        [
+            CueState.Stop | CueState.PostWait,
+            CueState.Stop | CueState.PostWait_Pause,
+            CueState.PreWait_Pause,
+        ],
+    )
+    def test_waiting_cues_have_their_wait_cancelled(self, mock_app, state):
+        # A finished cue still counting its post-wait would otherwise
+        # fire its follow-up after the session has been replaced.
+        model = CueModel()
+        cue = _active(_HaltableCue, mock_app, "a", state)
+        model.add(cue)
+
+        model.reset()
+
+        assert cue.state == CueState.Stop
+        assert len(model) == 0
+
+    def test_cue_without_interrupt_is_stopped(self, mock_app):
+        model = CueModel()
+        cue = _active(_StopOnlyCue, mock_app, "a")
+        model.add(cue)
+
+        model.reset()
+
+        assert cue.state == CueState.Stop
+        assert cue.halts == 1
+
+    def test_idle_cues_are_not_halted(self, mock_app):
+        model = CueModel()
+        idle = _HaltableCue(mock_app, id="idle")
+        model.add(idle)
+
+        with patch.object(idle, "interrupt") as interrupt:
+            model.reset()
+
+        interrupt.assert_not_called()
+        assert len(model) == 0
+
+    def test_cue_with_no_halt_action_is_dropped_without_waiting(
+        self, mock_app, monkeypatch
+    ):
+        monkeypatch.setattr(CueModel, "HALT_TIMEOUT", 5.0)
+        model = CueModel()
+        model.add(_active(_NoHaltCue, mock_app, "a"))
+
+        started = time.monotonic()
+        model.reset()
+
+        assert time.monotonic() - started < 1.0
+        assert len(model) == 0
+
+    def test_direct_handlers_still_find_the_cue_in_the_model(
+        self, mock_app
+    ):
+        model = CueModel()
+        cue = _active(_HaltableCue, mock_app, "a")
+        model.add(cue)
+        found = []
+
+        # A named function: signals hold weak references.
+        def on_interrupted(c):
+            found.append(model.get(c.id) is c)
+
+        cue.interrupted.connect(on_interrupted)
+        model.reset()
+
+        assert found == [True]
+        assert len(model) == 0
+
+    def test_a_stuck_cue_delays_reset_only_up_to_the_timeout(
+        self, mock_app, monkeypatch, caplog
+    ):
+        monkeypatch.setattr(CueModel, "HALT_TIMEOUT", 0.2)
+        model = CueModel()
+        stuck = _active(_HaltableCue, mock_app, "stuck")
+        stuck.release.clear()
+        model.add(stuck)
+        try:
+            started = time.monotonic()
+            with caplog.at_level(logging.WARNING):
+                model.reset()
+            elapsed = time.monotonic() - started
+        finally:
+            stuck.release.set()
+
+        assert 0.2 <= elapsed < 1.5
+        assert len(model) == 0
+        assert "still active" in caplog.text
+
+    def test_a_cue_that_fails_to_halt_does_not_stop_the_rest(
+        self, mock_app, caplog
+    ):
+        model = CueModel()
+        bad = _active(_HaltableCue, mock_app, "bad")
+        good = _active(_HaltableCue, mock_app, "good")
+        model.add(bad)
+        model.add(good)
         reset_called = []
 
         def on_reset():
             reset_called.append(True)
 
         model.model_reset.connect(on_reset)
-        model.reset()
-        good.interrupt.assert_called_once()
+        with patch.object(
+            bad, "interrupt", side_effect=RuntimeError("boom")
+        ), caplog.at_level(logging.ERROR):
+            model.reset()
+
+        assert good.state == CueState.Stop
         assert len(model) == 0
         assert reset_called == [True]
+        assert "Failed to halt cue 'bad'" in caplog.text
+
+    def test_running_group_and_children_are_all_stopped(self, mock_app):
+        # GroupCue.__interrupt__ cascades to its children through
+        # app.cue_model, which must still hold them at that point.
+        from lisp.plugins.action_cues.group_cue import GroupCue
+
+        model = CueModel()
+        app = MagicMock()
+        app.cue_model = model
+        group = GroupCue(app, id="g")
+        children = [
+            _active(_HaltableCue, mock_app, f"c{i}") for i in range(2)
+        ]
+        group.children = [child.id for child in children]
+        for child in children:
+            child.group_id = "g"
+        group._state = CueState.Running
+        model.add(group)
+        for child in children:
+            model.add(child)
+
+        model.reset()
+
+        assert group.state & CueState.IsStopped
+        assert [c.state for c in children] == [CueState.Stop] * 2
+        assert len(model) == 0
 
 
 class TestCueModelIteration:
