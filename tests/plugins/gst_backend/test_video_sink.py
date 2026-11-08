@@ -64,6 +64,78 @@ class TestVideoSinkConstruction:
         assert 0 < PUMP_LEAD <= 200 * Gst.MSECOND
 
 
+class TestAppsinkCaps:
+    """The appsink restricts caps to 8-bit system-memory formats both
+    projection plans accept, so the cue's own videoconvert converts
+    (on the cue's thread) instead of exotic formats reaching the shared
+    projection pipeline, where a failed negotiation hurts every cue.
+
+    Real VideoSink, real negotiation. The audio sink is removed before
+    the pipeline leaves NULL, so no audio device is opened."""
+
+    def _negotiated(self, fmt, width=320, height=240):
+        pipeline = Gst.Pipeline()
+        sink = VideoSink(pipeline)
+        pipeline.remove(sink.audio_sink)
+        upstream = Gst.parse_bin_from_description(
+            f"videotestsrc num-buffers=1 ! video/x-raw,format={fmt},"
+            f"width={width},height={height} ! videoconvert ! videoscale",
+            True,
+        )
+        pipeline.add(upstream)
+        assert upstream.link(sink.video_queue)
+        pipeline.set_state(Gst.State.PAUSED)
+        try:
+            ret, _, _ = pipeline.get_state(5 * Gst.SECOND)
+            assert ret != Gst.StateChangeReturn.FAILURE
+            caps = sink.video_appsink.get_static_pad(
+                "sink"
+            ).get_current_caps()
+        finally:
+            pipeline.set_state(Gst.State.NULL)
+        return caps
+
+    def test_gray16_converted_before_appsink(self):
+        caps = self._negotiated("GRAY16_LE")
+        fmt = caps.get_structure(0).get_string("format")
+        assert fmt != "GRAY16_LE"
+        assert fmt in vc.PROJECTION_FORMATS
+
+    def test_10bit_converted_before_appsink(self):
+        caps = self._negotiated("I420_10LE")
+        fmt = caps.get_structure(0).get_string("format")
+        assert fmt != "I420_10LE"
+        assert fmt in vc.PROJECTION_FORMATS
+
+    def test_v210_converted_before_appsink(self):
+        # glupload on GStreamer 1.24 cannot take v210 at all.
+        caps = self._negotiated("v210")
+        assert caps.get_structure(0).get_string("format") != "v210"
+
+    def test_common_decoder_format_passes_unconverted(self):
+        caps = self._negotiated("I420")
+        assert caps.get_structure(0).get_string("format") == "I420"
+
+    def test_system_memory_only(self):
+        caps = self._negotiated("NV12")
+        features = caps.get_features(0)
+        assert features.contains("memory:SystemMemory")
+
+    def test_every_allowed_format_feeds_software_compositor(self):
+        """The fallback plan's mixer takes every allowed format. (The
+        GL plan needs a display; probed on GStreamer 1.24 and 1.28 in
+        lisp-e2e-ci/pr14-fix/probe_negotiate.py.)"""
+        for fmt in vc.PROJECTION_FORMATS:
+            pipeline = Gst.parse_launch(
+                f"videotestsrc num-buffers=1 ! video/x-raw,format={fmt},"
+                "width=64,height=48 ! compositor ! fakesink"
+            )
+            pipeline.set_state(Gst.State.PAUSED)
+            ret, _, _ = pipeline.get_state(5 * Gst.SECOND)
+            pipeline.set_state(Gst.State.NULL)
+            assert ret != Gst.StateChangeReturn.FAILURE, fmt
+
+
 def _mock_input(**kwargs):
     """Create a mock input element (no video_sink attr)."""
     mock = MagicMock(spec=["video_src", "src"])

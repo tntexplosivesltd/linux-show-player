@@ -71,6 +71,29 @@ APPSRC_MAX_QUEUE_TIME = 500 * Gst.MSECOND
 LATENCY_CACHE_NS = 250 * Gst.MSECOND
 
 
+# Raw formats a cue may hand the projection: what both plans (glupload !
+# glcolorconvert, and the software compositor) take on GStreamer 1.24
+# and 1.28, restricted to 8-bit. Their templates advertise far more,
+# but 10/16-bit uploads depend on the GL driver (v210 does not even
+# link on 1.24), so anything else is converted by the cue's own
+# videoconvert, on the cue's thread: a format the shared pipeline then
+# fails to negotiate would hurt every cue. No size cap: videoscale
+# meets one by changing the pixel aspect (8K -> anamorphic 4096x4096).
+PROJECTION_FORMATS = (
+    "I420", "YV12", "NV12", "NV21", "Y42B", "Y444", "YUY2", "UYVY",
+    "AYUV", "RGBA", "BGRA", "RGBx", "BGRx", "ARGB", "ABGR", "xRGB",
+    "xBGR", "RGB", "BGR",
+)
+
+
+def projection_input_caps():
+    """Caps for a cue's appsink: system memory, PROJECTION_FORMATS."""
+    formats = ", ".join(PROJECTION_FORMATS)
+    return Gst.Caps.from_string(
+        f"video/x-raw(memory:SystemMemory),format={{ {formats} }}"
+    )
+
+
 def query_min_latency(pipeline):
     """Min latency (ns) of `pipeline` from a latency query, 0 if the
     query fails (e.g. a non-live cue pipeline before PLAYING).

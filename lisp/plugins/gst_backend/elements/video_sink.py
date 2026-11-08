@@ -26,6 +26,7 @@ from lisp.plugins.gst_backend.gst_element import GstMediaElement
 # Cycle-safe: video_compositor imports only gi_repository.
 from lisp.plugins.gst_backend.video_compositor import (
     APPSRC_MAX_QUEUE_TIME,
+    projection_input_caps,
     projection_pts,
     query_min_latency,
 )
@@ -106,6 +107,9 @@ class VideoSink(GstMediaElement):
         self.video_appsink.set_property("ts-offset", -PUMP_LEAD)
         self.video_appsink.set_property("max-buffers", 2)
         self.video_appsink.set_property("drop", True)
+        # Only formats the projection takes: the cue's videoconvert
+        # converts anything else here, not in the shared pipeline.
+        self.video_appsink.set_property("caps", projection_input_caps())
         self.pipeline.add(self.video_queue)
         self.pipeline.add(self.video_appsink)
         self.video_queue.link(self.video_appsink)
