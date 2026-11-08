@@ -279,6 +279,13 @@ class VideoSink(GstMediaElement):
                 projection.get_base_time(),
                 reg.cue_latency - compositor.latency(),
             )
+            if pts < 0:
+                # Due before the projection's running time 0: only
+                # possible just after the projection pipeline was
+                # (re)built, while L_proj still exceeds rt + the
+                # base-time gap. Late by definition, and a buffer PTS
+                # cannot be negative.
+                return
             if pts > now + MAX_AHEAD:
                 # A healthy frame is at most ~PUMP_LEAD ahead. One
                 # stamped further out (the first sample after a pulled

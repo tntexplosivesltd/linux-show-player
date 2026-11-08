@@ -389,6 +389,23 @@ class TestVideoSinkPump:
         assert [i for i in later if cue_latency_due(i)] == [
             i for i in later if i % LATENCY_REFRESH_BUFFERS == 0]
 
+    def test_frame_due_before_projection_start_is_dropped(self, caplog):
+        # Just after the projection pipeline is (re)built its running
+        # time is near 0, and L_proj can exceed rt + (cue_base −
+        # proj_base): the mapped PTS goes negative. That frame is due
+        # before the projection existed — late — and is dropped, not
+        # pushed (a negative PTS cannot even be set on a buffer).
+        sink, comp, reg, buf, sample, appsink = self._setup()
+        comp.pipeline.get_base_time.return_value = 11500 * Gst.MSECOND
+        comp.clock.return_value.get_time.return_value = (
+            11510 * Gst.MSECOND)
+        sample.get_segment.return_value.to_running_time.return_value = 0
+        buf.copy.return_value = Gst.Buffer.new()  # real: rejects < 0
+        rets, _ = self._run(sink, appsink)  # pts = 0 + 0 + (0 − 86ms)
+        assert rets == [Gst.FlowReturn.OK]
+        reg.appsrc.push_buffer.assert_not_called()
+        assert "pump failed" not in caplog.text
+
     def test_cue_latency_change_during_warmup_applies_next_buffer(self):
         # A cue latency that settles after the first buffer must be
         # picked up straight away, not ~1s later.
@@ -660,3 +677,4 @@ class TestVideoSinkDispose:
         with patch(_CM, return_value=None):
             sink.dispose()
             sink.dispose()  # must not raise
+
