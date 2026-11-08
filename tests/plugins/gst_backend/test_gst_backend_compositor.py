@@ -29,6 +29,8 @@ class _FakeCompositor:
     def __init__(self, available=True):
         self.available = available
         self.failed = Signal()
+        self.restored = Signal()
+        self.gave_up = Signal()
         self.set_canvas_size = MagicMock()
         self.shutdown = MagicMock()
         self.register = MagicMock(return_value=None)
@@ -137,6 +139,54 @@ class TestCompositorWiring:
         backend, app, comp, _ = build()
         assert isinstance(app.video_exclusive_manager,
                           VideoExclusiveManager)
+
+
+class TestRecovery:
+    """failed → a rebuild is coming; restored → active cues re-attach
+    (and the operator is told); gave_up → audio only for good."""
+
+    def _played(self):
+        sink = VideoSink(Gst.Pipeline())  # never started: no audio
+        with patch.object(GstBackend, "_video_compositor", None):
+            sink.play()  # active, no branch (compositor down)
+        return sink
+
+    def test_failure_warns_that_a_restart_is_coming(self, build):
+        backend, app, comp, _ = build()
+        comp.failed.emit()
+        (call,) = _warnings(app)
+        assert "restart" in call.args[0].lower()
+
+    def test_restored_reattaches_active_sinks_only(self, build):
+        backend, app, comp, _ = build()
+        playing, stopped = self._played(), self._played()
+        stopped.stop()
+        with patch.object(VideoSink, "reattach", autospec=True) as reattach:
+            comp.restored.emit()
+        # autospec passes the sink as the first argument.
+        assert [c.args for c in reattach.call_args_list] == [
+            (playing, comp)]
+
+    def test_restored_gives_playing_cue_a_branch(self, build):
+        backend, app, comp, _ = build()
+        sink = self._played()
+        assert sink._registration is None
+        reg = object()
+        comp.register.return_value = reg
+        comp.restored.emit()
+        assert sink._registration is reg
+
+    def test_restored_notifies(self, build):
+        backend, app, comp, _ = build()
+        comp.restored.emit()
+        levels = [c.args[1] for c in app.notify.emit.call_args_list]
+        assert NotificationLevel.Info in levels
+
+    def test_gave_up_warns_audio_only(self, build):
+        backend, app, comp, _ = build()
+        comp.gave_up.emit()
+        (call,) = _warnings(app)
+        assert "audio only" in call.args[0]
 
 
 class TestFinalize:

@@ -1159,6 +1159,171 @@ class TestBusErrors:
         assert "simulated" in caplog.text
 
 
+class TestRebuildAfterFailure:
+    """A shared-pipeline ERROR no longer ends video for the rest of the
+    process: the compositor tears the pipeline down, then rebuilds it
+    on the main loop with backoff (REBUILD_BACKOFF_MS), and gives up
+    after the last attempt. A failure long after a good rebuild starts
+    the backoff over. shutdown() (finalize) cancels a pending
+    rebuild."""
+
+    _MONO = "lisp.plugins.gst_backend.video_compositor.time.monotonic"
+
+    def _comp(self):
+        out, mon = _fake_windows()
+
+        def fake_build(self):
+            self.pipeline = MagicMock()
+            self.pipeline.get_parent.return_value = None
+            self.mixer = MagicMock()
+            return True
+
+        with patch.object(vc.VideoCompositor, "_build", fake_build):
+            comp = vc.VideoCompositor(out, mon)
+        sched = _FakeScheduler(comp)
+        builds = []
+
+        def rebuild_ok():
+            fake_build(comp)
+            builds.append(True)
+            return True
+
+        comp._build = MagicMock(side_effect=rebuild_ok)
+        events = {"failed": 0, "restored": 0, "gave_up": 0}
+        handlers = {}
+        for name in events:
+            def handler(name=name):
+                events[name] += 1
+            handlers[name] = handler  # strong ref: signals are weak
+            getattr(comp, name).connect(handler)
+        comp._test_handlers = handlers
+        return comp, sched, events
+
+    def _fail(self, comp):
+        """A pipeline-level ERROR (from an element of the pipeline)."""
+        element = MagicMock()
+        element.get_parent.return_value = comp.pipeline
+        comp._on_bus_message(
+            None, _bus_message(vc.Gst.MessageType.ERROR, element))
+
+    def test_failure_tears_down_and_schedules_rebuild(self):
+        comp, sched, events = self._comp()
+        old = comp.pipeline
+        self._fail(comp)
+        old.set_state.assert_called_with(vc.Gst.State.NULL)
+        assert comp.available is False
+        assert comp.pipeline is None
+        assert events["failed"] == 1
+        assert [p[0] for p in sched.pending] == [vc.REBUILD_BACKOFF_MS[0]]
+
+    def test_rebuild_restores_the_projection(self):
+        comp, sched, events = self._comp()
+        self._fail(comp)
+        sched.fire(vc.REBUILD_BACKOFF_MS[0])
+        assert comp.available is True
+        assert comp.pipeline is not None
+        assert events["restored"] == 1
+
+    def test_failed_rebuilds_back_off_then_give_up(self):
+        comp, sched, events = self._comp()
+        comp._build = MagicMock(return_value=False)
+        self._fail(comp)
+        for delay in vc.REBUILD_BACKOFF_MS:
+            assert [p[0] for p in sched.pending] == [delay]
+            sched.fire(delay)
+        assert sched.pending == []
+        assert comp._build.call_count == len(vc.REBUILD_BACKOFF_MS)
+        assert comp.available is False
+        assert events["gave_up"] == 1
+        assert events["restored"] == 0
+
+    def test_rebuild_that_raises_counts_as_failed(self):
+        comp, sched, events = self._comp()
+        comp._build = MagicMock(side_effect=RuntimeError("GL gone"))
+        self._fail(comp)
+        sched.fire(vc.REBUILD_BACKOFF_MS[0])
+        assert comp.available is False
+        assert [p[0] for p in sched.pending] == [vc.REBUILD_BACKOFF_MS[1]]
+
+    def test_quick_refailure_escalates_backoff(self):
+        comp, sched, events = self._comp()
+        with patch(self._MONO, return_value=1000.0):
+            self._fail(comp)
+            sched.fire(vc.REBUILD_BACKOFF_MS[0])
+            self._fail(comp)  # fails again right after the rebuild
+        assert [p[0] for p in sched.pending] == [vc.REBUILD_BACKOFF_MS[1]]
+
+    def test_failure_long_after_rebuild_resets_backoff(self):
+        comp, sched, events = self._comp()
+        with patch(self._MONO, return_value=1000.0):
+            self._fail(comp)
+            sched.fire(vc.REBUILD_BACKOFF_MS[0])
+        later = 1000.0 + vc.REBUILD_STABLE_MS / 1000 + 1
+        with patch(self._MONO, return_value=later):
+            self._fail(comp)
+        assert [p[0] for p in sched.pending] == [vc.REBUILD_BACKOFF_MS[0]]
+
+    def test_shutdown_cancels_pending_rebuild(self):
+        comp, sched, events = self._comp()
+        self._fail(comp)
+        comp.shutdown()  # finalize during the backoff
+        assert sched.pending == []
+        comp._rebuild()  # a timer that fired anyway: still a no-op
+        comp._build.assert_not_called()
+        assert comp.available is False
+
+    def test_failure_drops_registrations_of_dead_pipeline(self):
+        comp, sched, events = self._comp()
+        sink = object()
+        with patch.object(comp, "_attach", return_value=vc.Registration()):
+            comp.register(sink)
+        self._fail(comp)
+        assert comp.is_registered(sink) is False
+        sched.fire(vc.REBUILD_BACKOFF_MS[0])
+        assert comp.is_registered(sink) is False  # re-attach is explicit
+
+    def test_real_pipeline_fail_rebuild_reregister(self):
+        """The real _build/_teardown/_attach cycle on GStreamer, with
+        the software plan into fakesinks: no window, GL or audio."""
+        plan = {"gl": False, "upload": None, "mixer": "compositor",
+                "sink": "fakesink"}
+        out, mon = _fake_windows()
+        with patch.object(vc, "plan_pipeline", return_value=plan):
+            comp = vc.VideoCompositor(out, mon, canvas_size=(64, 48))
+            try:
+                assert comp.available is True
+                sched = _FakeScheduler(comp)
+                first = comp.pipeline
+                sink = object()
+                assert comp.register(sink) is not None
+                comp._fail()
+                assert comp.pipeline is None
+                assert first.get_state(0)[1] == vc.Gst.State.NULL
+                sched.fire(vc.REBUILD_BACKOFF_MS[0])
+                assert comp.available is True
+                assert comp.pipeline is not first
+                ret, state, _ = comp.pipeline.get_state(vc.Gst.SECOND)
+                assert state == vc.Gst.State.PLAYING
+                reg = comp.register(sink)  # re-attach on the new one
+                assert reg is not None
+                assert reg.appsrc.get_parent() is comp.pipeline
+            finally:
+                comp.shutdown()
+
+    def test_branch_error_does_not_rebuild(self):
+        comp, sched, events = self._comp()
+        reg = vc.Registration()
+        reg.appsrc = MagicMock()
+        reg.appsrc.get_parent.return_value = comp.pipeline
+        with patch.object(comp, "_attach", return_value=reg):
+            comp.register(object())
+        with patch.object(comp, "_detach"):
+            comp._on_bus_message(
+                None, _bus_message(vc.Gst.MessageType.ERROR, reg.appsrc))
+        assert events["failed"] == 0
+        assert sched.pending == []
+
+
 class TestLatencyCache:
     """One cached projection latency for every cue's pump (Phase 7
     #4), instead of each pump walking the GL pipeline."""

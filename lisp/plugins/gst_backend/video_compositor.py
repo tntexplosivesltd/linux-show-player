@@ -47,6 +47,14 @@ LINGER_MS = 100
 HANDOFF_RELEASE_MS = 250
 LINGER_CAP_MS = 3000
 
+# Recovery after a shared-pipeline failure: rebuild on the main loop
+# after each delay in turn, then give up (audio only until restart). A
+# failure more than REBUILD_STABLE_MS after a good rebuild is a new
+# incident and starts the backoff over, so a long show cannot use up
+# its retries on unrelated hiccups hours apart.
+REBUILD_BACKOFF_MS = (1000, 5000, 30000)
+REBUILD_STABLE_MS = 60000
+
 # The black background source is tiny; its mixer pad is scaled to the
 # canvas, so resizing the canvas never renegotiates the source.
 BG_SIZE = 16
@@ -327,18 +335,22 @@ class VideoCompositor:
         # None = re-query on the next latency() call.
         self._latency = None
         self._latency_at = 0
-        # Emitted (main loop) when a runtime error kills the projection
-        # pipeline; GstBackend turns it into a user notification.
+        # Emitted on the main loop. failed: a runtime error killed the
+        # projection pipeline (a rebuild is scheduled). restored: a
+        # rebuild succeeded; registrations were dropped with the old
+        # pipeline, so active cues must re-register. gave_up: the last
+        # rebuild failed; video stays off. GstBackend handles all three.
         self.failed = Signal()
+        self.restored = Signal()
+        self.gave_up = Signal()
+        # shutdown() was called: never rebuild again.
+        self._closed = False
+        # Rebuilds scheduled in the current failure streak, and when
+        # the last one succeeded (time.monotonic()).
+        self._rebuild_attempt = 0
+        self._rebuilt_at = None
 
-        try:
-            self.available = self._build()
-        except Exception:
-            # e.g. a GLib.Error from parse_bin_from_description. The
-            # build must degrade (audio only), never take the backend
-            # — and every audio cue — down with it.
-            logger.exception("VideoCompositor: projection build failed")
-            self.available = False
+        self.available = self._try_build()
         if not self.available:
             logger.warning(
                 "VideoCompositor: projection pipeline unavailable; "
@@ -412,11 +424,16 @@ class VideoCompositor:
         Called from GstBackend.finalize(), which runs before the session
         and the Qt windows are torn down. Left PLAYING, the GL sinks
         keep rendering into dying X windows during interpreter exit
-        (MESA BadDrawable errors, intermittent segfault).
+        (MESA BadDrawable errors, intermittent segfault). Also cancels
+        a pending rebuild.
         """
+        self._closed = True
+        self._teardown()
+
+    def _teardown(self):
+        """Stop and drop the current pipeline, its registrations and
+        every pending timer (linger, release, rebuild). Idempotent."""
         self.available = False
-        if self.pipeline is None:
-            return
         with self._lock:
             self._registrations.clear()
             self._lingering.clear()
@@ -424,6 +441,9 @@ class VideoCompositor:
             self._timers.clear()
         for timer in timers:
             self._unschedule(timer)
+        self._invalidate_latency()
+        if self.pipeline is None:
+            return
         bus = self.pipeline.get_bus()
         if self._sync_handler is not None:
             bus.disconnect(self._sync_handler)
@@ -762,8 +782,9 @@ class VideoCompositor:
     def _on_bus_message(self, bus, message):
         """Main loop. A WARNING is logged. An ERROR from one cue's
         branch (its appsrc or upload bin) drops just that cue's video;
-        any other ERROR means the shared pipeline is gone, so the
-        compositor shuts down and every video cue plays audio only."""
+        any other ERROR means the shared pipeline is gone: it is torn
+        down (every video cue plays audio only) and rebuilt with
+        backoff (see REBUILD_BACKOFF_MS)."""
         if message.type == Gst.MessageType.LATENCY:
             # The pipeline recalculates its latency; re-query it.
             self._invalidate_latency()
@@ -797,8 +818,67 @@ class VideoCompositor:
                 "VideoCompositor: projection pipeline failed: %s (%s)",
                 error.message, debug,
             )
-            self.shutdown()
-            self.failed.emit()
+            self._fail()
+
+    def _try_build(self):
+        """_build(), with an exception treated as a failed build (e.g.
+        a GLib.Error from parse_bin_from_description): it must degrade
+        to audio only, never take the backend down with it."""
+        try:
+            return self._build()
+        except Exception:
+            logger.exception("VideoCompositor: projection build failed")
+            return False
+
+    def _fail(self):
+        """Main loop. The shared pipeline died: drop it (every cue goes
+        audio only for now) and schedule a rebuild."""
+        self._teardown()
+        if self._closed:
+            return
+        if (
+            self._rebuilt_at is not None
+            and time.monotonic() - self._rebuilt_at
+            > REBUILD_STABLE_MS / 1000
+        ):
+            # Long after the last good rebuild: a new incident.
+            self._rebuild_attempt = 0
+        self.failed.emit()
+        self._schedule_rebuild()
+
+    def _schedule_rebuild(self):
+        if self._rebuild_attempt >= len(REBUILD_BACKOFF_MS):
+            logger.error(
+                "VideoCompositor: projection did not come back after "
+                "%d attempts; video cues will play audio only",
+                self._rebuild_attempt,
+            )
+            self.gave_up.emit()
+            return
+        delay = REBUILD_BACKOFF_MS[self._rebuild_attempt]
+        self._rebuild_attempt += 1
+        logger.info(
+            "VideoCompositor: rebuilding the projection in %d ms "
+            "(attempt %d)", delay, self._rebuild_attempt,
+        )
+        self._schedule_once(delay, self._rebuild)
+
+    def _rebuild(self):
+        """Main loop (GLib timeout). Build a fresh pipeline; on success
+        emit restored (active cues re-register), otherwise back off
+        again. Runs on the main loop for the same reason teardown
+        does: never on a projection streaming thread."""
+        if self._closed:
+            return False
+        if self._try_build():
+            self.available = True
+            self._rebuilt_at = time.monotonic()
+            logger.info("VideoCompositor: projection restored")
+            self.restored.emit()
+        else:
+            self._teardown()  # drop the half-built pipeline
+            self._schedule_rebuild()
+        return False
 
     def _branch_of(self, element):
         """The registration whose appsrc/upload bin owns `element`."""

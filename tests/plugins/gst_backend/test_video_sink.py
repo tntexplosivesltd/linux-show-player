@@ -795,3 +795,67 @@ class TestPumpRealTiming:
         worst = max(errors, key=abs)
         assert abs(worst) < self.TOLERANCE, (
             f"worst A/V offset {worst / Gst.MSECOND:.1f}ms")
+
+
+class TestReattach:
+    """After a projection rebuild every registration of the old
+    pipeline is gone; GstBackend calls reattach() on each active sink
+    so playing cues get their picture back without a restart."""
+
+    def _comp(self):
+        comp = MagicMock()
+        comp.register.side_effect = lambda _sink: vc.Registration()
+        return comp
+
+    def test_active_sink_gets_fresh_registration(self):
+        sink = VideoSink(Gst.Pipeline())
+        old_comp, new_comp = self._comp(), self._comp()
+        with patch(_CM, return_value=old_comp):
+            sink.play()
+        old_reg = sink._registration
+        sink.reattach(new_comp)
+        new_comp.register.assert_called_once_with(sink)
+        assert sink._registration is not old_reg
+        assert sink._registration is not None
+        assert sink._compositor is new_comp
+
+    def test_reattach_mid_playback_is_not_a_start(self):
+        # No start preroll follows a reattach: timed samples flow.
+        sink = VideoSink(Gst.Pipeline())
+        with patch(_CM, return_value=self._comp()):
+            sink.play()
+        sink._starting = False  # timed samples were flowing
+        sink.reattach(self._comp())
+        assert sink._starting is False
+
+    def test_inactive_sink_is_not_reattached(self):
+        sink = VideoSink(Gst.Pipeline())
+        comp = self._comp()
+        with patch(_CM, return_value=comp):
+            sink.play()
+            sink.stop()
+        new_comp = self._comp()
+        sink.reattach(new_comp)
+        new_comp.register.assert_not_called()
+        assert sink._registration is None
+
+    def test_stop_racing_reattach_leaves_no_registration(self):
+        sink = VideoSink(Gst.Pipeline())
+        with patch(_CM, return_value=self._comp()):
+            sink.play()
+        new_comp = self._comp()
+
+        def register_while_stopping(s):
+            # The cue stops on a worker thread mid-reattach.
+            from lisp.plugins.gst_backend.video_exclusive import (
+                active_video_sinks,
+            )
+
+            active_video_sinks.discard(s)
+            return vc.Registration()
+
+        new_comp.register.side_effect = register_while_stopping
+        with patch(_CM, return_value=new_comp):
+            sink.reattach(new_comp)
+        assert sink._registration is None
+        new_comp.unregister.assert_called_once_with(sink)

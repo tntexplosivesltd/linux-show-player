@@ -49,6 +49,15 @@ class ActiveVideoSinks:
         with self._lock:
             self._sinks.discard(sink)
 
+    def contains(self, sink):
+        with self._lock:
+            return sink in self._sinks
+
+    def snapshot(self):
+        """The active sinks now, as a list safe to iterate unlocked."""
+        with self._lock:
+            return list(self._sinks)
+
     def others(self, sink):
         """True if any sink OTHER than `sink` is active."""
         with self._lock:

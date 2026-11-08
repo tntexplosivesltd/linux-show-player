@@ -190,6 +190,19 @@ threads meet here:
   `_release`) run `_detach` on the main loop after the hand-off linger
   (`LINGER_MS` / `HANDOFF_RELEASE_MS` / `LINGER_CAP_MS`). Timer ids are
   tracked and cancelled by `shutdown()`.
+* **Recovery also runs on the main loop.** A shared-pipeline ERROR
+  (from the bus watch, on the main loop) tears the pipeline down and
+  schedules `_rebuild` as a tracked GLib timeout with backoff
+  (`REBUILD_BACKOFF_MS`). A good rebuild emits `restored`; GstBackend
+  then calls `VideoSink.reattach()` for every sink in
+  `ActiveVideoSinks` on the main loop. `reattach` re-checks that the
+  sink is still active after registering, because its cue can stop
+  on a worker thread at the same moment. `shutdown()` cancels a
+  pending rebuild and makes any later one a no-op.
+* **Video exclusivity is not the compositor's.** `ActiveVideoSinks`
+  (`video_exclusive.py`, its own lock) tracks playing/paused video
+  sinks from the `VideoSink` lifecycle, so exclusivity holds whether
+  or not a cue has a render branch.
 
 **Shared clock.** Every cue pipeline adopts `compositor.clock()` (one
 `Gst.SystemClock`). That is what makes `projection_pts()` valid: it

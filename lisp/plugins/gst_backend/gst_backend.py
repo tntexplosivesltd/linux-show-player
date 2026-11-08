@@ -33,6 +33,7 @@ from lisp.ui.widgets.notification import NotificationLevel
 from lisp.plugins.gst_backend.gi_repository import Gst
 from lisp.plugins.gst_backend.video_exclusive import (
     VideoExclusiveManager,
+    active_video_sinks,
 )
 from lisp.plugins.gst_backend.gst_media_cue import (
     GstCueFactory,
@@ -131,8 +132,11 @@ class GstBackend(Plugin, BaseBackend):
             GstBackend._video_window.render_size_changed.connect(
                 compositor.set_canvas_size
             )
-            # A runtime error can still take the pipeline down later.
+            # A runtime error can still take the pipeline down later;
+            # the compositor then rebuilds it with backoff.
             compositor.failed.connect(self.__on_compositor_failed)
+            compositor.restored.connect(self.__on_compositor_restored)
+            compositor.gave_up.connect(self.__on_compositor_gave_up)
 
         # Block overlapping video/image cue playback.
         self.app.video_exclusive_manager = (
@@ -204,7 +208,29 @@ class GstBackend(Plugin, BaseBackend):
         self.app.notify.emit(
             translate(
                 "GstBackend",
-                "Video projection stopped after an error — video cues "
+                "Video projection stopped after an error — restarting "
+                "it; video cues play audio only meanwhile",
+            ),
+            NotificationLevel.Warning,
+        )
+
+    def __on_compositor_restored(self):
+        # The old pipeline's registrations died with it: give every
+        # playing/paused video cue a fresh branch (main loop).
+        compositor = GstBackend._video_compositor
+        if compositor is not None:
+            for sink in active_video_sinks.snapshot():
+                sink.reattach(compositor)
+        self.app.notify.emit(
+            translate("GstBackend", "Video projection restored"),
+            NotificationLevel.Info,
+        )
+
+    def __on_compositor_gave_up(self):
+        self.app.notify.emit(
+            translate(
+                "GstBackend",
+                "Video projection could not be restarted — video cues "
                 "will play audio only",
             ),
             NotificationLevel.Warning,

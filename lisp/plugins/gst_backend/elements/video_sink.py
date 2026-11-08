@@ -161,6 +161,21 @@ class VideoSink(GstMediaElement):
             return
         self._registration = self._compositor.register(self)
 
+    def reattach(self, compositor):
+        """Main loop, after the projection pipeline was rebuilt: its
+        old registrations died with it. Give a still-active cue a fresh
+        branch so its video comes back without a restart. Not a start:
+        timed samples are already flowing (a paused cue shows its next
+        frame after a seek or resume)."""
+        if not active_video_sinks.contains(self):
+            return
+        self._compositor = compositor
+        self._registration = compositor.register(self)
+        if not active_video_sinks.contains(self):
+            # Stopped on a worker thread meanwhile: don't leak the
+            # branch it just got.
+            self.__unregister()
+
     def pause(self):
         # pause()'s flush-seek preroll is a real frame to show, even if
         # no timed sample arrived yet (started and paused at once).
