@@ -21,12 +21,44 @@ import os
 import signal
 from itertools import chain
 
-from PyQt5.QtCore import QTranslator, QLocale, QSocketNotifier
+from PyQt5.QtCore import QByteArray, QTranslator, QLocale, QSocketNotifier
 from PyQt5.QtWidgets import QApplication, qApp
 
 from lisp import I18N_DIR
 
 logger = logging.getLogger(__name__)
+
+
+def save_window_geometry(window, conf, key):
+    """Store the window's geometry and state (incl. screen) in `conf`.
+
+    The value is Qt's opaque saveGeometry() blob, base64 encoded so it
+    survives the JSON configuration file.
+    """
+    conf.set(key, bytes(window.saveGeometry().toBase64()).decode("ascii"))
+
+
+def restore_window_geometry(window, conf, key):
+    """Restore a geometry saved by `save_window_geometry`.
+
+    Falls back to the primary screen's available area when nothing usable
+    is stored. Call it before the window is first shown: an unshown
+    window sits at (0, 0), so asking Qt "which screen is this window on"
+    would otherwise pick whatever monitor happens to be at the origin.
+
+    :return: True if a saved geometry was applied
+    """
+    saved = conf.get(key, "")
+    if saved:
+        try:
+            data = QByteArray.fromBase64(saved.encode("ascii"))
+        except (AttributeError, UnicodeEncodeError):
+            data = QByteArray()
+        if not data.isEmpty() and window.restoreGeometry(data):
+            return True
+
+    window.setGeometry(qApp.primaryScreen().availableGeometry())
+    return False
 
 
 def adjust_widget_position(widget):

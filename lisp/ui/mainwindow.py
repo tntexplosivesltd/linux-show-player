@@ -51,7 +51,12 @@ from lisp.ui.logging.status import LogStatusIcon, LogMessageWidget
 from lisp.ui.logging.viewer import LogViewer
 from lisp.ui.settings.app_configuration import AppConfigurationDialog
 from lisp.core.signal import Connection
-from lisp.ui.ui_utils import escape_mnemonic, translate
+from lisp.ui.ui_utils import (
+    escape_mnemonic,
+    restore_window_geometry,
+    save_window_geometry,
+    translate,
+)
 from lisp.ui.widgets import DigitalLabelClock
 from lisp.ui.widgets.notification import NotificationToast
 
@@ -67,7 +72,7 @@ class MainWindow(QMainWindow, metaclass=QSingleton):
         """:type app: lisp.application.Application"""
         super().__init__(**kwargs)
         self.setMinimumSize(500, 400)
-        self.setGeometry(qApp.desktop().availableGeometry(self))
+        restore_window_geometry(self, app.conf, "mainWindow.geometry")
         self.setCentralWidget(QWidget())
         self.centralWidget().setLayout(QVBoxLayout())
         self.centralWidget().layout().setContentsMargins(5, 5, 5, 5)
@@ -362,6 +367,7 @@ class MainWindow(QMainWindow, metaclass=QSingleton):
 
     def closeEvent(self, event):
         if self.__checkSessionSaved():
+            save_window_geometry(self, self._app.conf, "mainWindow.geometry")
             self.__persistInspectorState()
             self.inspectorPanel.flush()
             qApp.quit()
