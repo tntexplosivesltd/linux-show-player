@@ -22,6 +22,7 @@ from PyQt5.QtCore import QT_TRANSLATE_NOOP
 from lisp.backend.media_element import ElementType, MediaType
 from lisp.plugins.gst_backend.gi_repository import Gst
 from lisp.plugins.gst_backend.gst_element import GstMediaElement
+from lisp.plugins.gst_backend.video_exclusive import active_video_sinks
 
 # Cycle-safe: video_compositor imports only gi_repository.
 from lisp.plugins.gst_backend.video_compositor import (
@@ -133,7 +134,11 @@ class VideoSink(GstMediaElement):
 
     def play(self):
         """Register with the compositor; the pump starts with the
-        first frame (the preroll, then samples once PLAYING)."""
+        first frame (the preroll, then samples once PLAYING).
+
+        Counts as the active video cue whether or not a render branch
+        is created (see ActiveVideoSinks)."""
+        active_video_sinks.add(self)
         self._compositor = _compositor()
         if self._compositor is None:
             return
@@ -149,6 +154,7 @@ class VideoSink(GstMediaElement):
         # Drop our handle first so an in-flight new-sample on the
         # streaming thread stops pushing before the appsrc goes away.
         self._registration = None
+        active_video_sinks.discard(self)
         compositor = _compositor()
         if compositor is not None:
             compositor.unregister(self)

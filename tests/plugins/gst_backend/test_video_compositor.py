@@ -158,18 +158,6 @@ class TestRegistrationBookkeeping:
             comp.unregister(object())  # never registered
         detach.assert_not_called()
 
-    def test_active_others_true_when_another_registered(self):
-        comp = self._comp()
-        a, b = object(), object()
-        with patch.object(comp, "_attach", return_value=vc.Registration()):
-            comp.register(a)
-        assert comp.active_others(b) is True  # a is active, b asks
-        assert comp.active_others(a) is False  # only a itself active
-
-    def test_active_others_false_when_nothing_registered(self):
-        comp = self._comp()
-        assert comp.active_others(object()) is False
-
 
 class TestDetachOrder:
     """Pump contract 4: no pad probe; appsrc is NULLed before the
@@ -281,10 +269,11 @@ class TestShutdown:
 
     def test_shutdown_forgets_registrations(self):
         comp = self._comp()
+        sink = object()
         with patch.object(comp, "_attach", return_value=vc.Registration()):
-            comp.register(object())
+            comp.register(sink)
         comp.shutdown()
-        assert comp.active_others(object()) is False
+        assert comp.is_registered(sink) is False
 
     def test_shutdown_is_idempotent(self):
         comp = self._comp()
@@ -524,12 +513,12 @@ class TestHandoffLinger:
                           side_effect=lambda s: vc.Registration()):
             return comp.register(sink)
 
-    def test_lingering_cue_does_not_block_next(self):
+    def test_lingering_cue_is_no_longer_registered(self):
         comp, _ = self._comp()
-        a, b = object(), object()
+        a = object()
         self._register(comp, a)
         comp.unregister(a)
-        assert comp.active_others(b) is False
+        assert comp.is_registered(a) is False
 
     def test_standalone_end_goes_black_after_linger(self):
         comp, sched = self._comp()
@@ -757,7 +746,7 @@ class TestAttachRollback:
         comp.pipeline.remove.assert_any_call(appsrc)
         comp.pipeline.remove.assert_any_call(upload)
         comp.mixer.release_request_pad.assert_not_called()
-        assert comp.active_others(object()) is False
+        assert not comp._registrations
 
     def test_mixer_link_failure_releases_pad(self):
         comp = self._comp()
@@ -872,7 +861,7 @@ class TestBusErrors:
         assert comp.available is False
         assert comp.pipeline is None
         pipeline.set_state.assert_called_with(vc.Gst.State.NULL)
-        assert comp.active_others(object()) is False
+        assert not comp._registrations
         assert comp.register(object()) is None
 
     def test_branch_error_drops_only_that_cue(self):

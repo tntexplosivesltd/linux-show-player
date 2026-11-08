@@ -304,7 +304,8 @@ class VideoCompositor:
         # Monotonic zorder allocator: each registered cue sits above
         # the background (zorder 0) and above earlier registrations.
         self._next_zorder = 1
-        # sink -> registration handle; the exclusive-manager truth.
+        # sink -> registration handle (render branches only; video
+        # exclusivity is tracked by video_exclusive.ActiveVideoSinks).
         # Keyed on the sink object itself (not id()): an id can be
         # reused by a new object once the old one is collected.
         self._registrations = {}
@@ -448,8 +449,7 @@ class VideoCompositor:
 
         The cue's pad lingers (last frame stays up) until a successor's
         first frame is on screen or LINGER_MS passes with none — see the
-        LINGER_* constants. It no longer counts for active_others(), so
-        the successor is not blocked by it.
+        LINGER_* constants.
         """
         with self._lock:
             reg = self._registrations.pop(sink, None)
@@ -477,13 +477,6 @@ class VideoCompositor:
     def is_registered(self, sink):
         with self._lock:
             return sink in self._registrations
-
-    def active_others(self, sink):
-        """True if any cue OTHER than `sink` is currently registered —
-        the single source of truth for VideoExclusiveManager. Lingering
-        cues do not count."""
-        with self._lock:
-            return any(k is not sink for k in self._registrations)
 
     def _schedule_once(self, ms, fn, *args):
         """One-shot main-loop timer whose id is tracked, so shutdown()
