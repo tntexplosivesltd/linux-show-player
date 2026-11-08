@@ -224,4 +224,24 @@ class TestVideoOutputWindowRenderSize:
         for width in (700, 720, 740, 760, 780):
             window.resize(width, 500)
         qtbot.wait(600)
-        assert len(emitted) == 1
+        assert emitted == [window.render_size()]  # once, final size
+
+    def test_nothing_emitted_before_the_debounce(self, qtbot):
+        # Each emit renegotiates the projection canvas; a resize must
+        # wait out RENDER_SIZE_DEBOUNCE_MS, not emit straight away.
+        window = VideoOutputWindow()
+        qtbot.addWidget(window)
+        window.show()
+        qtbot.waitExposed(window)
+        qtbot.wait(400)  # let the show-time emission pass
+        emitted = []
+
+        def on_changed(w, h):
+            emitted.append((w, h))
+
+        window.render_size_changed.connect(on_changed)
+        window.resize(820, 520)
+        QApplication.processEvents()
+        assert emitted == []
+        qtbot.waitUntil(lambda: len(emitted) == 1, timeout=1500)
+
