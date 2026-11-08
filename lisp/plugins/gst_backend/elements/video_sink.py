@@ -16,6 +16,7 @@
 # along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
 import logging
+import time
 
 from PyQt5.QtCore import QT_TRANSLATE_NOOP
 
@@ -63,6 +64,9 @@ LATENCY_WARMUP_BUFFERS = 60
 # clock is dropped (see the pump). Same bound as the appsrc queue.
 MAX_AHEAD = APPSRC_MAX_QUEUE_TIME
 LATENCY_REFRESH_BUFFERS = 30
+
+# A failing pump fails on every frame; log it at most this often (s).
+PUMP_ERROR_LOG_INTERVAL = 5.0
 
 
 def _compositor():
@@ -138,6 +142,8 @@ class VideoSink(GstMediaElement):
         self._preroll_handler = self.video_appsink.connect(
             "new-preroll", self.__on_new_preroll
         )
+        # monotonic() of the last logged pump exception (rate limit).
+        self._pump_error_logged_at = None
 
     def play(self):
         """Register with the compositor; the pump starts with the
@@ -178,17 +184,34 @@ class VideoSink(GstMediaElement):
 
     def __on_new_sample(self, appsink):
         """Streaming thread (PLAYING): pump the next timed frame."""
-        sample = appsink.pull_sample()
-        if sample is not None:
-            self.__pump(sample, preroll=False)
+        try:
+            sample = appsink.pull_sample()
+            if sample is not None:
+                self.__pump(sample, preroll=False)
+        except Exception:
+            self.__log_pump_error()
         return Gst.FlowReturn.OK
 
     def __on_new_preroll(self, appsink):
         """Streaming thread (PAUSED/preroll): show this frame now."""
-        sample = appsink.pull_preroll()
-        if sample is not None:
-            self.__pump(sample, preroll=True)
+        try:
+            sample = appsink.pull_preroll()
+            if sample is not None:
+                self.__pump(sample, preroll=True)
+        except Exception:
+            self.__log_pump_error()
         return Gst.FlowReturn.OK
+
+    def __log_pump_error(self):
+        """The pump races main-loop teardown of the objects it uses
+        (shutdown, a dropped branch). Log it (PyGObject would only
+        print it), at most every PUMP_ERROR_LOG_INTERVAL, and let the
+        cue — and its audio — run on."""
+        now = time.monotonic()
+        last = self._pump_error_logged_at
+        if last is None or now - last >= PUMP_ERROR_LOG_INTERVAL:
+            self._pump_error_logged_at = now
+            logger.exception("VideoSink: projection pump failed")
 
     def __pump(self, sample, preroll):
         """Copy a cue frame into this cue's appsrc on the projection

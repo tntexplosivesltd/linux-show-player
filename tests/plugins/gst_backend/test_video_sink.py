@@ -582,6 +582,45 @@ class TestVideoSinkPreroll:
         assert sink._preroll_handler is None
 
 
+class TestPumpExceptionGuard:
+    """The pump runs on a cue streaming thread against objects the main
+    loop can tear down concurrently. An exception must reach LiSP's
+    log (PyGObject would only print it), rate-limited, and the callback
+    must still return OK so the cue (and its audio) keeps running."""
+
+    _setup = TestVideoSinkPump._setup
+    _run = TestVideoSinkPump._run
+    _QL = TestVideoSinkPump._QL
+    _MONO = "lisp.plugins.gst_backend.elements.video_sink.time.monotonic"
+
+    def _broken(self):
+        sink, comp, reg, buf, sample, appsink = self._setup()
+        reg.appsrc.push_buffer.side_effect = RuntimeError("torn down")
+        return sink, appsink
+
+    def test_sample_exception_logged_and_ok(self, caplog):
+        sink, appsink = self._broken()
+        rets, _ = self._run(sink, appsink)
+        assert rets == [Gst.FlowReturn.OK]
+        assert "torn down" in caplog.text
+
+    def test_preroll_exception_logged_and_ok(self, caplog):
+        sink, appsink = self._broken()
+        sink._starting = False  # a paused seek, not the start preroll
+        rets, _ = self._run(sink, appsink, preroll=True)
+        assert rets == [Gst.FlowReturn.OK]
+        assert "torn down" in caplog.text
+
+    def test_exceptions_are_rate_limited(self, caplog):
+        sink, appsink = self._broken()
+        with patch(self._MONO, return_value=100.0):
+            self._run(sink, appsink, n=30)  # one second at 30 fps
+        assert caplog.text.count("torn down") == 1
+        with patch(self._MONO, return_value=200.0):
+            self._run(sink, appsink)  # much later: logged again
+        assert caplog.text.count("torn down") == 2
+
+
 class TestVideoSinkDispose:
     """Cover the conditional branches in VideoSink.dispose()."""
 
