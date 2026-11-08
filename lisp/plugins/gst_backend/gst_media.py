@@ -392,23 +392,6 @@ class GstMedia(Media):
             self.__finalizer = None
 
         self.__pipeline = Gst.Pipeline()
-        # Adopt the projection pipeline's shared clock so any video
-        # this cue pumps into the compositor stays in sync with the
-        # cue's own audio (the pump offsets PTS by the two pipelines'
-        # base-times, which is only meaningful under one clock).
-        # Harmless for audio-only cues. Guarded: the compositor may be
-        # unavailable (headless / GL-less degrade) or not yet built.
-        try:
-            from lisp.plugins.gst_backend.gst_backend import GstBackend
-
-            compositor = GstBackend.video_compositor()
-            if compositor is not None and compositor.clock() is not None:
-                self.__pipeline.use_clock(compositor.clock())
-        except Exception:
-            logger.debug(
-                "GstMedia: shared clock unavailable, using auto clock",
-                exc_info=True,
-            )
         # Add a callback to watch for pipeline bus-messages
         bus = self.__pipeline.get_bus()
         bus.add_signal_watch()
@@ -441,6 +424,16 @@ class GstMedia(Media):
         for element in self.elements:
             element.post_link(self.elements)
 
+        # Only a pipeline with a video branch adopts the projection's
+        # shared clock: the pump offsets PTS by the two pipelines'
+        # base-times, which is only meaningful under one clock. Audio-
+        # only pipelines keep their automatic clock (usually the audio
+        # sink's); slaved to the system clock instead, their sink would
+        # resync on soundcard drift by dropping or inserting samples.
+        # Guarded: the compositor may be absent or unavailable.
+        if self.element("VideoSink") is not None:
+            self.__adopt_shared_clock()
+
         # Reload the elements properties
         self.elements.update_properties(elements_properties)
 
@@ -459,6 +452,19 @@ class GstMedia(Media):
         self.__pipeline.get_state(Gst.SECOND)
 
         self.elements_changed.emit(self)
+
+    def __adopt_shared_clock(self):
+        try:
+            from lisp.plugins.gst_backend.gst_backend import GstBackend
+
+            compositor = GstBackend.video_compositor()
+            if compositor is not None and compositor.clock() is not None:
+                self.__pipeline.use_clock(compositor.clock())
+        except Exception:
+            logger.debug(
+                "GstMedia: shared clock unavailable, using auto clock",
+                exc_info=True,
+            )
 
     def __on_message(self, bus, message):
         if message.src == self.__pipeline:
