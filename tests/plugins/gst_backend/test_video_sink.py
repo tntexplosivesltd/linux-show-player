@@ -500,6 +500,59 @@ class TestVideoSinkPreroll:
         comp.frame_ready.assert_not_called()
         assert rets == [Gst.FlowReturn.OK]
 
+    def test_both_start_prerolls_are_not_pushed(self):
+        # GstMedia.play() from READY prerolls twice before PLAYING:
+        # set_state(PAUSED), then the flushing seek to start_time.
+        sink, comp, reg, buf, _, appsink = self._setup()
+        self._run(sink, appsink, n=2, preroll=True)
+        reg.appsrc.push_buffer.assert_not_called()
+
+    def test_pause_before_first_timed_frame_shows_preroll(self):
+        # Started and paused straight away: pause()'s flush-seek
+        # preroll is the only frame there will be. It must be shown,
+        # not suppressed as if it were the start preroll (black).
+        sink, comp, reg, buf, _, appsink = self._setup()
+        self._run(sink, appsink, preroll=True)  # start preroll
+        sink.pause()
+        self._run(sink, appsink, preroll=True)  # pause flush-seek
+        reg.appsrc.push_buffer.assert_called_once_with(
+            buf.copy.return_value)
+        comp.frame_ready.assert_called_once_with(reg)
+
+    def test_seek_after_dropped_timed_frames_shows_preroll(self):
+        # Every early timed sample dropped by MAX_AHEAD (nothing ever
+        # pushed): a later seek preroll must still be shown.
+        sink, comp, reg, buf, sample, appsink = self._setup()
+        sample.get_segment.return_value.to_running_time.return_value = (
+            60 * Gst.SECOND)  # far past now + MAX_AHEAD
+        self._run(sink, appsink)
+        reg.appsrc.push_buffer.assert_not_called()
+        self._run(sink, appsink, preroll=True)  # seek
+        reg.appsrc.push_buffer.assert_called_once()
+
+    def test_resume_preroll_still_shown(self):
+        # Resume = play() on a still-registered (paused) cue: not a
+        # start, so its seek preroll is shown as before.
+        sink, comp, reg, buf, _, appsink = self._setup()
+        self._run(sink, appsink)  # playing
+        sink.pause()
+        self._run(sink, appsink, preroll=True)
+        reg.appsrc.push_buffer.reset_mock()
+        with patch(_CM, return_value=comp):
+            sink.play()  # resume
+        self._run(sink, appsink, preroll=True)
+        reg.appsrc.push_buffer.assert_called_once()
+
+    def test_restart_after_stop_suppresses_start_preroll(self):
+        sink, comp, reg, buf, _, appsink = self._setup()
+        self._run(sink, appsink)  # playing
+        with patch(_CM, return_value=comp):
+            sink.stop()
+            sink.play()
+        reg.appsrc.push_buffer.reset_mock()
+        self._run(sink, appsink, preroll=True)
+        reg.appsrc.push_buffer.assert_not_called()
+
     def test_re_preroll_flushes_stale_frames_first(self):
         sink, comp, reg, buf, _, appsink = self._setup()
         self._run(sink, appsink)  # playing

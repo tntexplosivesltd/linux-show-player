@@ -123,6 +123,13 @@ class VideoSink(GstMediaElement):
         # Cached in play() so the pump never does the lazy import on
         # its streaming thread.
         self._compositor = None
+        # True from a fresh play() until the first timed sample (or a
+        # pause()): the prerolls in that window are the start's own
+        # (GstMedia.play() from READY prerolls twice before PLAYING),
+        # and the same frame arrives as the first timed sample. Set on
+        # cue threads, read/cleared on the streaming thread; a bool
+        # store is atomic.
+        self._starting = False
         self._sample_handler = self.video_appsink.connect(
             "new-sample", self.__on_new_sample
         )
@@ -139,10 +146,19 @@ class VideoSink(GstMediaElement):
         Counts as the active video cue whether or not a render branch
         is created (see ActiveVideoSinks)."""
         active_video_sinks.add(self)
+        # A resume (still registered from the pause) is not a start:
+        # its seek preroll is shown.
+        if self._registration is None:
+            self._starting = True
         self._compositor = _compositor()
         if self._compositor is None:
             return
         self._registration = self._compositor.register(self)
+
+    def pause(self):
+        # pause()'s flush-seek preroll is a real frame to show, even if
+        # no timed sample arrived yet (started and paused at once).
+        self._starting = False
 
     def stop(self):
         self.__unregister()
@@ -154,6 +170,7 @@ class VideoSink(GstMediaElement):
         # Drop our handle first so an in-flight new-sample on the
         # streaming thread stops pushing before the appsrc goes away.
         self._registration = None
+        self._starting = False
         active_video_sinks.discard(self)
         compositor = _compositor()
         if compositor is not None:
@@ -207,12 +224,12 @@ class VideoSink(GstMediaElement):
 
         now = compositor.clock().get_time() - projection.get_base_time()
         if preroll:
-            if not reg.pushed:
-                # The initial preroll of a starting cue: the same frame
-                # arrives as the first timed sample a moment later.
-                # Pushing it early too leaves the cue's first timed
-                # sample mis-stamped seconds ahead, which parks the
-                # mixer pad and freezes the video (host E2E).
+            if self._starting:
+                # A starting cue's own preroll (see _starting): the same
+                # frame arrives as the first timed sample a moment
+                # later. Pushing it early too leaves the cue's first
+                # timed sample mis-stamped seconds ahead, which parks
+                # the mixer pad and freezes the video (host E2E).
                 return
             # Re-preroll = the cue flushed (a seek, or pause()'s own
             # flush-seek). Drop the up-to-PUMP_LEAD of frames queued
@@ -221,6 +238,9 @@ class VideoSink(GstMediaElement):
             reg.appsrc.send_event(Gst.Event.new_flush_stop(False))
             pts = now
         else:
+            # The start is over once timed samples flow, even if this
+            # one is dropped below: a later seek preroll is shown.
+            self._starting = False
             running_time = sample.get_segment().to_running_time(
                 Gst.Format.TIME, buf.pts
             )
