@@ -998,6 +998,49 @@ def register_all(dispatcher, app, signal_manager):
             else False,
         }
 
+    def handle_video_stats(params):
+        """Projection performance counters: the projection sink's
+        GstBaseSink stats (rendered / dropped / average-rate) and, per
+        registered cue, whether its first frame was pushed, its caps
+        and its appsink's stats."""
+        from lisp.plugins.gst_backend.gst_backend import GstBackend
+
+        compositor = GstBackend.video_compositor()
+        if compositor is None or compositor.pipeline is None:
+            return {"exists": False}
+
+        def sink_stats(sink):
+            if sink is None:
+                return None
+            if sink.find_property("stats") is None:
+                # glimagesink is a GstGLImageSinkBin: the GstBaseSink
+                # is its "sink" child. autovideosink has neither.
+                if sink.find_property("sink") is None:
+                    return None
+                sink = sink.get_property("sink")
+                if sink is None or sink.find_property("stats") is None:
+                    return None
+            s = sink.get_property("stats")
+            return {
+                "rendered": s.get_value("rendered"),
+                "dropped": s.get_value("dropped"),
+                "average_rate": s.get_value("average-rate"),
+            }
+
+        cues = []
+        for sink, reg in compositor.registrations():
+            cues.append({
+                "frame_seen": reg.frame_seen,
+                "caps": reg.caps.to_string() if reg.caps else None,
+                "appsink": sink_stats(sink.video_appsink),
+            })
+        return {
+            "exists": True,
+            "canvas": list(compositor.canvas_size()),
+            "projection": sink_stats(compositor.projection_sink()),
+            "cues": cues,
+        }
+
     # --- Playback monitor ---
 
     def handle_playback_monitor_state(params):
@@ -1470,6 +1513,7 @@ def register_all(dispatcher, app, signal_manager):
         "plugin.is_loaded": handle_plugin_is_loaded,
         # Video window
         "video_window.state": handle_video_window_state,
+        "video.stats": handle_video_stats,
         # Playback monitor
         "playback_monitor.state": handle_playback_monitor_state,
         "playback_monitor.toggle": handle_playback_monitor_toggle,

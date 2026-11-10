@@ -158,6 +158,17 @@ class TestRegistrationBookkeeping:
         assert reg is not None
         assert comp.is_registered(sink) is True
 
+    def test_registrations_is_a_snapshot(self):
+        comp = self._comp()
+        sink = object()
+        with patch.object(comp, "_attach",
+                          return_value=vc.Registration()):
+            reg = comp.register(sink)
+        snapshot = comp.registrations()
+        assert snapshot == [(sink, reg)]
+        snapshot.clear()
+        assert comp.registrations() == [(sink, reg)]
+
     def test_register_returns_none_when_unavailable(self):
         comp = self._comp()
         comp.available = False

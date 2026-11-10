@@ -679,6 +679,18 @@ class VideoCompositor:
         with self._lock:
             return sink in self._registrations
 
+    def registrations(self):
+        """Snapshot of the registered cues as (sink, Registration)
+        pairs; lingering (released, still shown) ones not included.
+        For diagnostics (the test harness's video.stats)."""
+        with self._lock:
+            return list(self._registrations.items())
+
+    def projection_sink(self):
+        """The projection branch's video sink element, or None before
+        a build. For diagnostics (the test harness's video.stats)."""
+        return self._proj_sink
+
     def _schedule_once(self, ms, fn, *args):
         """One-shot main-loop timer whose id is tracked, so shutdown()
         can cancel what is still pending. Callable from any thread."""
