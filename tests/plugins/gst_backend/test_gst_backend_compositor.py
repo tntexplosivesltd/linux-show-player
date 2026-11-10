@@ -41,8 +41,8 @@ class _FakeCompositor:
 
 def _window():
     window = MagicMock()
-    window.render_size_changed = Signal()
-    window.render_size.return_value = (1920, 1080)
+    window.canvas_size_changed = Signal()
+    window.canvas_size.return_value = (1920, 1080)
     return window
 
 
@@ -98,7 +98,7 @@ def _warnings(app):
 
 
 class TestCompositorWiring:
-    def test_compositor_built_with_windows_and_render_size(self, build):
+    def test_compositor_built_with_windows_and_canvas_size(self, build):
         backend, app, comp, ctor = build()
         assert GstBackend.video_compositor() is comp
         ctor.assert_called_once_with(
@@ -107,9 +107,9 @@ class TestCompositorWiring:
             canvas_size=(1920, 1080),
         )
 
-    def test_render_size_change_resizes_canvas(self, build):
+    def test_canvas_size_change_resizes_canvas(self, build):
         backend, app, comp, _ = build()
-        GstBackend.video_window().render_size_changed.emit(1280, 720)
+        GstBackend.video_window().canvas_size_changed.emit(1280, 720)
         comp.set_canvas_size.assert_called_once_with(1280, 720)
 
     def test_available_compositor_does_not_warn(self, build):

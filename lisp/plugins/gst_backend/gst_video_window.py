@@ -42,12 +42,18 @@ class VideoOutputWindow(QMainWindow):
     (visibility is managed by GstBackend's auto-show/hide logic).
     """
 
-    # Render area in physical pixels, debounced; the VideoCompositor
-    # canvas follows it (see GstBackend).
-    render_size_changed = pyqtSignal(int, int)
+    # The output screen's resolution in physical pixels, emitted when it
+    # changes (shown, moved to another screen); the VideoCompositor
+    # canvas follows it (see GstBackend). NOT the window's size: a
+    # window resize must not renegotiate the canvas — that caps change
+    # raced glimagesink's own resize handling, which letterboxed the
+    # canvas by a stale size and could leave the picture squeezed or
+    # magnified. glimagesink fits the canvas to the window itself.
+    canvas_size_changed = pyqtSignal(int, int)
 
-    # Coalesce a drag-resize burst into one canvas renegotiation.
-    RENDER_SIZE_DEBOUNCE_MS = 150
+    # Coalesce a burst of moves (e.g. a drag across screens) into one
+    # check of the screen.
+    CANVAS_SIZE_DEBOUNCE_MS = 150
 
     def __init__(self, parent=None):
         super().__init__(parent, Qt.FramelessWindowHint)
@@ -68,10 +74,11 @@ class VideoOutputWindow(QMainWindow):
 
         self._fullscreen = False
 
-        self._render_size_timer = QTimer(self)
-        self._render_size_timer.setSingleShot(True)
-        self._render_size_timer.setInterval(self.RENDER_SIZE_DEBOUNCE_MS)
-        self._render_size_timer.timeout.connect(self._emit_render_size)
+        self._emitted_canvas = None
+        self._canvas_timer = QTimer(self)
+        self._canvas_timer.setSingleShot(True)
+        self._canvas_timer.setInterval(self.CANVAS_SIZE_DEBOUNCE_MS)
+        self._canvas_timer.timeout.connect(self._emit_canvas_size)
 
         self.resize(640, 480)
 
@@ -79,15 +86,29 @@ class VideoOutputWindow(QMainWindow):
         """Return the native window ID for GStreamer VideoOverlay."""
         return int(self._render_widget.winId())
 
-    def render_size(self):
-        """The render area in physical pixels (the compositor canvas)."""
-        rw = self._render_widget
+    def output_screen(self):
+        """The screen the window is on; the primary if it is on none
+        (e.g. placed where a now-disconnected screen used to be)."""
+        screen = self.screen()
+        if screen is None:
+            screen = QApplication.primaryScreen()
+        return screen
+
+    def canvas_size(self):
+        """The compositor canvas: the output screen's resolution in
+        physical pixels. Fullscreen (a show) it is the window; windowed
+        glimagesink letterboxes it into the window."""
+        screen = self.output_screen()
+        geo = screen.geometry()
         return canvas_size_for(
-            rw.width(), rw.height(), rw.devicePixelRatioF()
+            geo.width(), geo.height(), screen.devicePixelRatio()
         )
 
-    def _emit_render_size(self):
-        self.render_size_changed.emit(*self.render_size())
+    def _emit_canvas_size(self):
+        size = self.canvas_size()
+        if size != self._emitted_canvas:
+            self._emitted_canvas = size
+            self.canvas_size_changed.emit(*size)
 
     def set_display(self, screen_index):
         """Move the window to the specified screen by index.
@@ -145,12 +166,17 @@ class VideoOutputWindow(QMainWindow):
         super().resizeEvent(event)
         self._sync_render_geometry()
 
+    def moveEvent(self, event):
+        super().moveEvent(event)
+        # May have crossed onto another screen.
+        self._canvas_timer.start()
+
     def _sync_render_geometry(self):
         """Keep the render widget filling the central widget."""
         central = self.centralWidget()
         if central is not None:
             self._render_widget.setGeometry(central.rect())
-            self._render_size_timer.start()
+        self._canvas_timer.start()
 
     def closeEvent(self, event):
         """Block close while video/image cues exist."""

@@ -108,7 +108,7 @@ class GstBackend(Plugin, BaseBackend):
             GstBackend._video_compositor = VideoCompositor(
                 GstBackend._video_window,
                 GstBackend._monitor_window,
-                canvas_size=GstBackend._video_window.render_size(),
+                canvas_size=GstBackend._video_window.canvas_size(),
             )
         except Exception:
             # Degrade to audio only rather than lose the whole backend
@@ -127,10 +127,10 @@ class GstBackend(Plugin, BaseBackend):
                 message = f"{message} ({reason})"
             self.app.notify.emit(message, NotificationLevel.Warning)
         if compositor is not None:
-            # The canvas follows the output window's render area, so a
-            # cue's fit-to-canvas is its fit-to-window (fullscreen: the
-            # screen; windowed: the window).
-            GstBackend._video_window.render_size_changed.connect(
+            # The canvas is the output screen's resolution; the
+            # projection sink letterboxes it into the window, so a
+            # window resize never renegotiates the canvas.
+            GstBackend._video_window.canvas_size_changed.connect(
                 compositor.set_canvas_size
             )
             # A runtime error can still take the pipeline down later;

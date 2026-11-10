@@ -184,64 +184,81 @@ class TestVideoMonitorWindowBehavior:
         assert window._render_widget.isVisible()
 
 
-class TestVideoOutputWindowRenderSize:
-    """The compositor canvas follows the render widget's size, so a
-    windowed output is not letterboxed twice."""
+class _FakeScreen:
+    def __init__(self, w, h, dpr=1.0):
+        self._w, self._h, self._dpr = w, h, dpr
 
-    def test_render_size_matches_render_widget(self, qtbot):
-        window = VideoOutputWindow()
-        qtbot.addWidget(window)
-        window.show()
-        qtbot.waitExposed(window)
-        rw = window._render_widget
-        dpr = rw.devicePixelRatioF()
-        w, h = window.render_size()
-        assert w == int(rw.width() * dpr) & ~1
-        assert h == int(rw.height() * dpr) & ~1
+    def geometry(self):
+        from PyQt5.QtCore import QRect
+        return QRect(0, 0, self._w, self._h)
 
-    def test_resize_emits_render_size_changed(self, qtbot):
-        window = VideoOutputWindow()
-        qtbot.addWidget(window)
-        window.show()
-        qtbot.waitExposed(window)
-        with qtbot.waitSignal(window.render_size_changed,
-                              timeout=2000) as blocker:
-            window.resize(800, 600)
-        assert tuple(blocker.args) == window.render_size()
+    def devicePixelRatio(self):
+        return self._dpr
 
-    def test_resize_burst_is_debounced(self, qtbot):
+
+class TestVideoOutputWindowCanvasSize:
+    """The compositor canvas is the output SCREEN's resolution, not the
+    window's size: a window resize must not renegotiate the canvas (the
+    caps change raced glimagesink's own resize and left the picture
+    squeezed or magnified). glimagesink letterboxes the canvas into
+    whatever size the window is."""
+
+    def _shown(self, qtbot):
         window = VideoOutputWindow()
         qtbot.addWidget(window)
         window.show()
         qtbot.waitExposed(window)
         qtbot.wait(400)  # let the show-time emission pass
-        emitted = []
+        return window
 
-        def on_changed(w, h):
-            emitted.append((w, h))
+    def test_canvas_is_the_screen_resolution(self, qtbot):
+        window = self._shown(qtbot)
+        screen = window.output_screen()
+        dpr = screen.devicePixelRatio()
+        geo = screen.geometry()
+        assert window.canvas_size() == (
+            int(geo.width() * dpr) & ~1, int(geo.height() * dpr) & ~1
+        )
 
-        window.render_size_changed.connect(on_changed)
-        for width in (700, 720, 740, 760, 780):
-            window.resize(width, 500)
-        qtbot.wait(600)
-        assert emitted == [window.render_size()]  # once, final size
-
-    def test_nothing_emitted_before_the_debounce(self, qtbot):
-        # Each emit renegotiates the projection canvas; a resize must
-        # wait out RENDER_SIZE_DEBOUNCE_MS, not emit straight away.
-        window = VideoOutputWindow()
-        qtbot.addWidget(window)
-        window.show()
-        qtbot.waitExposed(window)
-        qtbot.wait(400)  # let the show-time emission pass
-        emitted = []
-
-        def on_changed(w, h):
-            emitted.append((w, h))
-
-        window.render_size_changed.connect(on_changed)
-        window.resize(820, 520)
+    def test_canvas_ignores_window_size(self, qtbot):
+        window = self._shown(qtbot)
+        before = window.canvas_size()
+        window.resize(500, 700)
         QApplication.processEvents()
+        assert window.canvas_size() == before
+
+    def test_resize_does_not_emit(self, qtbot):
+        window = self._shown(qtbot)
+        emitted = []
+
+        def on_changed(w, h):
+            emitted.append((w, h))
+
+        window.canvas_size_changed.connect(on_changed)
+        for width in (700, 720, 740):
+            window.resize(width, 500)
+        qtbot.wait(500)
         assert emitted == []
-        qtbot.waitUntil(lambda: len(emitted) == 1, timeout=1500)
+
+    def test_screen_change_emits_once(self, qtbot, monkeypatch):
+        window = self._shown(qtbot)
+        emitted = []
+
+        def on_changed(w, h):
+            emitted.append((w, h))
+
+        window.canvas_size_changed.connect(on_changed)
+        monkeypatch.setattr(window, "output_screen",
+                            lambda: _FakeScreen(3840, 2160))
+        window.move(window.x() + 1, window.y())
+        window.move(window.x() + 1, window.y())
+        qtbot.waitUntil(lambda: emitted == [(3840, 2160)], timeout=1500)
+        qtbot.wait(300)
+        assert emitted == [(3840, 2160)]  # debounced, deduplicated
+
+    def test_hidpi_screen_is_physical_pixels(self, qtbot, monkeypatch):
+        window = self._shown(qtbot)
+        monkeypatch.setattr(window, "output_screen",
+                            lambda: _FakeScreen(1280, 800, 2.0))
+        assert window.canvas_size() == (2560, 1600)
 

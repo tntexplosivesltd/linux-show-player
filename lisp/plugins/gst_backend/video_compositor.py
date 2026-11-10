@@ -24,8 +24,8 @@ from lisp.plugins.gst_backend.gi_repository import GLib, GstApp, Gst
 
 logger = logging.getLogger(__name__)
 
-# Default canvas, used until the output window's render area is known.
-# The live canvas follows that area — see canvas_size_for() /
+# Default canvas, used until the output screen is known. The live
+# canvas is that screen's resolution — see canvas_size_for() /
 # set_canvas_size().
 COMP_WIDTH = 1920
 COMP_HEIGHT = 1080
@@ -150,16 +150,17 @@ def projection_pts(running_time, cue_base, proj_base, latency_offset):
 
 
 def canvas_size_for(width, height, dpr):
-    """Canvas size for an output render area, in physical pixels.
+    """Canvas size for the output screen, in physical pixels.
 
-    The canvas follows the projection window's render widget, so the
-    canvas→window scale is 1:1 and a cue's fit-to-canvas is its
-    fit-to-window: fullscreen on a projector that is the screen; in a
-    windowed (single-screen) setup it is the window, not the screen
-    (a screen-sized canvas letterboxed a 4:3 clip twice there).
+    The canvas is the projection window's SCREEN, not the window: it
+    must not change on a window resize, where the caps renegotiation
+    raced glimagesink's own resize handling and left the picture
+    letterboxed by a stale size (squeezed, or magnified and cropped).
+    Fullscreen on a projector the canvas→window scale is 1:1; windowed,
+    glimagesink letterboxes the canvas into the window (so a clip of
+    another aspect is boxed twice there — a preview, not the show).
     Rounded down to even dimensions for chroma-subsampled formats.
-    Below MIN_CANVAS (e.g. a never-shown widget reporting 100x30) the
-    default canvas is used until the real size arrives.
+    Below MIN_CANVAS the default canvas is used.
     """
     width = int(width * dpr) & ~1
     height = int(height * dpr) & ~1
