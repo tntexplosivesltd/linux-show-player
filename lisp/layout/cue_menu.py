@@ -146,5 +146,5 @@ class CueContextMenu(ClassBasedRegistry):
         return super().filter(ref_class)
 
     def create_qmenu(self, cues, parent):
-        ref_class = greatest_common_superclass(cues)
+        ref_class = greatest_common_superclass(cues, base=Cue)
         return create_qmenu(self.filter(ref_class), cues, QMenu(parent))

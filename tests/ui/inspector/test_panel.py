@@ -440,3 +440,39 @@ class TestColorPaletteAdapters:
 
         panel._write_widget_value(w, "NotAColor")
         assert w.color() == ""
+
+
+# ---------------------------------------------------------------------------
+# Selections whose types share a mixin ahead of Cue in the MRO
+# ---------------------------------------------------------------------------
+
+
+class _CuePage(_SecondPage):
+    Name = QT_TRANSLATE_NOOP("SettingsPageName", "CueWide")
+
+
+@pytest.fixture
+def cue_wide_page():
+    registry = CueSettingsRegistry()
+    original = registry._registry
+    registry._registry = {}
+    registry.add(_CuePage, Cue)
+    yield
+    registry._registry = original
+
+
+class TestMixinSelection:
+    def test_stop_and_resume_selection_shows_cue_pages(
+        self, qtbot, cue_wide_page, mock_app
+    ):
+        from lisp.plugins.action_cues.resume_cue import ResumeCue
+        from lisp.plugins.action_cues.stop_cue import StopCue
+
+        p = InspectorPanel()
+        qtbot.addWidget(p)
+        try:
+            p.bind([StopCue(app=mock_app), ResumeCue(app=mock_app)])
+            pages = [p._tabs.widget(i) for i in range(p._tabs.count())]
+            assert any(isinstance(w, _CuePage) for w in pages)
+        finally:
+            p.detach()

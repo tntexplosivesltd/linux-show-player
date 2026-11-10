@@ -637,8 +637,9 @@ def register_all(dispatcher, app, signal_manager):
         def do_action():
             # Search context menu actions for matching name
             from lisp.core.util import greatest_common_superclass
+            from lisp.cues.cue import Cue
 
-            ref_class = greatest_common_superclass(cues)
+            ref_class = greatest_common_superclass(cues, base=Cue)
             for action in app.layout.CuesMenu.filter(ref_class):
                 from lisp.layout.cue_menu import MenuActionsGroup
 

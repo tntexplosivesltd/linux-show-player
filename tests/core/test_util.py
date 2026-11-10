@@ -233,3 +233,47 @@ class TestFunctionProxy:
             return 42
         fp = FunctionProxy(fn)
         assert fp.function is fn
+
+
+class TestGreatestCommonSuperclass:
+    """`base` lets callers skip mixins that sit ahead of the real base
+    class in the MRO (e.g. StopCue(TargetingCue, Cue))."""
+
+    class Base:
+        pass
+
+    class Mixin:
+        pass
+
+    class A(Mixin, Base):
+        pass
+
+    class B(Mixin, Base):
+        pass
+
+    def test_same_class(self):
+        from lisp.core.util import greatest_common_superclass
+
+        assert greatest_common_superclass([self.A(), self.A()]) is self.A
+
+    def test_without_base_returns_first_shared_mro_entry(self):
+        from lisp.core.util import greatest_common_superclass
+
+        # Unchanged default: the mixin is first in both MROs.
+        assert greatest_common_superclass([self.A(), self.B()]) is self.Mixin
+
+    def test_base_skips_mixins_that_are_not_subclasses(self):
+        from lisp.core.util import greatest_common_superclass
+
+        result = greatest_common_superclass(
+            [self.A(), self.B()], base=self.Base
+        )
+        assert result is self.Base
+
+    def test_base_keeps_a_more_specific_shared_class(self):
+        from lisp.core.util import greatest_common_superclass
+
+        result = greatest_common_superclass(
+            [self.A(), self.A()], base=self.Base
+        )
+        assert result is self.A
