@@ -204,13 +204,17 @@ threads meet here:
   sinks from the `VideoSink` lifecycle, so exclusivity holds whether
   or not a cue has a render branch.
 
-**Shared clock.** Every cue pipeline adopts `compositor.clock()` (one
-`Gst.SystemClock`). That is what makes `projection_pts()` valid: it
-maps a cue's running time onto the projection's through the base-time
-difference of two pipelines on the *same* clock, plus the latency
-difference. The projection's latency is cached centrally
-(`VideoCompositor.latency()`); each pump re-queries its own cue's
-latency per buffer while the cue settles, then periodically.
+**Shared clock.** Every cue pipeline with a `VideoSink` adopts
+`compositor.clock()` (one `Gst.SystemClock`). That is what makes
+`projection_pts()` valid: it maps a cue's running time onto the
+projection's through the base-time difference of two pipelines on the
+*same* clock, plus the latency difference. The projection's latency is
+cached centrally (`VideoCompositor.latency()`); each pump re-queries
+its own cue's latency per buffer while the cue settles, then
+periodically. Audio-only pipelines keep their automatic clock (the audio sink's):
+slaved to the system clock, an audio sink resyncs by dropping or
+inserting samples whenever soundcard drift passes its tolerance, which
+can be audible on long cues and buys nothing when there is no video.
 
 **Dependency on Qt's GLib dispatcher.** The linger timers and the
 projection's async bus watch (`ERROR`/`WARNING`/`LATENCY`) are GLib
