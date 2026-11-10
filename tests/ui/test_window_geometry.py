@@ -1,8 +1,11 @@
+import gc
 import json
+import logging
 from unittest.mock import MagicMock
 
 import pytest
 
+from PyQt5 import sip
 from PyQt5.QtCore import QRect
 from PyQt5.QtWidgets import QMainWindow, qApp
 
@@ -248,11 +251,21 @@ def main_window(mock_app, qtbot, monkeypatch):
     if previous is not None:
         delattr(mainwindow.MainWindow, slot)
     window = mainwindow.MainWindow(mock_app)
-    qtbot.addWidget(window)
     yield window
     delattr(mainwindow.MainWindow, slot)
     if previous is not None:
         setattr(mainwindow.MainWindow, slot, previous)
+    # MainWindow hooks a handler onto the *root* logger and owns a tree
+    # of top-level widgets (menus, log viewer, error dialogs). Left to
+    # the garbage collector, it can be freed in the middle of a later
+    # test's qApp.setStyleSheet() re-polish, which then walks dangling
+    # widget pointers and segfaults. Tear it all down deterministically.
+    logging.getLogger().removeHandler(window.logHandler)
+    window.hide()
+    sip.delete(window.logViewer)  # top-level, not parented to the window
+    sip.delete(window)
+    del window
+    gc.collect()
 
 
 def test_closing_main_window_persists_geometry_and_screen(
