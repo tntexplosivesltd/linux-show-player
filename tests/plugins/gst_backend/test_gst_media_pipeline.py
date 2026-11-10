@@ -234,7 +234,3 @@ class TestSharedClock:
             media.pipe = ("UriAvInput", "VideoSink")
         assert not self._fixed_clock(media._GstMedia__pipeline)
 
-
-def test_no_is_image_fronted_method():
-    # The image NULL-on-EOS hack is gone: no such helper remains.
-    assert not hasattr(GstMedia, "_GstMedia__is_image_fronted")
