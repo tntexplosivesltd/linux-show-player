@@ -29,7 +29,6 @@ Run:
 
 import os
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from tests.e2e.helpers import call, start_lisp, stop_lisp  # noqa: E402
@@ -76,7 +75,8 @@ def test_group_stop_and_resume():
         error = str(e)
     check(f"'Group selected' offered for Stop + Resume ({error or 'ok'})",
           error is None)
-    time.sleep(0.3)
+    # No wait needed: context_action blocks until the action has run
+    # on the main thread.
 
     groups = [c for c in call("cue.list") if c["_type_"] == "GroupCue"]
     check("one group created", len(groups) == 1)

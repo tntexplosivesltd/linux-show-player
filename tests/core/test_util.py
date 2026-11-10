@@ -277,3 +277,28 @@ class TestGreatestCommonSuperclass:
             [self.A(), self.A()], base=self.Base
         )
         assert result is self.A
+
+    def test_single_instance_returns_its_class(self):
+        from lisp.core.util import greatest_common_superclass
+
+        assert greatest_common_superclass([self.B()], base=self.Base) is (
+            self.B
+        )
+
+    def test_empty_falls_back_to_base(self):
+        from lisp.core.util import greatest_common_superclass
+
+        assert greatest_common_superclass([]) is object
+        assert greatest_common_superclass([], base=self.Base) is self.Base
+
+    def test_no_shared_subclass_of_base_falls_back_to_base(self):
+        from lisp.core.util import greatest_common_superclass
+
+        class Unrelated:
+            pass
+
+        # Neither class is a Base, so nothing in the MRO qualifies.
+        result = greatest_common_superclass(
+            [self.Mixin(), Unrelated()], base=self.Base
+        )
+        assert result is self.Base

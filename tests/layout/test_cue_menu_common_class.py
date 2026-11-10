@@ -51,3 +51,28 @@ def test_same_type_selection_still_gets_cue_actions(mock_app, qtbot):
     cues = [StopCue(app=mock_app), StopCue(app=mock_app)]
     qmenu = _menu_with_cue_action().create_qmenu(cues, None)
     assert _texts(qmenu) == ["Group selected"]
+
+
+def _menu_with_stop_cue_action():
+    menu = _menu_with_cue_action()
+    menu.add(
+        SimpleMenuAction(
+            "Stop only", lambda cue: None, "Stop only", lambda cues: None
+        ),
+        StopCue,
+    )
+    return menu
+
+
+def test_type_specific_action_kept_for_same_type_selection(mock_app, qtbot):
+    # A helper that always returned Cue would drop the StopCue action.
+    cues = [StopCue(app=mock_app), StopCue(app=mock_app)]
+    qmenu = _menu_with_stop_cue_action().create_qmenu(cues, None)
+    assert "Stop only" in _texts(qmenu)
+    assert "Group selected" in _texts(qmenu)
+
+
+def test_type_specific_action_dropped_for_mixed_selection(mock_app, qtbot):
+    cues = [StopCue(app=mock_app), ResumeCue(app=mock_app)]
+    qmenu = _menu_with_stop_cue_action().create_qmenu(cues, None)
+    assert _texts(qmenu) == ["Group selected"]
