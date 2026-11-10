@@ -51,7 +51,12 @@ from lisp.ui.logging.status import LogStatusIcon, LogMessageWidget
 from lisp.ui.logging.viewer import LogViewer
 from lisp.ui.settings.app_configuration import AppConfigurationDialog
 from lisp.core.signal import Connection
-from lisp.ui.ui_utils import escape_mnemonic, translate
+from lisp.ui.ui_utils import (
+    escape_mnemonic,
+    restore_window_geometry,
+    save_window_geometry,
+    translate,
+)
 from lisp.ui.widgets import DigitalLabelClock
 from lisp.ui.widgets.notification import NotificationToast
 
@@ -67,7 +72,9 @@ class MainWindow(QMainWindow, metaclass=QSingleton):
         """:type app: lisp.application.Application"""
         super().__init__(**kwargs)
         self.setMinimumSize(500, 400)
-        self.setGeometry(qApp.desktop().availableGeometry(self))
+        self._geometryRestored = restore_window_geometry(
+            self, app.conf, "mainWindow.geometry", "mainWindow.screen"
+        )
         self.setCentralWidget(QWidget())
         self.centralWidget().setLayout(QVBoxLayout())
         self.centralWidget().layout().setContentsMargins(5, 5, 5, 5)
@@ -352,6 +359,21 @@ class MainWindow(QMainWindow, metaclass=QSingleton):
         else:
             self.showMaximized()
 
+    def showRestored(self):
+        """Show the window for the first time.
+
+        A restored geometry brings back its own maximized/normal/full
+        screen state; without one, start maximized on the primary screen.
+        """
+        if self._geometryRestored:
+            self.show()
+        else:
+            self.showMaximized()
+
+        self.fullScreenAction.blockSignals(True)
+        self.fullScreenAction.setChecked(self.isFullScreen())
+        self.fullScreenAction.blockSignals(False)
+
     def showEvent(self, event):
         super().showEvent(event)
         # Splitter sizes can only be set meaningfully once the
@@ -362,7 +384,7 @@ class MainWindow(QMainWindow, metaclass=QSingleton):
 
     def closeEvent(self, event):
         if self.__checkSessionSaved():
-            self.__persistInspectorState()
+            self.__persistWindowState()
             self.inspectorPanel.flush()
             qApp.quit()
             event.accept()
@@ -405,7 +427,21 @@ class MainWindow(QMainWindow, metaclass=QSingleton):
         self.showInspectorAction.setChecked(visible)
         self.showInspectorAction.blockSignals(False)
 
-    def __persistInspectorState(self):
+    def __persistWindowState(self):
+        save_window_geometry(
+            self, self._app.conf, "mainWindow.geometry", "mainWindow.screen"
+        )
+        self.__storeInspectorState()
+        try:
+            self._app.conf.write()
+        except Exception:
+            logger.exception(
+                translate(
+                    "MainWindowError", "Could not persist main window state"
+                )
+            )
+
+    def __storeInspectorState(self):
         visible = self.inspectorPanel.isVisible()
         self._app.conf.set("mainWindow.inspectorVisible", visible)
         if visible:
@@ -414,15 +450,6 @@ class MainWindow(QMainWindow, metaclass=QSingleton):
                 self._app.conf.set(
                     "mainWindow.inspectorHeight", int(sizes[1])
                 )
-        try:
-            self._app.conf.write()
-        except Exception:
-            logger.exception(
-                translate(
-                    "MainWindowError",
-                    "Could not persist inspector visibility state",
-                )
-            )
 
     def __beforeSessionFinalize(self):
         self.inspectorPanel.detach()

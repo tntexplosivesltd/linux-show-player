@@ -57,6 +57,8 @@
     },
     "mainWindow": {
         "inspectorVisible": true,
-        "inspectorHeight": 240
+        "inspectorHeight": 240,
+        "geometry": "",
+        "screen": ""
     }
 }
