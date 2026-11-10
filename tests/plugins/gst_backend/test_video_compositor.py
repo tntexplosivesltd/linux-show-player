@@ -427,6 +427,37 @@ class TestCanvasSizeFor:
         assert vc.canvas_size_for(0, 0, 1.0) == (
             vc.COMP_WIDTH, vc.COMP_HEIGHT)
 
+    def test_fractional_dpr_matches_the_physical_mode(self):
+        # 2560x1440 at 150%: Qt reports 1707x960 logical. Truncating
+        # 1707 * 1.5 = 2560.5 is fine; 853 * 1.5 = 1279.5 must round
+        # to the real 1280, not truncate to 1278.
+        assert vc.canvas_size_for(1707, 960, 1.5) == (2560, 1440)
+        assert vc.canvas_size_for(853, 480, 1.5) == (1280, 720)
+
+    def test_fractional_dpr_125(self):
+        # 1920x1080 at 125%: 1536x864 logical.
+        assert vc.canvas_size_for(1536, 864, 1.25) == (1920, 1080)
+
+    def test_4k_is_not_capped(self):
+        assert vc.canvas_size_for(3840, 2160, 1.0) == (3840, 2160)
+        assert vc.canvas_size_for(1920, 1080, 2.0) == (3840, 2160)
+
+    def test_above_max_is_scaled_down_keeping_aspect(self):
+        # 8K would composite 33 MP per frame and can exceed the GL
+        # max texture size: capped to MAX_CANVAS on the long side.
+        assert vc.canvas_size_for(7680, 4320, 1.0) == (
+            vc.MAX_CANVAS, vc.MAX_CANVAS * 9 // 16)
+
+    def test_portrait_above_max_caps_the_height(self):
+        w, h = vc.canvas_size_for(4320, 7680, 1.0)
+        assert h == vc.MAX_CANVAS
+        assert w == vc.MAX_CANVAS * 9 // 16
+
+    def test_capped_size_stays_even(self):
+        w, h = vc.canvas_size_for(5001, 3001, 1.0)
+        assert max(w, h) <= vc.MAX_CANVAS
+        assert w % 2 == 0 and h % 2 == 0
+
 
 class TestCanvasCaps:
     """Canvas caps name the exact memory type. ``(ANY)`` features break
@@ -631,6 +662,49 @@ class TestCanvasSizing:
         comp = self._comp()
         comp.shutdown()
         comp.set_canvas_size(1024, 768)  # must not raise
+
+    def test_set_canvas_size_schedules_sink_exposes(self):
+        # A re-pin lands while the sink's window is also resizing (a
+        # screen change): the sinks must be nudged to re-letterbox from
+        # the settled sizes, or a stale fit can stick.
+        comp = self._comp()
+        sched = _FakeScheduler(comp)
+        comp._proj_sink, comp._mon_sink = MagicMock(), MagicMock()
+        comp.set_canvas_size(1024, 768)
+        assert sorted(p[0] for p in sched.pending) == sorted(
+            vc.CANVAS_EXPOSE_MS)
+        comp._proj_sink.expose.assert_not_called()  # deferred
+        for ms in vc.CANVAS_EXPOSE_MS:
+            sched.fire(ms)
+        assert comp._proj_sink.expose.call_count == len(vc.CANVAS_EXPOSE_MS)
+        assert comp._mon_sink.expose.call_count == len(vc.CANVAS_EXPOSE_MS)
+
+    def test_unchanged_canvas_schedules_no_expose(self):
+        comp = self._comp(canvas_size=(1024, 768))
+        sched = _FakeScheduler(comp)
+        comp.set_canvas_size(1024, 768)
+        assert sched.pending == []
+
+    def test_expose_skips_sink_without_overlay(self):
+        # autovideosink does not implement GstVideoOverlay.
+        comp = self._comp()
+        sched = _FakeScheduler(comp)
+        comp._proj_sink = object()
+        comp._mon_sink = MagicMock()
+        comp.set_canvas_size(1024, 768)
+        for ms in vc.CANVAS_EXPOSE_MS:
+            sched.fire(ms)  # must not raise
+        assert comp._mon_sink.expose.called
+
+    def test_pending_expose_is_cancelled_by_shutdown(self):
+        comp = self._comp()
+        sched = _FakeScheduler(comp)
+        comp._proj_sink, comp._mon_sink = MagicMock(), MagicMock()
+        comp.set_canvas_size(1024, 768)
+        proj = comp._proj_sink
+        comp.shutdown()
+        assert sched.pending == []
+        proj.expose.assert_not_called()
 
 
 

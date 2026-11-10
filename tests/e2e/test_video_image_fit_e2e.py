@@ -26,8 +26,10 @@ window's own buffer can be correct while the screen shows the bug —
 the GL sink drawing at a stale, mid-resize window size, so the picture
 is squeezed into part of the window and the rest is never drawn.
 
-Requires an X display, ffmpeg (x11grab), xwininfo and libX11; SKIPs
-otherwise.
+Requires an X display, ffmpeg (x11grab), xwininfo, libX11 and a window
+manager that honours _NET_WM_STATE fullscreen; SKIPs otherwise (so it
+is a no-op under bare Xvfb in CI/Docker). It grabs real screen pixels:
+keep other windows off the projection window while it runs.
 
 Run:
     poetry run python tests/e2e/test_video_image_fit_e2e.py
@@ -234,7 +236,42 @@ def run_tests(t):
         print("  SKIP: need X display + ffmpeg + xwininfo + libX11")
         return
     tmp = tempfile.mkdtemp(prefix="lisp-fit-")
-    img = os.path.join(tmp, "quadrants.png")
+    made = {}  # what _run got to: "cue_id", "top"
+    try:
+        _run(t, tmp, made)
+    finally:
+        # Every early return (or exception) lands here: leave no cue
+        # playing, no fullscreen window and no temp dir behind.
+        if made.get("cue_id"):
+            try:
+                call("cue.stop", {"id": made["cue_id"]})
+            except Exception as e:  # LiSP may already be gone
+                print(f"  cleanup: cue.stop failed: {e}")
+        if made.get("top"):
+            set_wm_fullscreen(made["top"], False)
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def wm_honours_fullscreen(top, handle):
+    """True if a window manager acts on _NET_WM_STATE requests. Bare
+    Xvfb (CI, Docker) has none: every "resize" would be a no-op and
+    the run a vacuous pass."""
+    before = window_geometry(handle)
+    set_wm_fullscreen(top, True)
+    deadline = time.time() + 3.0
+    changed = False
+    while time.time() < deadline and not changed:
+        time.sleep(0.1)
+        changed = window_geometry(handle) != before
+    set_wm_fullscreen(top, False)
+    time.sleep(SETTLE_S)
+    return changed
+
+
+def _run(t, img_dir, made):
+    """The test body. Records the cue id and the top-level window in
+    `made` as soon as they exist, for run_tests' cleanup."""
+    img = os.path.join(img_dir, "quadrants.png")
     make_image(img)
 
     before = {c["id"] for c in call("cue.list")}
@@ -243,7 +280,7 @@ def run_tests(t):
     t.check("image cue added", len(new) == 1)
     if not new:
         return
-    cue_id = new[0]
+    cue_id = made["cue_id"] = new[0]
 
     handle = call("video_window.state").get("handle", 0)
     t.check("projection handle valid", handle != 0)
@@ -257,10 +294,16 @@ def run_tests(t):
     if not initial:
         return
 
-    top = find_window("LiSP Video Output")
+    top = made["top"] = find_window("LiSP Video Output")
     t.check("found the output top-level window", bool(top))
     if not top:
         return
+    if not wm_honours_fullscreen(top, handle):
+        print("  SKIP: no window manager acted on _NET_WM_STATE "
+              "fullscreen (bare Xvfb?) — the resize cycles would "
+              "test nothing")
+        return
+
     # A wrong fit SETTLE_S after a resize is re-checked RECHECK_S later:
     # still wrong = stuck (the bug: it stays until the next resize);
     # right by then = slow (the new-size frame just hadn't landed yet).
@@ -287,9 +330,6 @@ def run_tests(t):
     # flash on every resize, stuck = it stays.
     t.check(f"fit right within {SETTLE_S}s of all {2 * CYCLES} WM "
             f"resizes ({stuck} stuck, {slow} slow)", stuck + slow == 0)
-
-    call("cue.stop", {"id": cue_id})
-    shutil.rmtree(tmp, ignore_errors=True)
 
 
 if __name__ == "__main__":

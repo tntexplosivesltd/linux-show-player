@@ -31,6 +31,19 @@ COMP_WIDTH = 1920
 COMP_HEIGHT = 1080
 COMP_FPS = 30
 MIN_CANVAS = 64
+# Longest canvas side. Covers UHD / DCI-4K projectors 1:1 and stays well
+# under GL_MAX_TEXTURE_SIZE (8192+ on current drivers, llvmpipe
+# included). An 8K screen, or a windowed preview on a HiDPI panel, is
+# composited at this size and scaled up by the sink, not at full size.
+MAX_CANVAS = 4096
+
+# After a canvas re-pin, the sinks are asked to redraw at these delays
+# (ms). A re-pin happens on a screen change, which also resizes the
+# sink's window; glimagesink letterboxes on each and can keep a stale
+# size if they land out of order. The later expose recomputes the
+# letterbox from the settled sizes. 250 ms covers the usual 200-300 ms
+# gap; 1000 ms catches a slow WM.
+CANVAS_EXPOSE_MS = (250, 1000)
 
 # Handoff linger. A stopped/ended cue's mixer pad is kept (the mixer
 # repeats its last frame) instead of being released at once, so a
@@ -160,13 +173,18 @@ def canvas_size_for(width, height, dpr):
     glimagesink letterboxes the canvas into the window (so a clip of
     another aspect is boxed twice there — a preview, not the show).
     Rounded down to even dimensions for chroma-subsampled formats.
-    Below MIN_CANVAS the default canvas is used.
+    Below MIN_CANVAS the default canvas is used; above MAX_CANVAS it
+    is scaled down to fit, keeping the aspect ratio.
     """
-    width = int(width * dpr) & ~1
-    height = int(height * dpr) & ~1
+    width = int(round(width * dpr))
+    height = int(round(height * dpr))
     if width < MIN_CANVAS or height < MIN_CANVAS:
         return COMP_WIDTH, COMP_HEIGHT
-    return width, height
+    longest = max(width, height)
+    if longest > MAX_CANVAS:
+        width = width * MAX_CANVAS // longest
+        height = height * MAX_CANVAS // longest
+    return width & ~1, height & ~1
 
 
 def _canvas_caps(width, height, gl):
@@ -481,6 +499,18 @@ class VideoCompositor:
         for reg in visible:
             if reg.caps is not None:
                 self._apply_fit(reg)
+        for ms in CANVAS_EXPOSE_MS:
+            self._schedule_once(ms, self._expose_sinks)
+
+    def _expose_sinks(self):
+        """Main loop. Ask the sinks to redraw, so each re-fits the
+        canvas to its window's current size (see CANVAS_EXPOSE_MS)."""
+        if not self.available or self.pipeline is None:
+            return
+        for sink in (self._proj_sink, self._mon_sink):
+            expose = getattr(sink, "expose", None)  # GstVideoOverlay
+            if expose is not None:
+                expose()
 
     def shutdown(self):
         """Stop the projection pipeline for good. Idempotent.

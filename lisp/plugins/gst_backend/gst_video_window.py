@@ -17,7 +17,7 @@
 
 import logging
 
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal, pyqtSlot
 from PyQt5.QtGui import QCursor
 from PyQt5.QtWidgets import QMainWindow, QWidget, QApplication
 
@@ -43,7 +43,8 @@ class VideoOutputWindow(QMainWindow):
     """
 
     # The output screen's resolution in physical pixels, emitted when it
-    # changes (shown, moved to another screen); the VideoCompositor
+    # changes (shown, moved to another screen, the screen's mode changed
+    # or a screen was plugged / unplugged); the VideoCompositor
     # canvas follows it (see GstBackend). NOT the window's size: a
     # window resize must not renegotiate the canvas — that caps change
     # raced glimagesink's own resize handling, which letterboxed the
@@ -73,12 +74,28 @@ class VideoOutputWindow(QMainWindow):
         )
 
         self._fullscreen = False
+        # Where set_display_screen() put the window: what the canvas is
+        # sized from while hidden (screen() of a never-shown window may
+        # still be the primary, not the projector it will open on).
+        self._target_screen = None
 
         self._emitted_canvas = None
         self._canvas_timer = QTimer(self)
         self._canvas_timer.setSingleShot(True)
         self._canvas_timer.setInterval(self.CANVAS_SIZE_DEBOUNCE_MS)
         self._canvas_timer.timeout.connect(self._emit_canvas_size)
+
+        # The canvas follows the screen, so a screen change that moves
+        # no window (an xrandr mode switch, a projector re-plugged at
+        # another resolution, Qt re-homing the window after an unplug)
+        # must re-check it too. Re-checks are deduplicated, so reacting
+        # to every screen is harmless.
+        app = QApplication.instance()
+        app.screenAdded.connect(self._on_screen_added)
+        app.screenRemoved.connect(self._schedule_canvas_check)
+        app.primaryScreenChanged.connect(self._schedule_canvas_check)
+        for screen in QApplication.screens():
+            self._watch_screen(screen)
 
         self.resize(640, 480)
 
@@ -87,10 +104,14 @@ class VideoOutputWindow(QMainWindow):
         return int(self._render_widget.winId())
 
     def output_screen(self):
-        """The screen the window is on; the primary if it is on none
+        """The screen the window is on (while hidden: the one
+        set_display_screen() targeted); the primary if it is on none
         (e.g. placed where a now-disconnected screen used to be)."""
+        screens = QApplication.screens()
+        if not self.isVisible() and self._target_screen in screens:
+            return self._target_screen
         screen = self.screen()
-        if screen is None:
+        if screen is None or screen not in screens:
             screen = QApplication.primaryScreen()
         return screen
 
@@ -103,6 +124,19 @@ class VideoOutputWindow(QMainWindow):
         return canvas_size_for(
             geo.width(), geo.height(), screen.devicePixelRatio()
         )
+
+    def _watch_screen(self, screen):
+        screen.geometryChanged.connect(self._schedule_canvas_check)
+
+    @pyqtSlot("QScreen*")
+    def _on_screen_added(self, screen):
+        self._watch_screen(screen)
+        self._schedule_canvas_check()
+
+    @pyqtSlot()
+    def _schedule_canvas_check(self):
+        """(Re)start the debounced canvas check."""
+        self._canvas_timer.start()
 
     def _emit_canvas_size(self):
         size = self.canvas_size()
@@ -131,6 +165,7 @@ class VideoOutputWindow(QMainWindow):
 
         :param screen: Target QScreen
         """
+        self._target_screen = screen
         geo = screen.geometry()
         self.move(geo.topLeft())
         logger.debug(
@@ -169,14 +204,14 @@ class VideoOutputWindow(QMainWindow):
     def moveEvent(self, event):
         super().moveEvent(event)
         # May have crossed onto another screen.
-        self._canvas_timer.start()
+        self._schedule_canvas_check()
 
     def _sync_render_geometry(self):
         """Keep the render widget filling the central widget."""
         central = self.centralWidget()
         if central is not None:
             self._render_widget.setGeometry(central.rect())
-        self._canvas_timer.start()
+        self._schedule_canvas_check()
 
     def closeEvent(self, event):
         """Block close while video/image cues exist."""
