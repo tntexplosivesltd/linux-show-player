@@ -331,6 +331,12 @@ class VideoCompositor:
         # Guards the collections above: touched from the main loop,
         # cue worker threads (stop) and the pump's streaming thread.
         self._lock = threading.Lock()
+        # Serialises a fit (read the canvas, write the four pad
+        # properties) against a canvas change: the pump fits a first
+        # frame on its streaming thread while the main thread resizes.
+        # Separate from _lock, so a slow pad write never holds up the
+        # registration bookkeeping.
+        self._fit_lock = threading.Lock()
         # Thread-safe; callbacks run on the main loop, which is where
         # _detach must run (never on a projection streaming thread).
         self._schedule = GLib.timeout_add
@@ -411,9 +417,13 @@ class VideoCompositor:
         Re-pins the post-mixer canvas caps, rescales the background
         pad, and re-fits every cue whose caps are already known.
         """
-        if (width, height) == self._canvas:
-            return
-        self._canvas = (width, height)
+        with self._fit_lock:
+            if (width, height) == self._canvas:
+                return
+            # Under the fit lock: a pump fit either finished before
+            # this (its reg.caps is set, so it is re-fitted below) or
+            # reads the new canvas.
+            self._canvas = (width, height)
         if not self.available or self.pipeline is None:
             return
         logger.debug("VideoCompositor: canvas -> %dx%d", width, height)
@@ -578,11 +588,14 @@ class VideoCompositor:
             par_n, par_d = 1, 1
         if not (ok_w and ok_h):
             src_w = src_h = 0
-        x, y, w, h = fit_rect(src_w, src_h, par_n, par_d, *self._canvas)
-        reg.mix_pad.set_property("xpos", x)
-        reg.mix_pad.set_property("ypos", y)
-        reg.mix_pad.set_property("width", w)
-        reg.mix_pad.set_property("height", h)
+        with self._fit_lock:
+            x, y, w, h = fit_rect(
+                src_w, src_h, par_n, par_d, *self._canvas
+            )
+            reg.mix_pad.set_property("xpos", x)
+            reg.mix_pad.set_property("ypos", y)
+            reg.mix_pad.set_property("width", w)
+            reg.mix_pad.set_property("height", h)
 
     def _attach(self, sink):
         """Live-add appsrc (+ the upload bin on GL) + a mixer request

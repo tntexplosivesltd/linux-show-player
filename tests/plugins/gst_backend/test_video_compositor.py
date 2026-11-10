@@ -407,6 +407,50 @@ class TestCanvasSizing:
         reg.mix_pad.reset_mock()
         return reg
 
+    def test_first_frame_racing_a_resize_ends_on_the_new_canvas(self):
+        # The pump fits a cue's first frame on its streaming thread
+        # while the main thread applies a debounced resize. A fit that
+        # read the old canvas must not land after the resize's re-fit
+        # and leave the pad letterboxed for the old size.
+        import threading
+
+        comp = self._comp(canvas_size=(640, 480))
+        reg = vc.Registration()
+        props = {}
+        reg.mix_pad = MagicMock()
+        reg.mix_pad.set_property.side_effect = (
+            lambda name, value: props.__setitem__(name, value))
+        sink = object()
+        comp._registrations[sink] = reg
+
+        pump_fitting = threading.Event()
+        resume_pump = threading.Event()
+        real_fit_rect = vc.fit_rect
+        pump = []
+
+        def slow_fit_rect(*args):
+            if threading.current_thread() is pump[0]:
+                # Paused between reading the canvas and writing the pad.
+                pump_fitting.set()
+                resume_pump.wait(2)
+            return real_fit_rect(*args)
+
+        with patch.object(vc, "fit_rect", side_effect=slow_fit_rect):
+            pump.append(threading.Thread(
+                target=comp.fit_registration, args=(reg, _caps(320, 180))))
+            pump[0].start()
+            assert pump_fitting.wait(2)
+            resize = threading.Thread(
+                target=comp.set_canvas_size, args=(1024, 768))
+            resize.start()
+            resize.join(0.2)  # finishes here unless the fit is guarded
+            resume_pump.set()
+            pump[0].join(2)
+            resize.join(2)
+
+        assert (props["xpos"], props["ypos"], props["width"],
+                props["height"]) == real_fit_rect(320, 180, 1, 1, 1024, 768)
+
     def test_default_canvas_size(self):
         comp = self._comp()
         assert comp.canvas_size() == (vc.COMP_WIDTH, vc.COMP_HEIGHT)
