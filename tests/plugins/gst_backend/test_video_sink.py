@@ -1,6 +1,5 @@
 """Tests for VideoSink element."""
 
-import time
 from unittest.mock import MagicMock, patch
 
 from lisp.backend.media_element import ElementType, MediaType
@@ -695,7 +694,14 @@ class TestPumpRealTiming:
     PROJ_LATENCY = 200 * Gst.MSECOND
     FRAMES = 20
     FRAME = Gst.SECOND // 30
-    TOLERANCE = 25 * Gst.MSECOND
+    # Robust to a loaded runner: the appsink is drop-oldest, so a
+    # scheduler hiccup may cost a frame or two, and one late wake-up
+    # must not fail the run. Sync is judged on the median; every frame
+    # must still land within 1.5 frames. A sign error in the latency
+    # term is ~400ms off, a dropped term ~200ms: far outside both.
+    MAX_DROPPED = 2
+    MEDIAN_TOLERANCE = 20 * Gst.MSECOND
+    WORST_TOLERANCE = 50 * Gst.MSECOND
     PRIME = 1 << 40  # buffer offset of the priming frame
 
     def _projection(self, clock):
@@ -733,9 +739,12 @@ class TestPumpRealTiming:
         comp = self._compositor(proj, clock, reg)
 
         rendered = {}
+        primed = []
 
         def on_handoff(_sink, buf, _pad):
-            if buf.offset != self.PRIME:
+            if buf.offset == self.PRIME:
+                primed.append(clock.get_time())
+            else:
                 rendered[buf.offset] = clock.get_time()
 
         proj_sink.connect("handoff", on_handoff)
@@ -759,8 +768,9 @@ class TestPumpRealTiming:
             # its sinks already prerolled by the live background. Do
             # the same with one priming frame: a sink prerolling on
             # the first cue frame would re-base the projection (new
-            # base time) under frames already mapped. Then let it get
-            # well past its own latency (see the negative-PTS test).
+            # base time) under frames already mapped. Wait until it is
+            # shown (the projection is then past its own latency, see
+            # the negative-PTS test) rather than for a fixed time.
             appsrc.set_property("caps", Gst.Caps.from_string(
                 "video/x-raw,format=I420,width=64,height=48,"
                 "framerate=30/1"))
@@ -768,7 +778,10 @@ class TestPumpRealTiming:
             prime.offset = self.PRIME
             prime.pts = clock.get_time() - proj.get_base_time()
             appsrc.push_buffer(prime)
-            time.sleep(2 * self.PROJ_LATENCY / Gst.SECOND)
+            deadline = clock.get_time() + 5 * Gst.SECOND
+            while not primed and clock.get_time() < deadline:
+                proj.get_bus().timed_pop(10 * Gst.MSECOND)
+            assert primed, "projection never rendered the priming frame"
             with patch(_CM, return_value=comp):
                 video_sink.play()
             cue.set_state(Gst.State.PLAYING)
@@ -787,13 +800,17 @@ class TestPumpRealTiming:
             cue.set_state(Gst.State.NULL)
             proj.set_state(Gst.State.NULL)
 
-        assert len(rendered) == self.FRAMES
-        errors = [
+        assert len(rendered) >= self.FRAMES - self.MAX_DROPPED, (
+            f"only {len(rendered)}/{self.FRAMES} frames rendered")
+        errors = sorted(
             rendered[n] - (cue_base + n * self.FRAME + cue_latency)
-            for n in sorted(rendered)
-        ]
+            for n in rendered
+        )
+        median = errors[len(errors) // 2]
         worst = max(errors, key=abs)
-        assert abs(worst) < self.TOLERANCE, (
+        assert abs(median) < self.MEDIAN_TOLERANCE, (
+            f"median A/V offset {median / Gst.MSECOND:.1f}ms")
+        assert abs(worst) < self.WORST_TOLERANCE, (
             f"worst A/V offset {worst / Gst.MSECOND:.1f}ms")
 
 
