@@ -1294,6 +1294,22 @@ class TestRebuildAfterFailure:
             self._fail(comp)
         assert [p[0] for p in sched.pending] == [vc.REBUILD_BACKOFF_MS[0]]
 
+    def test_refailure_with_no_attempts_left_only_gives_up(self):
+        # Every rebuild succeeds and the pipeline dies again at once:
+        # the last failure must not announce a restart that will never
+        # come ("restarting" then "could not be restarted").
+        comp, sched, events = self._comp()
+        with patch(self._MONO, return_value=1000.0):
+            for delay in vc.REBUILD_BACKOFF_MS:
+                self._fail(comp)
+                sched.fire(delay)
+            assert events["restored"] == len(vc.REBUILD_BACKOFF_MS)
+            failed_before = events["failed"]
+            self._fail(comp)
+        assert events["failed"] == failed_before
+        assert events["gave_up"] == 1
+        assert sched.pending == []
+
     def test_shutdown_cancels_pending_rebuild(self):
         comp, sched, events = self._comp()
         self._fail(comp)

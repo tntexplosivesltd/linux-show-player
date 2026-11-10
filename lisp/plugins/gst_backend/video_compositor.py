@@ -343,10 +343,13 @@ class VideoCompositor:
         self._latency = None
         self._latency_at = 0
         # Emitted on the main loop. failed: a runtime error killed the
-        # projection pipeline (a rebuild is scheduled). restored: a
+        # projection pipeline and a rebuild is scheduled. restored: a
         # rebuild succeeded; registrations were dropped with the old
-        # pipeline, so active cues must re-register. gave_up: the last
-        # rebuild failed; video stays off. GstBackend handles all three.
+        # pipeline, so active cues must re-register. gave_up: no
+        # rebuild is left to try (the last one failed, or the pipeline
+        # failed again with every attempt used) and video stays off;
+        # a failure emits failed or gave_up, never both. GstBackend
+        # handles all three.
         self.failed = Signal()
         self.restored = Signal()
         self.gave_up = Signal()
@@ -850,17 +853,27 @@ class VideoCompositor:
         ):
             # Long after the last good rebuild: a new incident.
             self._rebuild_attempt = 0
+        if self._out_of_attempts():
+            # No restart is coming: announce only that.
+            self._give_up()
+            return
         self.failed.emit()
         self._schedule_rebuild()
 
+    def _out_of_attempts(self):
+        return self._rebuild_attempt >= len(REBUILD_BACKOFF_MS)
+
+    def _give_up(self):
+        logger.error(
+            "VideoCompositor: projection did not come back after "
+            "%d attempts; video cues will play audio only",
+            self._rebuild_attempt,
+        )
+        self.gave_up.emit()
+
     def _schedule_rebuild(self):
-        if self._rebuild_attempt >= len(REBUILD_BACKOFF_MS):
-            logger.error(
-                "VideoCompositor: projection did not come back after "
-                "%d attempts; video cues will play audio only",
-                self._rebuild_attempt,
-            )
-            self.gave_up.emit()
+        if self._out_of_attempts():
+            self._give_up()
             return
         delay = REBUILD_BACKOFF_MS[self._rebuild_attempt]
         self._rebuild_attempt += 1
