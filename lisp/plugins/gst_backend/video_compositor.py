@@ -581,6 +581,10 @@ class VideoCompositor:
             self._restoring = False
             pipeline = self.pipeline
             self.pipeline = None
+            # Its sinks go with it (projection_sink() reads them from
+            # other threads; _build() makes new ones).
+            self._proj_sink = None
+            self._mon_sink = None
             self._registrations.clear()
             self._lingering.clear()
             timers = list(self._timers)
@@ -688,8 +692,12 @@ class VideoCompositor:
 
     def projection_sink(self):
         """The projection branch's video sink element, or None before
-        a build. For diagnostics (the test harness's video.stats)."""
-        return self._proj_sink
+        a build or after a teardown. For diagnostics (the test
+        harness's video.stats); any thread."""
+        sink = self._proj_sink
+        if self.pipeline is None:
+            return None
+        return sink
 
     def _schedule_once(self, ms, fn, *args):
         """One-shot main-loop timer whose id is tracked, so shutdown()

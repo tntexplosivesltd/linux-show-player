@@ -1001,8 +1001,8 @@ def register_all(dispatcher, app, signal_manager):
     def handle_video_stats(params):
         """Projection performance counters: the projection sink's
         GstBaseSink stats (rendered / dropped / average-rate) and, per
-        registered cue, whether its first frame was pushed, its caps
-        and its appsink's stats."""
+        registered cue, its id, whether its first frame was pushed,
+        its caps and its appsink's stats."""
         from lisp.plugins.gst_backend.gst_backend import GstBackend
 
         compositor = GstBackend.video_compositor()
@@ -1027,9 +1027,19 @@ def register_all(dispatcher, app, signal_manager):
                 "average_rate": s.get_value("average-rate"),
             }
 
+        def cue_id_of(sink):
+            for cue in app.cue_model:
+                media = getattr(cue, "media", None)
+                if media is not None and (
+                    media.element("VideoSink") is sink
+                ):
+                    return cue.id
+            return None
+
         cues = []
         for sink, reg in compositor.registrations():
             cues.append({
+                "cue_id": cue_id_of(sink),
                 "frame_seen": reg.frame_seen,
                 "caps": reg.caps.to_string() if reg.caps else None,
                 "appsink": sink_stats(sink.video_appsink),

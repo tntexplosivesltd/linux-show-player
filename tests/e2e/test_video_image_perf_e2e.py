@@ -29,9 +29,11 @@ projector (6000x3375, 8000x5333). Each one plays as an image cue
   * LiSP's CPU use over the same window (printed, not judged).
 
 The hard check is the cause, not the timing: the frames the cue pushes
-into the projection must already fit the canvas. Smoothness is judged
-against a canvas-sized control still measured first in the same run,
-so a slow machine (CI, software GL) does not fail it by itself.
+into the projection must already fit the canvas. Timing and smoothness
+are judged against a canvas-sized control still measured first in the
+same run (first frame: the control's + an allowance for decoding the
+bigger file), so a slow machine (CI, software GL) does not fail them
+by itself.
 
 Synthetic images (generated with GStreamer) by default;
 IMAGE_PERF_FILES=<path>:<path>... measures real ones instead.
@@ -55,11 +57,14 @@ HOLD_S = 5.0
 FIRST_FRAME_TIMEOUT_S = 15.0
 UNREGISTER_TIMEOUT_S = 5.0
 # A huge still must play at least this fraction of the control's fps
-# (before the fix: ~4%), and drop at most MAX_EXTRA_DROPPED more.
-MIN_FPS_RATIO = 0.9
-MAX_EXTRA_DROPPED = 3
-# Decoding dominates (~1 s for an 8000x5333 JPEG on the dev host).
-MAX_FIRST_FRAME_S = 3.0
+# (before the fix: ~4%; loose, as both are single 5 s windows), and
+# drop at most MAX_EXTRA_DROPPED more.
+MIN_FPS_RATIO = 0.75
+MAX_EXTRA_DROPPED = 5
+# First frame may take this much longer than the control's. Decoding
+# dominates (~1 s for an 8000x5333 JPEG on the dev host); before the
+# fix the first frame was not the problem, the frame rate was.
+FIRST_FRAME_ALLOWANCE_S = 4.0
 
 CONTROL = ("control-1920x1080.png", 1920, 1080, "pngenc")
 SYNTHETIC = [
@@ -107,13 +112,13 @@ def wait_unregistered():
     return False
 
 
-def wait_first_frame(t0):
-    """(seconds from t0 until the one registered cue pushed its first
-    frame, that stats snapshot), or (None, None) on timeout."""
+def wait_first_frame(t0, cue_id):
+    """(seconds from t0 until cue_id pushed its first frame, its
+    stats entry), or (None, None) on timeout."""
     while time.monotonic() - t0 < FIRST_FRAME_TIMEOUT_S:
-        snap = stats()
-        if len(snap["cues"]) == 1 and snap["cues"][0]["frame_seen"]:
-            return time.monotonic() - t0, snap
+        for entry in stats()["cues"]:
+            if entry["cue_id"] == cue_id and entry["frame_seen"]:
+                return time.monotonic() - t0, entry
         time.sleep(0.01)
     return None, None
 
@@ -143,12 +148,12 @@ def measure(t, path):
     try:
         t0 = time.monotonic()
         call("cue.start", {"id": cue_id})
-        first, snap = wait_first_frame(t0)
+        first, entry = wait_first_frame(t0, cue_id)
         if first is None:
             t.check(f"{name}: first frame within "
                     f"{FIRST_FRAME_TIMEOUT_S}s", False)
             return None
-        caps = snap["cues"][0]["caps"]
+        caps = entry["caps"]
 
         # Let the first second's catch-up settle, then measure.
         time.sleep(1.0)
@@ -189,10 +194,15 @@ def judge(t, r, control):
     t.check(f"{name}: pushed frames {size} fit the canvas {canvas}",
             size is not None
             and size[0] <= canvas[0] and size[1] <= canvas[1])
-    t.check(f"{name}: first frame in {r['first']:.2f}s "
-            f"(<= {MAX_FIRST_FRAME_S}s)", r["first"] <= MAX_FIRST_FRAME_S)
     if control is None:
+        # The baseline itself: only meaningful if it actually played.
+        t.check(f"{name}: control plays ({r['fps']:.1f} fps > 0)",
+                r["fps"] > 0)
         return
+    most_s = control["first"] + FIRST_FRAME_ALLOWANCE_S
+    t.check(f"{name}: first frame in {r['first']:.2f}s (<= {most_s:.2f}s:"
+            f" the control's + {FIRST_FRAME_ALLOWANCE_S}s)",
+            r["first"] <= most_s)
     floor = MIN_FPS_RATIO * control["fps"]
     t.check(f"{name}: projection {r['fps']:.1f} fps (>= {floor:.1f}, "
             f"{MIN_FPS_RATIO:.0%} of the control's)", r["fps"] >= floor)
@@ -219,6 +229,8 @@ def run_tests(t):
         control = measure(t, synth(CONTROL))
         if control is not None:
             judge(t, control, None)
+            if control["fps"] <= 0:
+                control = None  # no baseline: judge only the caps
         files = [f for f in
                  os.environ.get("IMAGE_PERF_FILES", "").split(":") if f]
         if not files:

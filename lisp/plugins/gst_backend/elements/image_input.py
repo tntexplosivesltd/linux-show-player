@@ -16,6 +16,7 @@
 # along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
 import logging
+import os
 import time
 import threading
 
@@ -28,11 +29,7 @@ from lisp.plugins.gst_backend.gst_element import GstSrcElement
 from lisp.plugins.gst_backend.gst_properties import GstURIProperty
 
 # Cycle-safe: video_compositor imports only gi_repository.
-from lisp.plugins.gst_backend.video_compositor import (
-    COMP_HEIGHT,
-    COMP_WIDTH,
-    fit_rect,
-)
+from lisp.plugins.gst_backend.video_compositor import fit_rect
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +39,24 @@ logger = logging.getLogger(__name__)
 # a 6000x3375 PNG measured ~380-440 ms with lanczos or bilinear alike
 # (decoding it alone ~380 ms).
 PRESCALE_METHOD = "lanczos"
+
+# Prescale target when there is no compositor (video disabled, or not
+# built yet). Larger than any canvas we expect, so a still is never
+# shrunk below the real output and then upscaled soft by the mixer;
+# still 4-5x smaller than an 8000x5333 original.
+FALLBACK_CANVAS = (3840, 2160)
+
+# Threads for the one-off scale/convert of a big still. Bounded: every
+# image cue holds its pools for its lifetime, and the scale must not
+# starve the streaming threads of cues already playing.
+SCALE_THREADS = min(4, max(1, (os.cpu_count() or 1) - 1))
+
+
+def _set_threads(element, count):
+    """n-threads where supported (videoscale/videoconvert gained it in
+    GStreamer 1.20); older versions just run single-threaded."""
+    if element.find_property("n-threads") is not None:
+        element.set_property("n-threads", count)
 
 
 def prescale_size(src_w, src_h, par_n, par_d, canvas_w, canvas_h):
@@ -68,7 +83,7 @@ def prescale_size(src_w, src_h, par_n, par_d, canvas_w, canvas_h):
 
 
 def _canvas_size():
-    """The projection canvas, or the default before there is one.
+    """The projection canvas, or FALLBACK_CANVAS when there is none.
 
     Imported inside the call (not at module top) to avoid the
     gst_backend <-> elements import cycle (see video_sink._compositor).
@@ -77,20 +92,28 @@ def _canvas_size():
 
     compositor = GstBackend.video_compositor()
     if compositor is None:
-        return COMP_WIDTH, COMP_HEIGHT
+        return FALLBACK_CANVAS
     return compositor.canvas_size()
 
 
 class ImageInput(GstSrcElement):
     """Still image source using imagefreeze for continuous video.
 
-    Pipeline: uridecodebin -> videoscale -> capsfilter -> videoconvert
-              -> imagefreeze
+    Pipeline: uridecodebin -> videoconvert -> videoscale -> capsfilter
+              -> videoconvert -> imagefreeze
 
     imagefreeze is last: what comes before it runs once per image,
     what comes after it on every repeated frame. So a still is scaled
     down to the projection canvas (prescale_size) and converted once,
-    before it is frozen.
+    before it is frozen. The first videoconvert is normally
+    pass-through; it makes sure the scaler can always negotiate with
+    whatever the decoder emits.
+
+    The prescale target is the canvas when the image is decoded (each
+    play re-decodes). A canvas change while it is on screen (output
+    moved to another screen) is not re-applied until the next play:
+    the mixer still fits the frame, only a smaller-than-canvas frame
+    is upscaled by the GPU until then.
 
     imagefreeze converts a single decoded frame into a continuous video
     stream, allowing still images to flow through the same video
@@ -114,19 +137,29 @@ class ImageInput(GstSrcElement):
         super().__init__(pipeline)
 
         self.decoder = Gst.ElementFactory.make("uridecodebin", None)
+        # Pass-through unless the decoder's format is one videoscale
+        # cannot take: then a still is converted (slow) not blank.
+        self.decode_convert = Gst.ElementFactory.make(
+            "videoconvert", None
+        )
         self.video_scale = Gst.ElementFactory.make("videoscale", None)
         Gst.util_set_object_arg(
             self.video_scale, "method", PRESCALE_METHOD
         )
+        # prescale_size rounds, so the target's aspect can differ from
+        # the source's by a fraction of a pixel: stretch, never pad it
+        # with a black edge (the default).
+        self.video_scale.set_property("add-borders", False)
         # Set per image in __on_pad_added (prescale_size).
         self.scale_filter = Gst.ElementFactory.make("capsfilter", None)
         self.video_convert = Gst.ElementFactory.make(
             "videoconvert", None
         )
         self.freeze = Gst.ElementFactory.make("imagefreeze", None)
-        # One-off work on a big frame: use every core.
-        for element in (self.video_scale, self.video_convert):
-            element.set_property("n-threads", 0)
+        for element in (
+            self.decode_convert, self.video_scale, self.video_convert
+        ):
+            _set_threads(element, SCALE_THREADS)
 
         self._pad_handler = self.decoder.connect(
             "pad-added", self.__on_pad_added
@@ -134,11 +167,13 @@ class ImageInput(GstSrcElement):
         self._linked = False
 
         self.pipeline.add(self.decoder)
+        self.pipeline.add(self.decode_convert)
         self.pipeline.add(self.video_scale)
         self.pipeline.add(self.scale_filter)
         self.pipeline.add(self.video_convert)
         self.pipeline.add(self.freeze)
 
+        self.decode_convert.link(self.video_scale)
         self.video_scale.link(self.scale_filter)
         self.scale_filter.link(self.video_convert)
         self.video_convert.link(self.freeze)
@@ -235,10 +270,11 @@ class ImageInput(GstSrcElement):
             try:
                 self.__set_prescale(caps)
             except Exception:
-                # Slow beats blank: show it as decoded.
+                # Slow beats blank: show it as decoded. (A format the
+                # scaler cannot take is decode_convert's job.)
                 logger.exception("ImageInput: prescale failed")
                 self.scale_filter.set_property("caps", Gst.Caps.new_any())
-            sink_pad = self.video_scale.get_static_pad("sink")
+            sink_pad = self.decode_convert.get_static_pad("sink")
             result = pad.link(sink_pad)
             if result == Gst.PadLinkReturn.OK:
                 self._linked = True
