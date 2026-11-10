@@ -197,8 +197,12 @@ threads meet here:
   then calls `VideoSink.reattach()` for every sink in
   `ActiveVideoSinks` on the main loop. `reattach` re-checks that the
   sink is still active after registering, because its cue can stop
-  on a worker thread at the same moment. `shutdown()` cancels a
-  pending rebuild and makes any later one a no-op.
+  on a worker thread at the same moment. A failure within
+  `REBUILD_STABLE_MS` of a good rebuild quarantines the sinks
+  registered at that moment: `register()` gives them no branch until
+  they `unregister()`, so a cue that keeps breaking a shared element
+  plays audio only instead of using up every attempt. `shutdown()`
+  cancels a pending rebuild and makes any later one a no-op.
 * **Video exclusivity is not the compositor's.** `ActiveVideoSinks`
   (`video_exclusive.py`, its own lock) tracks playing/paused video
   sinks from the `VideoSink` lifecycle, so exclusivity holds whether

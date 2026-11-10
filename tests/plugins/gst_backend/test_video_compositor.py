@@ -1405,6 +1405,64 @@ class TestRebuildAfterFailure:
         assert events["gave_up"] == 1
         assert sched.pending == []
 
+    def _register(self, comp, sink):
+        with patch.object(comp, "_attach",
+                          side_effect=lambda s: vc.Registration()):
+            return comp.register(sink)
+
+    def test_cue_failing_again_after_rebuild_is_left_audio_only(self):
+        # A cue whose input breaks a shared element is re-attached
+        # after the rebuild and fails it again at once. Without
+        # quarantine it uses up every attempt and video stays off for
+        # the rest of the show.
+        comp, sched, events = self._comp()
+        bad, good = object(), object()
+        with patch(self._MONO, return_value=1000.0):
+            self._register(comp, bad)
+            self._fail(comp)
+            sched.fire(vc.REBUILD_BACKOFF_MS[0])
+            self._register(comp, bad)  # GstBackend re-attaches it
+            self._fail(comp)           # ...and it fails again
+            sched.fire(vc.REBUILD_BACKOFF_MS[1])
+            assert self._register(comp, bad) is None
+            assert self._register(comp, good) is not None
+            assert comp.is_registered(bad) is False
+        assert events["gave_up"] == 0
+
+    def test_quarantine_ends_when_the_cue_stops(self):
+        comp, sched, events = self._comp()
+        bad = object()
+        with patch(self._MONO, return_value=1000.0):
+            self._fail(comp)
+            sched.fire(vc.REBUILD_BACKOFF_MS[0])
+            self._register(comp, bad)
+            self._fail(comp)
+            sched.fire(vc.REBUILD_BACKOFF_MS[1])
+        comp.unregister(bad)  # the cue stops: a fresh play may try
+        assert self._register(comp, bad) is not None
+
+    def test_first_failure_quarantines_nobody(self):
+        # Cannot tell a cue's fault from a GL/driver hiccup yet.
+        comp, sched, events = self._comp()
+        sink = object()
+        self._register(comp, sink)
+        self._fail(comp)
+        sched.fire(vc.REBUILD_BACKOFF_MS[0])
+        assert self._register(comp, sink) is not None
+
+    def test_failure_long_after_rebuild_quarantines_nobody(self):
+        comp, sched, events = self._comp()
+        sink = object()
+        with patch(self._MONO, return_value=1000.0):
+            self._fail(comp)
+            sched.fire(vc.REBUILD_BACKOFF_MS[0])
+            self._register(comp, sink)
+        later = 1000.0 + vc.REBUILD_STABLE_MS / 1000 + 1
+        with patch(self._MONO, return_value=later):
+            self._fail(comp)
+            sched.fire(vc.REBUILD_BACKOFF_MS[0])
+        assert self._register(comp, sink) is not None
+
     def test_shutdown_cancels_pending_rebuild(self):
         comp, sched, events = self._comp()
         self._fail(comp)

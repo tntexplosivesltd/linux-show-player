@@ -54,7 +54,10 @@ LINGER_CAP_MS = 3000
 # after each delay in turn, then give up (audio only until restart). A
 # failure more than REBUILD_STABLE_MS after a good rebuild is a new
 # incident and starts the backoff over, so a long show cannot use up
-# its retries on unrelated hiccups hours apart.
+# its retries on unrelated hiccups hours apart. A failure within
+# REBUILD_STABLE_MS of a good rebuild is blamed on the cues registered
+# at that moment: they stay audio only until they stop (quarantine), so
+# one cue that breaks a shared element cannot use up every attempt.
 REBUILD_BACKOFF_MS = (1000, 5000, 30000)
 REBUILD_STABLE_MS = 60000
 
@@ -332,6 +335,9 @@ class VideoCompositor:
         self._registrations = {}
         # Unregistered but still on screen (handoff linger).
         self._lingering = []
+        # Sinks blamed for a repeat shared failure (see _fail): no
+        # branch until they unregister (their cue stops).
+        self._quarantined = set()
         # Pending linger/handoff GLib timeout ids, removed at shutdown.
         self._timers = set()
         # Guards the collections above: touched from the main loop,
@@ -454,6 +460,8 @@ class VideoCompositor:
         a pending rebuild.
         """
         self._closed = True
+        with self._lock:
+            self._quarantined.clear()  # hold no sinks past finalize
         self._teardown()
 
     def _teardown(self):
@@ -488,6 +496,8 @@ class VideoCompositor:
         if not self.available:
             return None
         with self._lock:
+            if sink in self._quarantined:
+                return None
             reg = self._registrations.get(sink)
             if reg is not None:
                 return reg
@@ -505,6 +515,8 @@ class VideoCompositor:
         LINGER_* constants.
         """
         with self._lock:
+            # The cue stopped: its next play gets a fresh chance.
+            self._quarantined.discard(sink)
             reg = self._registrations.pop(sink, None)
             if reg is None:
                 return
@@ -883,15 +895,33 @@ class VideoCompositor:
 
     def _fail(self):
         """Main loop. The shared pipeline died: drop it (every cue goes
-        audio only for now) and schedule a rebuild."""
+        audio only for now) and schedule a rebuild.
+
+        Failing again soon after a good rebuild points at a cue rather
+        than a GL/driver hiccup: most likely one re-attached by the
+        rebuild, whose input breaks a shared element (an error the
+        mixer or sink posts, so not caught as a branch error). The cues
+        registered now are quarantined, so the next rebuild comes up
+        without them instead of failing on them again."""
+        recent = (
+            self._rebuilt_at is not None
+            and time.monotonic() - self._rebuilt_at
+            <= REBUILD_STABLE_MS / 1000
+        )
+        if recent:
+            with self._lock:
+                suspects = set(self._registrations)
+                self._quarantined |= suspects
+            if suspects:
+                logger.warning(
+                    "VideoCompositor: projection failed again soon after "
+                    "a rebuild; %d video cue(s) will play audio only "
+                    "until stopped", len(suspects),
+                )
         self._teardown()
         if self._closed:
             return
-        if (
-            self._rebuilt_at is not None
-            and time.monotonic() - self._rebuilt_at
-            > REBUILD_STABLE_MS / 1000
-        ):
+        if self._rebuilt_at is not None and not recent:
             # Long after the last good rebuild: a new incident.
             self._rebuild_attempt = 0
         if self._out_of_attempts():
