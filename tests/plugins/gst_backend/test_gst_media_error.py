@@ -24,14 +24,21 @@ behind, so VideoExclusiveManager refused every later video cue.
 """
 
 import wave
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from lisp.backend.media import MediaState
 from lisp.plugins.gst_backend import elements as gst_elements
+from lisp.plugins.gst_backend import video_compositor as vc
 from lisp.plugins.gst_backend.gi_repository import Gst
 from lisp.plugins.gst_backend.gst_media import GstMedia
+from lisp.plugins.gst_backend.video_exclusive import (
+    VideoExclusiveManager,
+    active_video_sinks,
+)
+
+_CM = "lisp.plugins.gst_backend.gst_backend.GstBackend.video_compositor"
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -94,3 +101,35 @@ def test_error_still_emits_error_when_an_element_stop_raises(short_wav):
 
     assert received == [media]
     assert media.state == MediaState.Null
+
+
+def test_error_releases_video_exclusivity(short_wav):
+    """The regression itself, with no element stubbed: a real
+    UriAvInput + VideoSink cue that errors must leave the active video
+    sinks, unregister from the compositor once, and stop blocking the
+    next video cue. Never leaves NULL, so no device is opened."""
+    comp = MagicMock()
+    comp.clock.return_value = Gst.SystemClock.obtain()
+    comp.register.side_effect = lambda _sink: vc.Registration()
+
+    def video_cue():
+        media = GstMedia()
+        media.pipe = ("UriAvInput", "VideoSink")
+        media.elements[0].uri = f"file://{short_wav}"
+        cue = MagicMock()
+        cue.media = media
+        return cue
+
+    with patch(_CM, return_value=comp):
+        failing, other = video_cue(), video_cue()
+        sink = failing.media.element("VideoSink")
+        sink.play()  # as GstMedia.play() does
+        exclusive = VideoExclusiveManager(MagicMock())
+        assert active_video_sinks.contains(sink)
+        assert exclusive.is_start_blocked(other) is True
+
+        failing.media._GstMedia__on_message(None, _error_message())
+
+        assert not active_video_sinks.contains(sink)
+        comp.unregister.assert_called_once_with(sink)
+        assert exclusive.is_start_blocked(other) is False
