@@ -30,10 +30,12 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(__file__))
-from helpers import call, cue_state, run_suite, wait_state  # noqa: E402
+from helpers import (  # noqa: E402
+    call, cue_state, make_media, media_cache_dir, media_path, run_suite,
+    wait_state,
+)
 
-MEDIA_DIR = "/tmp/lisp_test_paused_seek"
-CLIP = os.path.join(MEDIA_DIR, "dark_then_bright.mp4")
+MEDIA_DIR = media_cache_dir("paused_seek")
 HALF_S = 3          # dark for [0, 3s), bright for [3s, 6s)
 DARK_LUMA = 60      # clip luma in the dark half
 BRIGHT_LUMA = 220   # clip luma in the bright half
@@ -42,24 +44,29 @@ SETTLE = 0.8        # s for a paused-seek frame to reach the screen
 
 # ── media ──────────────────────────────────────────────────────
 
-def make_clip():
-    if os.path.exists(CLIP):
-        return
-    os.makedirs(MEDIA_DIR, exist_ok=True)
+def _clip_cmd(out):
     video = (
         f"color=c=black:s=640x360:r=30:d={2 * HALF_S},format=yuv420p,"
         f"geq=lum='if(lt(T,{HALF_S}),{DARK_LUMA},{BRIGHT_LUMA})'"
         ":cb=128:cr=128"
     )
-    subprocess.run([
+    return [
         "ffmpeg", "-loglevel", "error", "-y",
         "-f", "lavfi", "-i", video,
         "-f", "lavfi", "-i", f"sine=f=440:d={2 * HALF_S}",
         # Built-in encoders only (no libx264 needed); short GOP so a
         # seek lands on the requested half.
         "-c:v", "mpeg4", "-q:v", "3", "-g", "10",
-        "-c:a", "aac", "-shortest", CLIP,
-    ], capture_output=True, timeout=120, check=True)
+        "-c:a", "aac", "-shortest", out,
+    ]
+
+
+CLIP = media_path(MEDIA_DIR, "dark_then_bright.mp4", _clip_cmd(None))
+
+
+def make_clip():
+    make_media(CLIP, lambda out: subprocess.run(
+        _clip_cmd(out), capture_output=True, timeout=120, check=True))
 
 
 # ── capture ────────────────────────────────────────────────────

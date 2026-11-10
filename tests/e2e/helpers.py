@@ -18,6 +18,7 @@ Typical usage in a test file::
 
 import argparse
 import atexit
+import hashlib
 import json
 import math
 import os
@@ -51,6 +52,63 @@ _PORTFILE = portfile.resolve_portfile_path(__file__)
 # ── Audio config ───────────────────────────────────────────────
 
 AUDIO_DIR = "/tmp/lisp_test_audio"
+
+# ── Generated-media cache ──────────────────────────────────────
+
+
+def media_cache_dir(name):
+    """A private, persistent directory for one script's generated
+    media: $XDG_CACHE_HOME/lisp-e2e/<name> (~/.cache by default).
+
+    Not a fixed /tmp path, where another user could plant files or
+    symlinks before us (and which is wiped on reboot). Each level is
+    created owner-only, an existing one is tightened, and one that is
+    a symlink or someone else's is refused, so whatever the directory
+    holds was put there by this user.
+    """
+    base = os.environ.get("XDG_CACHE_HOME") or os.path.join(
+        os.path.expanduser("~"), ".cache")
+    path = base
+    for part in ("lisp-e2e", name):
+        path = os.path.join(path, part)
+        os.makedirs(path, mode=0o700, exist_ok=True)
+        info = os.lstat(path)
+        if not os.path.isdir(path) or os.path.islink(path):
+            raise RuntimeError(f"media cache {path} is not a directory")
+        if info.st_uid != os.getuid():
+            raise RuntimeError(f"media cache {path} is not ours")
+        if info.st_mode & 0o077:
+            os.chmod(path, 0o700)
+    return path
+
+
+def media_path(directory, filename, recipe):
+    """Path for a generated clip in `directory`, keyed on `recipe`
+    (e.g. the generator's command line minus its output path): change
+    how a clip is made and it gets a new name, so a stale one from an
+    older generator is never reused."""
+    stem, ext = os.path.splitext(filename)
+    key = hashlib.sha256(repr(recipe).encode()).hexdigest()[:12]
+    return os.path.join(directory, f"{stem}-{key}{ext}")
+
+
+def make_media(path, generate):
+    """Create the clip at `path` with generate(tmp_path) unless it is
+    already there. The generator writes a temporary file (same
+    extension, so encoders still infer the container) that is renamed
+    into place only once it succeeds: an interrupted run must not leave
+    a truncated clip that later runs would reuse."""
+    if os.path.exists(path):
+        return
+    stem, ext = os.path.splitext(path)
+    tmp = f"{stem}.part{ext}"
+    try:
+        generate(tmp)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
 
 # ── Internal state ─────────────────────────────────────────────
 

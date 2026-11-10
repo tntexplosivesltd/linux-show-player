@@ -30,11 +30,12 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(__file__))
-from helpers import call, cue_state, run_suite, wait_state  # noqa: E402
+from helpers import (  # noqa: E402
+    call, cue_state, make_media, media_cache_dir, media_path, run_suite,
+    wait_state,
+)
 
-MEDIA_DIR = "/tmp/lisp_test_parity"
-CLIP_A = os.path.join(MEDIA_DIR, "parity_a.mp4")
-CLIP_B = os.path.join(MEDIA_DIR, "parity_b.mp4")
+MEDIA_DIR = media_cache_dir("parity")
 FPS = 60
 CUE_SECONDS = 2
 MIN_ADVANCES = 5
@@ -44,13 +45,11 @@ SETTLE_FRAMES = 30  # ignore the first ~0.5s of a capture
 
 # ── media ──────────────────────────────────────────────────────
 
-def make_motion_h264(path, videotestsrc_args, seconds=CUE_SECONDS):
+def _motion_h264_cmd(out, videotestsrc_args, seconds=CUE_SECONDS):
     """1080p H.264 clip with inter-frame motion + audio."""
-    if os.path.exists(path):
-        return
     vframes = seconds * 30
     abuffers = int(seconds * 44100 / 1024) + 1
-    subprocess.run([
+    return [
         "gst-launch-1.0", "-e",
         "videotestsrc", *videotestsrc_args, f"num-buffers={vframes}",
         "!", "video/x-raw,width=1920,height=1080,framerate=30/1", "!",
@@ -58,14 +57,27 @@ def make_motion_h264(path, videotestsrc_args, seconds=CUE_SECONDS):
         "queue", "!", "mux.",
         "audiotestsrc", f"num-buffers={abuffers}", "freq=440", "!",
         "audioconvert", "!", "avenc_aac", "!", "queue", "!", "mux.",
-        "mp4mux", "name=mux", "!", "filesink", f"location={path}",
-    ], capture_output=True, timeout=120, check=True)
+        "mp4mux", "name=mux", "!", "filesink", f"location={out}",
+    ]
+
+
+ARGS_A = ["pattern=smpte", "horizontal-speed=6"]
+ARGS_B = ["pattern=snow"]
+CLIP_A = media_path(
+    MEDIA_DIR, "parity_a.mp4", _motion_h264_cmd(None, ARGS_A))
+CLIP_B = media_path(
+    MEDIA_DIR, "parity_b.mp4", _motion_h264_cmd(None, ARGS_B))
+
+
+def make_motion_h264(path, videotestsrc_args):
+    make_media(path, lambda out: subprocess.run(
+        _motion_h264_cmd(out, videotestsrc_args),
+        capture_output=True, timeout=120, check=True))
 
 
 def create_media():
-    os.makedirs(MEDIA_DIR, exist_ok=True)
-    make_motion_h264(CLIP_A, ["pattern=smpte", "horizontal-speed=6"])
-    make_motion_h264(CLIP_B, ["pattern=snow"])
+    make_motion_h264(CLIP_A, ARGS_A)
+    make_motion_h264(CLIP_B, ARGS_B)
 
 
 # ── capture ────────────────────────────────────────────────────

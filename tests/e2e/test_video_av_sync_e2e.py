@@ -40,10 +40,11 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(__file__))
-from helpers import call, run_suite, wait_state  # noqa: E402
+from helpers import (  # noqa: E402
+    call, make_media, media_cache_dir, media_path, run_suite, wait_state,
+)
 
-MEDIA_DIR = "/tmp/lisp_test_avsync"
-CLIP = os.path.join(MEDIA_DIR, "beep_flash.mp4")
+MEDIA_DIR = media_cache_dir("avsync")
 CAPTURE_VIDEO = os.path.join(MEDIA_DIR, "capture_video.nut")
 CAPTURE_AUDIO = os.path.join(MEDIA_DIR, "capture_audio.nut")
 FLASH_TIMES_S = (1, 2, 3, 4, 5)
@@ -73,16 +74,13 @@ def have_tools():
         and shutil.which("xwininfo"))
 
 
-def make_clip():
+def _clip_cmd(out):
     """Grey 30fps clip: 2-frame white flash + sample-exact beep at each
     FLASH_TIMES_S. aevalsrc keys the beep on the sample's own time, so
     it is not quantised to audio-frame boundaries like `volume=enable`.
     """
-    os.makedirs(MEDIA_DIR, exist_ok=True)
-    if os.path.exists(CLIP):
-        return
     on = "gte(t,1)*lt(mod(t,1),0.066)"
-    subprocess.run([
+    return [
         "ffmpeg", "-loglevel", "error", "-y",
         "-f", "lavfi", "-i",
         f"color=c=0x404040:s=640x360:r=30:d={CLIP_SECONDS},"
@@ -91,8 +89,16 @@ def make_clip():
         f"aevalsrc='if({on},0.8*sin(2*PI*1000*t),0)'"
         f":s=48000:d={CLIP_SECONDS}",
         "-c:v", "libx264", "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-b:a", "192k", "-shortest", CLIP,
-    ], check=True, timeout=120)
+        "-c:a", "aac", "-b:a", "192k", "-shortest", out,
+    ]
+
+
+CLIP = media_path(MEDIA_DIR, "beep_flash.mp4", _clip_cmd(None))
+
+
+def make_clip():
+    make_media(CLIP, lambda out: subprocess.run(
+        _clip_cmd(out), check=True, timeout=120))
 
 
 # ── analysis ───────────────────────────────────────────────────
