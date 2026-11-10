@@ -847,10 +847,11 @@ class TestAppsrcBounds:
         appsrc = vc.Gst.ElementFactory.make("appsrc", None)
         vc._configure_appsrc(appsrc)
         assert appsrc.get_property("max-time") == vc.APPSRC_MAX_QUEUE_TIME
-        # Neither the 200kB byte default (< one 1080p frame) nor a
-        # buffer count (frame-rate dependent) may trigger the leak.
+        # Not the 200kB byte default (< one 1080p frame); the buffer
+        # count is only a generous backstop (see below).
         assert appsrc.get_property("max-bytes") == 0
-        assert appsrc.get_property("max-buffers") == 0
+        assert (appsrc.get_property("max-buffers")
+                == vc.APPSRC_MAX_QUEUE_BUFFERS)
         assert (appsrc.get_property("leaky-type")
                 == vc.GstApp.AppLeakyType.DOWNSTREAM)
         assert appsrc.get_property("is-live") is True
@@ -860,6 +861,36 @@ class TestAppsrcBounds:
         from lisp.plugins.gst_backend.elements.video_sink import PUMP_LEAD
 
         assert vc.APPSRC_MAX_QUEUE_TIME >= 3 * PUMP_LEAD
+
+    def test_non_advancing_pts_cannot_grow_the_queue(self):
+        # A malformed file whose PTS never advances spans ~0 time, so
+        # max-time never leaks; the buffer-count backstop must. The
+        # live appsrc in a PAUSED pipeline never drains (a stalled
+        # projection).
+        Gst = vc.Gst
+        pipeline = Gst.Pipeline.new()
+        appsrc = Gst.ElementFactory.make("appsrc", None)
+        vc._configure_appsrc(appsrc)
+        sink = Gst.ElementFactory.make("fakesink", None)
+        pipeline.add(appsrc)
+        pipeline.add(sink)
+        assert appsrc.link(sink)
+        pipeline.set_state(Gst.State.PAUSED)
+        try:
+            for _ in range(3 * vc.APPSRC_MAX_QUEUE_BUFFERS):
+                buf = Gst.Buffer.new_allocate(None, 16, None)
+                buf.pts = 0
+                appsrc.push_buffer(buf)
+            level = appsrc.get_property("current-level-buffers")
+        finally:
+            pipeline.set_state(Gst.State.NULL)
+        assert level <= vc.APPSRC_MAX_QUEUE_BUFFERS
+
+    def test_buffer_backstop_is_far_above_a_healthy_queue(self):
+        # A healthy queue holds MAX_QUEUE_TIME at most: 30 frames at
+        # 60fps. The count must only ever bite on broken timestamps.
+        assert vc.APPSRC_MAX_QUEUE_BUFFERS >= 2 * (
+            vc.APPSRC_MAX_QUEUE_TIME * 60 // vc.Gst.SECOND)
 
 
 class TestAttachRollback:

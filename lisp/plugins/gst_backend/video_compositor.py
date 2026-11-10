@@ -68,10 +68,16 @@ APPSRC_MAX_LATENCY = Gst.SECOND
 # Bound on each cue's appsrc queue, by time. The pump runs PUMP_LEAD
 # (100ms) ahead, so a healthy queue holds ~100ms whatever the frame
 # rate; a stalled projection would otherwise grow it without limit.
-# Leaky-downstream drops the oldest frame past this. Deliberately not
-# max-buffers (60fps legitimately queues ~6 frames) nor the default
+# Leaky-downstream drops the oldest frame past this. Not the default
 # max-bytes (200kB is smaller than one 1080p frame).
 APPSRC_MAX_QUEUE_TIME = 500 * Gst.MSECOND
+
+# Backstop for frames whose PTS does not advance (a malformed file):
+# they span ~0 time, so max-time never leaks them, and a stalled mixer
+# would queue raw frames (~8MB each at 1080p RGBA) without limit. Far
+# above a healthy queue (MAX_QUEUE_TIME at 60fps is 30 frames), so it
+# only bites on broken timestamps; leaky-downstream drops the oldest.
+APPSRC_MAX_QUEUE_BUFFERS = 64
 
 # The projection pipeline's latency is cached for every cue's pump and
 # re-queried after this long, or sooner once invalidated (a cue branch
@@ -214,14 +220,15 @@ def _make_upload(description):
 
 def _configure_appsrc(appsrc):
     """A cue's projection input: live, pre-timestamped by the pump,
-    and bounded by time (see APPSRC_MAX_QUEUE_TIME)."""
+    and bounded by time (APPSRC_MAX_QUEUE_TIME), with a buffer-count
+    backstop (APPSRC_MAX_QUEUE_BUFFERS)."""
     appsrc.set_property("format", Gst.Format.TIME)
     appsrc.set_property("is-live", True)
     appsrc.set_property("do-timestamp", False)
     appsrc.set_property("min-latency", 0)
     appsrc.set_property("max-latency", APPSRC_MAX_LATENCY)
     appsrc.set_property("max-bytes", 0)
-    appsrc.set_property("max-buffers", 0)
+    appsrc.set_property("max-buffers", APPSRC_MAX_QUEUE_BUFFERS)
     appsrc.set_property("max-time", APPSRC_MAX_QUEUE_TIME)
     appsrc.set_property("leaky-type", GstApp.AppLeakyType.DOWNSTREAM)
 
