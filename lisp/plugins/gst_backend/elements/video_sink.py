@@ -33,16 +33,6 @@ from lisp.plugins.gst_backend.video_compositor import (
     query_min_latency,
 )
 
-
-def cue_latency_due(buffers_seen):
-    """True when the pump should re-query the cue pipeline's latency
-    for its `buffers_seen`-th buffer (0-based) — see
-    LATENCY_WARMUP_BUFFERS."""
-    return (
-        buffers_seen < LATENCY_WARMUP_BUFFERS
-        or buffers_seen % LATENCY_REFRESH_BUFFERS == 0
-    )
-
 logger = logging.getLogger(__name__)
 
 # The appsink releases each frame this long before its render time, so
@@ -59,14 +49,24 @@ PUMP_LEAD = 100 * Gst.MSECOND
 # The projection's latency comes from the compositor's shared cache
 # (VideoCompositor.latency()).
 LATENCY_WARMUP_BUFFERS = 60
+LATENCY_REFRESH_BUFFERS = 30
 
 # A timed frame stamped further than this ahead of the projection's
 # clock is dropped (see the pump). Same bound as the appsrc queue.
 MAX_AHEAD = APPSRC_MAX_QUEUE_TIME
-LATENCY_REFRESH_BUFFERS = 30
 
 # A failing pump fails on every frame; log it at most this often (s).
 PUMP_ERROR_LOG_INTERVAL = 5.0
+
+
+def cue_latency_due(buffers_seen):
+    """True when the pump should re-query the cue pipeline's latency
+    for its `buffers_seen`-th buffer (0-based) — see
+    LATENCY_WARMUP_BUFFERS."""
+    return (
+        buffers_seen < LATENCY_WARMUP_BUFFERS
+        or buffers_seen % LATENCY_REFRESH_BUFFERS == 0
+    )
 
 
 def _compositor():
