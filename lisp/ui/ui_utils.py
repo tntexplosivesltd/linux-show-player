@@ -21,7 +21,14 @@ import os
 import signal
 from itertools import chain
 
-from PyQt5.QtCore import QByteArray, QTranslator, QLocale, QSocketNotifier
+from PyQt5.QtCore import (
+    QByteArray,
+    QLocale,
+    QPoint,
+    QRect,
+    QSocketNotifier,
+    QTranslator,
+)
 from PyQt5.QtWidgets import QApplication, qApp
 
 from lisp import I18N_DIR
@@ -29,36 +36,72 @@ from lisp import I18N_DIR
 logger = logging.getLogger(__name__)
 
 
-def save_window_geometry(window, conf, key):
-    """Store the window's geometry and state (incl. screen) in `conf`.
+def save_window_geometry(window, conf, key, screen_key):
+    """Store the window's geometry, window state and screen in `conf`.
 
-    The value is Qt's opaque saveGeometry() blob, base64 encoded so it
-    survives the JSON configuration file.
+    `key` gets Qt's opaque saveGeometry() blob, base64 encoded so it
+    survives the JSON configuration file. `screen_key` gets the name of
+    the screen the window is on (e.g. "HDMI-1"): the blob only records
+    the screen's *index*, which shifts when outputs are hot-plugged.
     """
     conf.set(key, bytes(window.saveGeometry().toBase64()).decode("ascii"))
+    screen = qApp.screenAt(window.geometry().center())
+    conf.set(screen_key, screen.name() if screen is not None else "")
 
 
-def restore_window_geometry(window, conf, key):
+def restore_window_geometry(window, conf, key, screen_key):
     """Restore a geometry saved by `save_window_geometry`.
 
-    Falls back to the primary screen's available area when nothing usable
-    is stored. Call it before the window is first shown: an unshown
-    window sits at (0, 0), so asking Qt "which screen is this window on"
-    would otherwise pick whatever monitor happens to be at the origin.
+    The saved geometry is used only if the screen it was saved on (by
+    name) is still connected; if Qt resolves the blob's screen index to
+    a different monitor, the window is moved back onto the named one.
+    Otherwise the window fills the primary screen's available area.
+
+    Call it before the window is first shown: an unshown window sits at
+    (0, 0), so asking Qt "which screen is this window on" would
+    otherwise pick whatever monitor happens to be at the origin.
 
     :return: True if a saved geometry was applied
     """
-    saved = conf.get(key, "")
-    if saved:
-        try:
-            data = QByteArray.fromBase64(saved.encode("ascii"))
-        except (AttributeError, UnicodeEncodeError):
-            data = QByteArray()
-        if not data.isEmpty() and window.restoreGeometry(data):
-            return True
+    target = _screen_named(conf.get(screen_key, ""))
+    if target is not None and _restore_blob(window, conf.get(key, "")):
+        if qApp.screenAt(window.geometry().center()) is not target:
+            _center_on_screen(window, target)
+        return True
 
-    window.setGeometry(qApp.primaryScreen().availableGeometry())
+    primary = qApp.primaryScreen()
+    if primary is not None:
+        window.setGeometry(primary.availableGeometry())
     return False
+
+
+def _screen_named(name):
+    # Exact match, empty included: some platforms (e.g. "offscreen")
+    # leave screen names blank, real outputs never do.
+    if not isinstance(name, str):
+        return None
+    for screen in qApp.screens():
+        if screen.name() == name:
+            return screen
+    return None
+
+
+def _restore_blob(window, saved):
+    if not isinstance(saved, str) or not saved:
+        return False
+    try:
+        data = QByteArray.fromBase64(saved.encode("ascii"))
+    except UnicodeEncodeError:
+        return False
+    return not data.isEmpty() and window.restoreGeometry(data)
+
+
+def _center_on_screen(window, screen):
+    area = screen.availableGeometry()
+    size = window.size().boundedTo(area.size())
+    rect = QRect(QPoint(0, 0), size)
+    rect.moveCenter(area.center())
+    window.setGeometry(rect)
 
 
 def adjust_widget_position(widget):

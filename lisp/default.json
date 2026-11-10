@@ -58,6 +58,7 @@
     "mainWindow": {
         "inspectorVisible": true,
         "inspectorHeight": 240,
-        "geometry": ""
+        "geometry": "",
+        "screen": ""
     }
 }

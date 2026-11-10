@@ -130,8 +130,7 @@ class Application(metaclass=Singleton):
         return self.__exclusive_manager
 
     def start(self, session_file=""):
-        # Show the mainWindow maximized
-        self.__main_window.showMaximized()
+        self.__main_window.showRestored()
 
         if exists(session_file):
             self.__load_from_file(session_file)
