@@ -1581,3 +1581,125 @@ class TestLatencyCache:
         comp = self._comp()
         comp.shutdown()
         assert comp.latency() == 0
+
+
+_SOFTWARE_PLAN = {"gl": False, "upload": None, "mixer": "compositor",
+                  "sink": "fakesink"}
+_GL_PLAN = {"gl": True, "upload": "glupload ! glcolorconvert",
+            "mixer": "glvideomixerelement", "sink": "fakesink"}
+
+
+def _gl_usable():
+    import os
+
+    return bool(os.environ.get("DISPLAY")) and all(
+        vc._have_factory(name)
+        for name in ("glupload", "glcolorconvert", "glvideomixerelement"))
+
+
+class TestRealMixerLifecycle:
+    """Register/detach against a REAL mixer, where the bugs this code
+    works around live (1.24's release_pad over-unref, the canvas caps
+    re-pin going not-negotiated): playlist hand-offs on one pipeline,
+    and a live resize with two cues attached. Sinks are fakesinks, so
+    no window or audio; GL runs only where a display supports it."""
+
+    W, H = 64, 48
+    CYCLES = 20
+
+    def _comp(self, plan):
+        import pytest
+
+        if plan["gl"] and not _gl_usable():
+            pytest.skip("no GL display")
+        out, mon = _fake_windows()
+        with patch.object(vc, "plan_pipeline", return_value=plan):
+            comp = vc.VideoCompositor(out, mon,
+                                      canvas_size=(self.W, self.H))
+        if not comp.available:
+            comp.shutdown()
+            pytest.skip(f"{plan['mixer']} projection unavailable here")
+        return comp, _FakeScheduler(comp)
+
+    def _push(self, comp, reg, frames=3):
+        Gst = vc.Gst
+        caps = Gst.Caps.from_string(
+            f"video/x-raw,format=I420,width={self.W},height={self.H},"
+            "framerate=30/1,pixel-aspect-ratio=1/1")
+        reg.appsrc.set_property("caps", caps)
+        comp.fit_registration(reg, caps)
+        size = self.W * self.H * 3 // 2
+        for _ in range(frames):
+            buf = Gst.Buffer.new_allocate(None, size, None)
+            buf.pts = (comp.clock().get_time()
+                       - comp.pipeline.get_base_time())
+            assert reg.appsrc.push_buffer(buf) == Gst.FlowReturn.OK
+        comp.frame_ready(reg)
+
+    def _wait_canvas(self, comp, width, height):
+        """The projection sink renders frames of the new canvas size:
+        the live caps re-pin negotiated."""
+        Gst = vc.Gst
+        deadline = comp.clock().get_time() + 2 * Gst.SECOND
+        size = None
+        while comp.clock().get_time() < deadline:
+            sample = comp._proj_sink.get_property("last-sample")
+            if sample is not None:
+                struct = sample.get_caps().get_structure(0)
+                size = (struct.get_int("width")[1],
+                        struct.get_int("height")[1])
+                if size == (width, height):
+                    return
+            comp.pipeline.get_bus().timed_pop(10 * Gst.MSECOND)
+        raise AssertionError(f"canvas stuck at {size}, not "
+                             f"{(width, height)}")
+
+    def _sink_pads(self, comp):
+        return [p for p in comp.mixer.sinkpads]
+
+    def _assert_healthy(self, comp):
+        Gst = vc.Gst
+        error = comp.pipeline.get_bus().pop_filtered(Gst.MessageType.ERROR)
+        assert error is None, error.parse_error()[0].message
+        _ret, state, _pending = comp.pipeline.get_state(Gst.SECOND)
+        assert state == Gst.State.PLAYING
+
+    def _run(self, plan):
+        comp, sched = self._comp(plan)
+        try:
+            current = object()
+            reg = comp.register(current)
+            assert reg is not None
+            self._push(comp, reg)
+            for cycle in range(self.CYCLES):
+                successor = object()
+                next_reg = comp.register(successor)
+                assert next_reg is not None
+                if cycle == self.CYCLES // 2:
+                    # Two cues attached (one lingering) during a resize.
+                    comp.unregister(current)
+                    comp.set_canvas_size(self.W * 2, self.H * 2)
+                    self._wait_canvas(comp, self.W * 2, self.H * 2)
+                    self._push(comp, next_reg)
+                    comp.set_canvas_size(self.W, self.H)
+                    self._wait_canvas(comp, self.W, self.H)
+                else:
+                    self._push(comp, next_reg)
+                    comp.unregister(current)
+                _drain(sched)  # linger + handoff release, main thread
+                self._assert_healthy(comp)
+                assert len(self._sink_pads(comp)) == 2  # bg + successor
+                current, reg = successor, next_reg
+            comp.unregister(current)
+            _drain(sched)
+            self._assert_healthy(comp)
+            assert len(self._sink_pads(comp)) == 1  # the background
+            assert comp._lingering == [] and comp._registrations == {}
+        finally:
+            comp.shutdown()
+
+    def test_software_mixer_playlist_churn_and_live_resize(self):
+        self._run(_SOFTWARE_PLAN)
+
+    def test_gl_mixer_playlist_churn_and_live_resize(self):
+        self._run(_GL_PLAN)
