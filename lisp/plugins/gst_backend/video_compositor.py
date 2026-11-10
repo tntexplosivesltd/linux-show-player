@@ -42,7 +42,10 @@ MIN_CANVAS = 64
 #   matching the old deferred clear).
 # - Successor's first frame pushed → release HANDOFF_RELEASE_MS later
 #   (> the pump's 100ms lead, so it is on screen first).
-# - LINGER_CAP_MS is the backstop if a successor never shows a frame.
+# - Successor's video ends before any frame (no video stream) → release
+#   at once, see video_ended().
+# - LINGER_CAP_MS is the backstop if a successor never shows a frame
+#   (e.g. every frame dropped as mis-stamped).
 LINGER_MS = 100
 HANDOFF_RELEASE_MS = 250
 LINGER_CAP_MS = 3000
@@ -200,6 +203,9 @@ class Registration:
         self.caps = None
         # Set by frame_ready() once the pump pushed the first frame.
         self.frame_seen = False
+        # Set by video_ended(): the branch ended without a frame, so a
+        # predecessor's handoff must not wait for one.
+        self.no_video = False
         # Pump state (cue streaming thread only).
         self.pushed = False  # at least one frame pushed
         self.cue_latency = 0  # L_cue, see VideoSink's refresh policy
@@ -521,6 +527,25 @@ class VideoCompositor:
                 HANDOFF_RELEASE_MS, self._release, *lingering
             )
 
+    def video_ended(self, reg):
+        """Pump hook (streaming thread): `reg`'s video branch hit EOS.
+        If it never pushed a frame it never will (e.g. a file with no
+        video stream), so lingering predecessors must not wait for one:
+        once no active registration is still due a frame, they are
+        released now (black) instead of at LINGER_CAP_MS."""
+        with self._lock:
+            if not any(r is reg for r in self._registrations.values()):
+                return
+            if reg.frame_seen:
+                return  # a normal end; the handoff already happened
+            reg.no_video = True
+            waiting = [
+                r for r in self._registrations.values() if not r.no_video
+            ]
+            lingering = list(self._lingering)
+        if lingering and not waiting:
+            self._schedule_once(0, self._release, *lingering)
+
     def is_registered(self, sink):
         with self._lock:
             return sink in self._registrations
@@ -545,7 +570,10 @@ class VideoCompositor:
         """Main loop. With no successor, release now (black on stop).
         With a successor, hand off once its first frame is up."""
         with self._lock:
-            active = list(self._registrations.values())
+            # A registration that ended without video shows nothing.
+            active = [
+                r for r in self._registrations.values() if not r.no_video
+            ]
         if not active:
             self._release(reg)
         elif all(r.frame_seen for r in active):

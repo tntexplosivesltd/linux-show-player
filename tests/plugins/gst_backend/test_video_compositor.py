@@ -609,6 +609,57 @@ class TestHandoffLinger:
             sched.fire(vc.LINGER_CAP_MS)
         detach.assert_called_once_with(reg_a)
 
+    def test_successor_without_video_releases_at_once(self):
+        # B's video branch ends before any frame (a file with no video
+        # stream: UriAvInput's filler EOS). Holding A's last frame for
+        # LINGER_CAP_MS would freeze a stale picture; go black now.
+        comp, sched = self._comp()
+        a, b = object(), object()
+        reg_a = self._register(comp, a)
+        with patch.object(comp, "_detach") as detach:
+            comp.unregister(a)
+            reg_b = self._register(comp, b)
+            sched.fire(vc.LINGER_MS)
+            detach.assert_not_called()
+            comp.video_ended(reg_b)
+            sched.fire(0)
+        detach.assert_called_once_with(reg_a)
+
+    def test_linger_after_videoless_successor_releases_at_once(self):
+        # B ended its video before A's linger timer fired.
+        comp, sched = self._comp()
+        a, b = object(), object()
+        reg_a = self._register(comp, a)
+        with patch.object(comp, "_detach") as detach:
+            comp.unregister(a)
+            reg_b = self._register(comp, b)
+            comp.video_ended(reg_b)
+            sched.fire(0)
+            sched.fire(vc.LINGER_MS)
+        detach.assert_called_once_with(reg_a)
+
+    def test_video_end_after_a_frame_changes_nothing(self):
+        # Normal end of a video that did show: the usual handoff.
+        comp, sched = self._comp()
+        a, b = object(), object()
+        self._register(comp, a)
+        comp.unregister(a)
+        reg_b = self._register(comp, b)
+        comp.frame_ready(reg_b)
+        sched.pending.clear()
+        comp.video_ended(reg_b)
+        assert sched.pending == []
+
+    def test_video_end_of_unregistered_reg_releases_nothing(self):
+        comp, sched = self._comp()
+        a, b = object(), object()
+        reg_a = self._register(comp, a)
+        comp.unregister(a)
+        self._register(comp, b)
+        sched.pending.clear()
+        comp.video_ended(reg_a)  # A is lingering itself
+        assert sched.pending == []
+
     def test_release_is_idempotent(self):
         comp, sched = self._comp()
         a = object()

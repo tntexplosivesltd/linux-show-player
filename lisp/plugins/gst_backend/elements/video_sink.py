@@ -142,6 +142,11 @@ class VideoSink(GstMediaElement):
         self._preroll_handler = self.video_appsink.connect(
             "new-preroll", self.__on_new_preroll
         )
+        # Video branch EOS: lets the compositor hand off at once when
+        # this cue turns out to have no video (see __on_eos).
+        self._eos_handler = self.video_appsink.connect(
+            "eos", self.__on_eos
+        )
         # monotonic() of the last logged pump exception (rate limit).
         self._pump_error_logged_at = None
 
@@ -216,6 +221,19 @@ class VideoSink(GstMediaElement):
         except Exception:
             self.__log_pump_error()
         return Gst.FlowReturn.OK
+
+    def __on_eos(self, appsink):
+        """Streaming thread: the video branch ended. Before any frame
+        means this cue has no picture (no video stream: UriAvInput's
+        filler EOS); tell the compositor so a lingering predecessor is
+        released now, not frozen until LINGER_CAP_MS."""
+        try:
+            reg = self._registration
+            compositor = self._compositor
+            if reg is not None and compositor is not None and not reg.pushed:
+                compositor.video_ended(reg)
+        except Exception:
+            self.__log_pump_error()
 
     def __log_pump_error(self):
         """The pump races main-loop teardown of the objects it uses
@@ -396,6 +414,9 @@ class VideoSink(GstMediaElement):
         if self._preroll_handler is not None:
             self.video_appsink.disconnect(self._preroll_handler)
             self._preroll_handler = None
+        if self._eos_handler is not None:
+            self.video_appsink.disconnect(self._eos_handler)
+            self._eos_handler = None
         if not self._video_removed:
             self.pipeline.remove(self.video_queue)
             self.pipeline.remove(self.video_appsink)

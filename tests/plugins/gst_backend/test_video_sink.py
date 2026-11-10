@@ -797,6 +797,61 @@ class TestPumpRealTiming:
             f"worst A/V offset {worst / Gst.MSECOND:.1f}ms")
 
 
+class TestVideoEnded:
+    """A cue whose video branch ends before its first frame (a file
+    with no video stream) tells the compositor, so a lingering
+    predecessor is released instead of frozen for LINGER_CAP_MS. Real
+    cue pipeline and appsink; the audio sink is removed before the
+    pipeline leaves NULL."""
+
+    def _run(self, frames):
+        clock = Gst.SystemClock.obtain()
+        cue = Gst.Pipeline.new("cue-ended-test")
+        cue.use_clock(clock)
+        sink = VideoSink(cue)
+        cue.remove(sink.audio_sink)
+        sink._audio_removed = True
+        src = Gst.parse_bin_from_description(
+            f"videotestsrc num-buffers={frames} ! capsfilter "
+            "caps=video/x-raw,format=I420,width=64,height=48,"
+            "framerate=30/1",
+            True,
+        )
+        cue.add(src)
+        assert src.link(sink.video_queue)
+        # A projection on the same clock, based at 0: frames map to
+        # "now" and pass the pump's PTS guards.
+        comp = MagicMock()
+        comp.pipeline.get_base_time.return_value = 0
+        comp.clock.return_value = clock
+        comp.latency.return_value = 0
+        reg = vc.Registration()
+        reg.appsrc = MagicMock()
+        comp.register.return_value = reg
+        with patch(_CM, return_value=comp):
+            sink.play()
+            cue.set_state(Gst.State.PLAYING)
+            try:
+                msg = cue.get_bus().timed_pop_filtered(
+                    5 * Gst.SECOND,
+                    Gst.MessageType.EOS | Gst.MessageType.ERROR)
+                assert msg is not None
+                assert msg.type == Gst.MessageType.EOS
+            finally:
+                cue.set_state(Gst.State.NULL)
+            sink.dispose()
+        return comp, reg
+
+    def test_no_frame_before_eos_reports_video_ended(self):
+        comp, reg = self._run(frames=0)
+        comp.video_ended.assert_called_once_with(reg)
+
+    def test_eos_after_frames_does_not_report(self):
+        comp, reg = self._run(frames=3)
+        assert reg.pushed is True
+        comp.video_ended.assert_not_called()
+
+
 class TestReattach:
     """After a projection rebuild every registration of the old
     pipeline is gone; GstBackend calls reattach() on each active sink
