@@ -18,17 +18,23 @@
 
 """E2E: an image cue is fitted to the projection window, whole.
 
-A four-quadrant test image (red / green / blue / yellow) plays as an
-image cue (silent) while the window manager repeatedly fullscreens and
-restores the projection window. After each change the fit is judged
-from SCREEN pixels (a root-window grab cropped to the window): the
-window's own buffer can be correct while the screen shows the bug —
-the GL sink drawing at a stale, mid-resize window size, so the picture
-is squeezed into part of the window and the rest is never drawn.
+A four-quadrant test image (red / green / blue / yellow inside a white
+frame) plays as an image cue (silent) while the window manager
+repeatedly fullscreens and restores the projection window. After each
+change the fit is judged from SCREEN pixels (a root-window grab cropped
+to the window): the window's own buffer can be correct while the
+screen shows the bug — the GL sink drawing at a stale, mid-resize
+window size, so the picture is squeezed into part of the window, or
+magnified and cropped.
+
+The judge (judge()) samples the middle of the white frame along every
+edge, so a magnification above ~1.07x (the frame pushed off screen) or
+a squeeze (black where the frame should be) fails, the quadrant
+centres, and the letterbox bars, which must be black.
 
 Requires an X display, ffmpeg (x11grab), xwininfo, libX11 and a window
-manager that honours _NET_WM_STATE fullscreen; SKIPs otherwise (so it
-is a no-op under bare Xvfb in CI/Docker). It grabs real screen pixels:
+manager that honours _NET_WM_STATE fullscreen; SKIPs otherwise (exit
+77: under bare Xvfb in CI/Docker it checks nothing). It grabs real screen pixels:
 keep other windows off the projection window while it runs.
 
 Run:
@@ -49,9 +55,16 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from tests.e2e.helpers import call, run_suite  # noqa: E402
 
 IMG_W, IMG_H = 1600, 900  # 16:9
-GRAB_W = 64
+# White frame around the quadrants, as a fraction of each side. Its
+# middle (EDGE) is sampled: any magnification above 1 / (1 - 2 * EDGE)
+# ~ 1.07x moves image content there.
+BORDER = 0.06
+EDGE = BORDER / 2
+GRAB_W = 160
 SETTLE_S = 0.6
 RECHECK_S = 2.0
+# First paint after cue.start, polled: a cold start can take seconds.
+INITIAL_TIMEOUT_S = 10.0
 CYCLES = int(os.environ.get("FIT_CYCLES", "30"))
 
 COLOURS = {
@@ -59,6 +72,8 @@ COLOURS = {
     "green": (0, 255, 0),
     "blue": (0, 0, 255),
     "yellow": (255, 255, 0),
+    "white": (255, 255, 255),
+    "black": (0, 0, 0),
 }
 
 
@@ -69,14 +84,17 @@ def have_tools():
 
 
 def make_image(path):
-    """Quadrants: TL red, TR green, BL blue, BR yellow."""
-    half_w, half_h = IMG_W // 2, IMG_H // 2
+    """Quadrants TL red, TR green, BL blue, BR yellow, in a white
+    frame BORDER wide on each side."""
+    bx, by = round(IMG_W * BORDER), round(IMG_H * BORDER)
+    half_w, half_h = (IMG_W - 2 * bx) // 2, (IMG_H - 2 * by) // 2
     src = (
         f"color=red:s={half_w}x{half_h}[a];"
         f"color=lime:s={half_w}x{half_h}[b];"
         f"color=blue:s={half_w}x{half_h}[c];"
         f"color=yellow:s={half_w}x{half_h}[d];"
-        "[a][b]hstack[top];[c][d]hstack[bot];[top][bot]vstack"
+        "[a][b]hstack[top];[c][d]hstack[bot];[top][bot]vstack,"
+        f"pad={IMG_W}:{IMG_H}:{bx}:{by}:white"
     )
     subprocess.run(
         ["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", src,
@@ -205,35 +223,82 @@ def expected_rect(win_w, win_h):
     return (win_w - w) / 2, (win_h - h) / 2, w, h
 
 
-def fit_ok(handle, label):
+# Where judge() samples, as fractions of the expected image rect.
+FRAME_POINTS = {
+    "frame TL": (EDGE, EDGE), "frame T": (0.5, EDGE),
+    "frame TR": (1 - EDGE, EDGE), "frame R": (1 - EDGE, 0.5),
+    "frame BR": (1 - EDGE, 1 - EDGE), "frame B": (0.5, 1 - EDGE),
+    "frame BL": (EDGE, 1 - EDGE), "frame L": (EDGE, 0.5),
+}
+QUADRANT_POINTS = {
+    "red": (0.28, 0.28), "green": (0.72, 0.28),
+    "blue": (0.28, 0.72), "yellow": (0.72, 0.72),
+}
+# A bar narrower than this many grab pixels is not sampled (scaling
+# blur would read the image's edge).
+MIN_BAR_PX = 3
+
+
+def judge(gw, gh, px, win_w, win_h):
+    """{sample: (wanted, seen)} for a grab (gw x gh rgb24 pixels) of a
+    win_w x win_h window that should show the image fitted, whole."""
+    x0, y0, w, h = expected_rect(win_w, win_h)
+    sx, sy = gw / win_w, gh / win_h
+
+    def seen_at(x, y):  # window coordinates
+        gx = max(0, min(gw - 1, int(x * sx)))
+        gy = max(0, min(gh - 1, int(y * sy)))
+        return nearest(px[gy * gw + gx])
+
+    out = {}
+    for name, (fx, fy) in FRAME_POINTS.items():
+        out[name] = ("white", seen_at(x0 + w * fx, y0 + h * fy))
+    for name, (fx, fy) in QUADRANT_POINTS.items():
+        out[name] = (name, seen_at(x0 + w * fx, y0 + h * fy))
+    # Letterbox bars: black, or the picture spills past its rect.
+    if x0 * sx >= MIN_BAR_PX:
+        out["bar L"] = ("black", seen_at(x0 / 2, win_h / 2))
+        out["bar R"] = ("black", seen_at(win_w - x0 / 2, win_h / 2))
+    if y0 * sy >= MIN_BAR_PX:
+        out["bar T"] = ("black", seen_at(win_w / 2, y0 / 2))
+        out["bar B"] = ("black", seen_at(win_w / 2, win_h - y0 / 2))
+    return out
+
+
+def fit_ok(handle, label, report=True):
     """True if the screen shows the whole image fitted to the window."""
     geom = window_geometry(handle)
     if not geom or geom[0] < 0 or geom[1] < 0:
-        print(f"  {label}: window not on screen ({geom})")
+        if report:
+            print(f"  {label}: window not on screen ({geom})")
         return False
     gw, gh, px = grab_screen(geom)
     if not gh:
-        print(f"  {label}: screen grab failed")
+        if report:
+            print(f"  {label}: screen grab failed")
         return False
     _, _, win_w, win_h = geom
-    x0, y0, w, h = expected_rect(win_w, win_h)
-    sx, sy = gw / win_w, gh / win_h
-    seen = {}
-    for want, (fx, fy) in {"red": (.25, .25), "green": (.75, .25),
-                           "blue": (.25, .75),
-                           "yellow": (.75, .75)}.items():
-        gx = min(gw - 1, int((x0 + w * fx) * sx))
-        gy = min(gh - 1, int((y0 + h * fy) * sy))
-        seen[want] = nearest(px[gy * gw + gx])
-    ok = all(seen[k] == k for k in seen)
-    print(f"  {label}: window {win_w}x{win_h} -> "
-          f"{'fit ok' if ok else 'WRONG ' + str(seen)}")
-    return ok
+    samples = judge(gw, gh, px, win_w, win_h)
+    wrong = {k: v for k, v in samples.items() if v[0] != v[1]}
+    if report:
+        print(f"  {label}: window {win_w}x{win_h} -> "
+              f"{'fit ok' if not wrong else 'WRONG ' + str(wrong)}")
+    return not wrong
+
+
+def wait_fit(handle, label, timeout):
+    """Poll fit_ok until it holds or `timeout` s pass; report once."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if fit_ok(handle, label, report=False):
+            break
+        time.sleep(0.3)
+    return fit_ok(handle, label)
 
 
 def run_tests(t):
     if not have_tools():
-        print("  SKIP: need X display + ffmpeg + xwininfo + libX11")
+        t.skip("need X display + ffmpeg + xwininfo + libX11")
         return
     tmp = tempfile.mkdtemp(prefix="lisp-fit-")
     made = {}  # what _run got to: "cue_id", "top"
@@ -287,21 +352,25 @@ def _run(t, img_dir, made):
     if not handle:
         return
 
-    call("cue.start", {"id": cue_id})
-    time.sleep(SETTLE_S)
-    initial = fit_ok(handle, "initial")
-    t.check("initial fit (run INVALID if not: nothing to compare)", initial)
-    if not initial:
-        return
-
+    # Adding the cue shows the window; probe the WM before playing, so
+    # a run with none is a SKIP whatever the first paint does.
+    deadline = time.time() + 5.0
+    while (not call("video_window.state").get("visible")
+           and time.time() < deadline):
+        time.sleep(0.1)
     top = made["top"] = find_window("LiSP Video Output")
     t.check("found the output top-level window", bool(top))
     if not top:
         return
     if not wm_honours_fullscreen(top, handle):
-        print("  SKIP: no window manager acted on _NET_WM_STATE "
-              "fullscreen (bare Xvfb?) — the resize cycles would "
-              "test nothing")
+        t.skip("no window manager acted on _NET_WM_STATE fullscreen "
+               "(bare Xvfb?): the resize cycles would test nothing")
+        return
+
+    call("cue.start", {"id": cue_id})
+    initial = wait_fit(handle, "initial", INITIAL_TIMEOUT_S)
+    t.check("initial fit (run INVALID if not: nothing to compare)", initial)
+    if not initial:
         return
 
     # A wrong fit SETTLE_S after a resize is re-checked RECHECK_S later:
