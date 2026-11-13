@@ -642,10 +642,19 @@ class VideoCompositor:
         only touches GObject properties on the pad. The caps are kept
         on the registration so set_canvas_size() can re-fit it.
         """
-        reg.caps = caps
-        self._apply_fit(reg)
+        with self._fit_lock:
+            reg.caps = caps
+            self._fit_locked(reg)
 
     def _apply_fit(self, reg):
+        """Re-fit `reg` for the current canvas (set_canvas_size)."""
+        with self._fit_lock:
+            self._fit_locked(reg)
+
+    def _fit_locked(self, reg):
+        # Caller holds _fit_lock. The caps are read under it too, so a
+        # re-fit that read a cue's old caps can never land after the
+        # pump's fit of its new ones (and vice versa for the canvas).
         struct = reg.caps.get_structure(0)
         ok_w, src_w = struct.get_int("width")
         ok_h, src_h = struct.get_int("height")
@@ -654,14 +663,11 @@ class VideoCompositor:
             par_n, par_d = 1, 1
         if not (ok_w and ok_h):
             src_w = src_h = 0
-        with self._fit_lock:
-            x, y, w, h = fit_rect(
-                src_w, src_h, par_n, par_d, *self._canvas
-            )
-            reg.mix_pad.set_property("xpos", x)
-            reg.mix_pad.set_property("ypos", y)
-            reg.mix_pad.set_property("width", w)
-            reg.mix_pad.set_property("height", h)
+        x, y, w, h = fit_rect(src_w, src_h, par_n, par_d, *self._canvas)
+        reg.mix_pad.set_property("xpos", x)
+        reg.mix_pad.set_property("ypos", y)
+        reg.mix_pad.set_property("width", w)
+        reg.mix_pad.set_property("height", h)
 
     def _attach(self, sink):
         """Live-add appsrc (+ the upload bin on GL) + a mixer request

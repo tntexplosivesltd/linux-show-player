@@ -466,6 +466,61 @@ class TestCanvasSizing:
         assert (props["xpos"], props["ypos"], props["width"],
                 props["height"]) == real_fit_rect(320, 180, 1, 1, 1024, 768)
 
+    def test_resize_refit_never_lands_a_stale_source_size(self):
+        # The neighbouring race: the resize re-fit reads the cue's old
+        # caps, then a mid-stream caps change (the pump, streaming
+        # thread) fits the new source size. If the re-fit's caps read
+        # is outside the fit lock, it lands last with the old size.
+        import threading
+
+        comp = self._comp(canvas_size=(640, 480))
+        props = {}
+        reg = vc.Registration()
+        reg.mix_pad = MagicMock()
+        reg.mix_pad.set_property.side_effect = (
+            lambda name, value: props.__setitem__(name, value))
+        comp._registrations[object()] = reg
+
+        resize_parsing = threading.Event()
+        resume_resize = threading.Event()
+        resize = []
+
+        class _PausingStruct:
+            """The old caps' structure; pauses the resize thread at
+            the end of its caps parse."""
+
+            def __init__(self, struct):
+                self._struct = struct
+
+            def get_int(self, name):
+                return self._struct.get_int(name)
+
+            def get_fraction(self, name):
+                if threading.current_thread() is resize[0]:
+                    resize_parsing.set()
+                    resume_resize.wait(2)
+                return self._struct.get_fraction(name)
+
+        class _OldCaps:
+            def get_structure(self, index):
+                return _PausingStruct(_caps(320, 180).get_structure(index))
+
+        reg.caps = _OldCaps()
+        resize.append(threading.Thread(
+            target=comp.set_canvas_size, args=(1024, 768)))
+        resize[0].start()
+        assert resize_parsing.wait(2)
+        pump = threading.Thread(
+            target=comp.fit_registration, args=(reg, _caps(160, 160)))
+        pump.start()
+        pump.join(0.2)  # finishes here unless the parse is guarded
+        resume_resize.set()
+        resize[0].join(2)
+        pump.join(2)
+
+        assert (props["xpos"], props["ypos"], props["width"],
+                props["height"]) == vc.fit_rect(160, 160, 1, 1, 1024, 768)
+
     def test_default_canvas_size(self):
         comp = self._comp()
         assert comp.canvas_size() == (vc.COMP_WIDTH, vc.COMP_HEIGHT)
