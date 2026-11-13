@@ -1455,17 +1455,51 @@ class TestRebuildAfterFailure:
             assert comp.is_registered(bad) is False
         assert events["gave_up"] == 0
 
-    def test_quarantine_ends_when_the_cue_stops(self):
+    def _quarantine(self, comp, sched, sink):
+        """Fail, rebuild, re-attach `sink`, fail again at once: `sink`
+        is quarantined and the second rebuild is up. Clock at 1000."""
+        self._fail(comp)
+        sched.fire(vc.REBUILD_BACKOFF_MS[0])
+        self._register(comp, sink)
+        self._fail(comp)
+        sched.fire(vc.REBUILD_BACKOFF_MS[1])
+
+    def test_refiring_a_quarantined_cue_keeps_it_out(self):
+        # The operator re-fires the cue that just went black, or a
+        # looping playlist restarts it. Its stop/EOS unregisters it;
+        # if that lifted the quarantine, the re-fire would break the
+        # projection again, spend the last attempt and give up on
+        # video for the rest of the show.
+        comp, sched, events = self._comp()
+        bad, good = object(), object()
+        with patch(self._MONO, return_value=1000.0):
+            self._quarantine(comp, sched, bad)
+            comp.unregister(bad)  # stopped (or EOS)
+            assert self._register(comp, bad) is None  # re-fired
+            assert self._register(comp, good) is not None
+        assert comp._rebuild_attempt == 2
+        assert events["gave_up"] == 0
+
+    def test_quarantine_lifts_once_the_projection_is_stable(self):
+        # The incident is over: the next play gets a fresh chance.
         comp, sched, events = self._comp()
         bad = object()
         with patch(self._MONO, return_value=1000.0):
-            self._fail(comp)
-            sched.fire(vc.REBUILD_BACKOFF_MS[0])
-            self._register(comp, bad)
-            self._fail(comp)
-            sched.fire(vc.REBUILD_BACKOFF_MS[1])
-        comp.unregister(bad)  # the cue stops: a fresh play may try
-        assert self._register(comp, bad) is not None
+            self._quarantine(comp, sched, bad)
+            comp.unregister(bad)
+        later = 1000.0 + vc.REBUILD_STABLE_MS / 1000 + 1
+        with patch(self._MONO, return_value=later):
+            assert self._register(comp, bad) is not None
+
+    def test_quarantine_holds_until_the_projection_is_stable(self):
+        comp, sched, events = self._comp()
+        bad = object()
+        with patch(self._MONO, return_value=1000.0):
+            self._quarantine(comp, sched, bad)
+        almost = 1000.0 + vc.REBUILD_STABLE_MS / 1000 - 1
+        with patch(self._MONO, return_value=almost):
+            assert self._register(comp, bad) is None
+            assert comp.is_quarantined(bad) is True
 
     def test_first_failure_quarantines_nobody(self):
         # Cannot tell a cue's fault from a GL/driver hiccup yet.

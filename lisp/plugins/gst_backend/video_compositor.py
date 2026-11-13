@@ -56,8 +56,10 @@ LINGER_CAP_MS = 3000
 # incident and starts the backoff over, so a long show cannot use up
 # its retries on unrelated hiccups hours apart. A failure within
 # REBUILD_STABLE_MS of a good rebuild is blamed on the cues registered
-# at that moment: they stay audio only until they stop (quarantine), so
-# one cue that breaks a shared element cannot use up every attempt.
+# at that moment: they stay audio only (quarantine) until the projection
+# has stayed up REBUILD_STABLE_MS, across stops and re-fires, so one cue
+# that breaks a shared element cannot use up every attempt. (Video
+# exclusivity means that is normally the one active video cue.)
 REBUILD_BACKOFF_MS = (1000, 5000, 30000)
 REBUILD_STABLE_MS = 60000
 
@@ -355,7 +357,7 @@ class VideoCompositor:
         # Unregistered but still on screen (handoff linger).
         self._lingering = []
         # Sinks blamed for a repeat shared failure (see _fail): no
-        # branch until they unregister (their cue stops).
+        # branch until the projection is stable again (see register).
         self._quarantined = set()
         # Pending linger/handoff GLib timeout ids, removed at shutdown.
         self._timers = set()
@@ -519,7 +521,10 @@ class VideoCompositor:
             return None
         with self._lock:
             if sink in self._quarantined:
-                return None
+                if not self._stable():
+                    return None
+                # The incident is over: every suspect gets a fresh go.
+                self._quarantined.clear()
             reg = self._registrations.get(sink)
             if reg is not None:
                 return reg
@@ -537,8 +542,7 @@ class VideoCompositor:
         LINGER_* constants.
         """
         with self._lock:
-            # The cue stopped: its next play gets a fresh chance.
-            self._quarantined.discard(sink)
+            # A quarantine outlives the stop: see register().
             reg = self._registrations.pop(sink, None)
             if reg is None:
                 return
@@ -933,11 +937,7 @@ class VideoCompositor:
         mixer or sink posts, so not caught as a branch error). The cues
         registered now are quarantined, so the next rebuild comes up
         without them instead of failing on them again."""
-        recent = (
-            self._rebuilt_at is not None
-            and time.monotonic() - self._rebuilt_at
-            <= REBUILD_STABLE_MS / 1000
-        )
+        recent = not self._stable()
         if recent:
             with self._lock:
                 suspects = set(self._registrations)
@@ -946,7 +946,8 @@ class VideoCompositor:
                 logger.warning(
                     "VideoCompositor: projection failed again soon after "
                     "a rebuild; %d video cue(s) will play audio only "
-                    "until stopped", len(suspects),
+                    "until it has stayed up %d s", len(suspects),
+                    REBUILD_STABLE_MS // 1000,
                 )
         self._teardown()
         if self._closed:
@@ -960,6 +961,21 @@ class VideoCompositor:
             return
         self.failed.emit()
         self._schedule_rebuild()
+
+    def _stable(self):
+        """True unless the last good rebuild was under
+        REBUILD_STABLE_MS ago (or none has happened yet)."""
+        return (
+            self._rebuilt_at is None
+            or time.monotonic() - self._rebuilt_at
+            > REBUILD_STABLE_MS / 1000
+        )
+
+    def is_quarantined(self, sink):
+        """True while `sink` is kept audio only after a repeat failure
+        (see _fail). Any thread."""
+        with self._lock:
+            return sink in self._quarantined and not self._stable()
 
     def _out_of_attempts(self):
         return self._rebuild_attempt >= len(REBUILD_BACKOFF_MS)

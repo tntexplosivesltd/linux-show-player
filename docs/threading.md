@@ -200,8 +200,9 @@ threads meet here:
   on a worker thread at the same moment. A failure within
   `REBUILD_STABLE_MS` of a good rebuild quarantines the sinks
   registered at that moment: `register()` gives them no branch until
-  they `unregister()`, so a cue that keeps breaking a shared element
-  plays audio only instead of using up every attempt. `shutdown()`
+  the projection has stayed up `REBUILD_STABLE_MS`, even across a stop
+  and re-fire, so a cue that keeps breaking a shared element plays
+  audio only instead of using up every attempt. `shutdown()`
   cancels a pending rebuild and makes any later one a no-op.
 * **Video exclusivity is not the compositor's.** `ActiveVideoSinks`
   (`video_exclusive.py`, its own lock) tracks playing/paused video
