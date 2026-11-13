@@ -144,6 +144,61 @@ class TestRegistrationBookkeeping:
         comp.available = False
         assert comp.register(object()) is None
 
+    def test_register_racing_a_teardown_records_nothing(self):
+        # A cue GO on a worker thread passes the `available` check, then
+        # the main loop tears the pipeline down (a projection failure)
+        # before the worker gets the lock. Attaching then would record a
+        # registration on the dead pipeline that survives the rebuild:
+        # reattach() hands it back and the cue never shows video again.
+        comp = self._comp()
+        teardown = comp._teardown
+        raced = []
+
+        class _Racy(type(comp)):
+            @property
+            def available(self):
+                if not raced:
+                    raced.append(True)
+                    teardown()  # lands right after register's check
+                    return True
+                return self.__dict__["_available"]
+
+            @available.setter
+            def available(self, value):
+                self.__dict__["_available"] = value
+
+        comp.__dict__["_available"] = comp.__dict__.pop("available")
+        comp.__class__ = _Racy
+        sink = object()
+        with patch.object(comp, "_attach",
+                          return_value=vc.Registration()) as attach:
+            assert comp.register(sink) is None
+        assert raced
+        attach.assert_not_called()
+        assert comp.is_registered(sink) is False
+
+    def test_teardown_drops_the_pipeline_with_the_registrations(self):
+        # Both under one lock hold: a register() that gets the lock
+        # after the registrations are cleared must also see no pipeline.
+        comp = self._comp()
+        seen = []
+        real_lock = comp._lock
+
+        class _SpyLock:
+            def __enter__(self):
+                real_lock.acquire()
+
+            def __exit__(self, *exc):
+                seen.append((comp.available, comp.pipeline,
+                             dict(comp._registrations)))
+                real_lock.release()
+
+        comp._registrations[object()] = vc.Registration()
+        comp._lock = _SpyLock()
+        comp._teardown()
+        available, pipeline, registrations = seen[0]
+        assert (available, pipeline, registrations) == (False, None, {})
+
     def test_register_twice_returns_same_handle(self):
         comp = self._comp()
         sink = object()

@@ -491,8 +491,13 @@ class VideoCompositor:
     def _teardown(self):
         """Stop and drop the current pipeline, its registrations and
         every pending timer (linger, release, rebuild). Idempotent."""
-        self.available = False
         with self._lock:
+            # One hold with the registrations: a register() that gets
+            # the lock after this sees no pipeline to attach to (see
+            # register), so nothing is recorded on the dying one.
+            self.available = False
+            pipeline = self.pipeline
+            self.pipeline = None
             self._registrations.clear()
             self._lingering.clear()
             timers = list(self._timers)
@@ -500,9 +505,9 @@ class VideoCompositor:
         for timer in timers:
             self._unschedule(timer)
         self._invalidate_latency()
-        if self.pipeline is None:
+        if pipeline is None:
             return
-        bus = self.pipeline.get_bus()
+        bus = pipeline.get_bus()
         if self._sync_handler is not None:
             bus.disconnect(self._sync_handler)
             self._sync_handler = None
@@ -510,8 +515,7 @@ class VideoCompositor:
             bus.disconnect(self._bus_handler)
             bus.remove_signal_watch()
             self._bus_handler = None
-        self.pipeline.set_state(Gst.State.NULL)
-        self.pipeline = None
+        pipeline.set_state(Gst.State.NULL)
 
     def register(self, sink):
         """Attach a cue to the projection pipeline. Returns a
@@ -520,6 +524,10 @@ class VideoCompositor:
         if not self.available:
             return None
         with self._lock:
+            # Re-checked under the lock: a teardown may have run since
+            # the check above (worker-thread GO vs a main-loop failure).
+            if not self.available or self.pipeline is None:
+                return None
             if sink in self._quarantined:
                 if not self._stable():
                     return None
