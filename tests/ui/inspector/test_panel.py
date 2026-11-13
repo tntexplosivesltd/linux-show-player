@@ -440,3 +440,74 @@ class TestColorPaletteAdapters:
 
         panel._write_widget_value(w, "NotAColor")
         assert w.color() == ""
+
+
+# ---------------------------------------------------------------------------
+# Selections whose types share a mixin ahead of Cue in the MRO
+# ---------------------------------------------------------------------------
+
+
+class _CuePage(_SecondPage):
+    Name = QT_TRANSLATE_NOOP("SettingsPageName", "CueWide")
+
+
+class _StopOnlyPage(_SecondPage):
+    Name = QT_TRANSLATE_NOOP("SettingsPageName", "StopOnly")
+
+
+@pytest.fixture
+def cue_wide_page():
+    # Same isolation as `registered_pages`: swap the singleton's
+    # registry so pages registered by other tests don't leak in.
+    from lisp.plugins.action_cues.stop_cue import StopCue
+
+    registry = CueSettingsRegistry()
+    original = registry._registry
+    registry._registry = {}
+    registry.add(_CuePage, Cue)
+    registry.add(_StopOnlyPage, StopCue)
+    yield
+    registry._registry = original
+
+
+def _page_types(panel):
+    return {type(panel._tabs.widget(i)) for i in range(panel._tabs.count())}
+
+
+class TestMixinSelection:
+    def test_stop_and_resume_selection_shows_cue_pages(
+        self, qtbot, cue_wide_page, mock_app
+    ):
+        from lisp.plugins.action_cues.resume_cue import ResumeCue
+        from lisp.plugins.action_cues.stop_cue import StopCue
+
+        p = InspectorPanel()
+        qtbot.addWidget(p)
+        try:
+            p.bind([StopCue(app=mock_app), ResumeCue(app=mock_app)])
+            assert _page_types(p) == {_CuePage}
+        finally:
+            p.detach()
+
+    def test_rebind_between_mixed_and_same_type_selections(
+        self, qtbot, cue_wide_page, mock_app
+    ):
+        """Same size, different common class: each rebind must rebuild
+        the tabs rather than hit the same-shape short-circuit."""
+        from lisp.plugins.action_cues.resume_cue import ResumeCue
+        from lisp.plugins.action_cues.stop_cue import StopCue
+
+        mixed = [StopCue(app=mock_app), ResumeCue(app=mock_app)]
+        stops = [StopCue(app=mock_app), StopCue(app=mock_app)]
+
+        p = InspectorPanel()
+        qtbot.addWidget(p)
+        try:
+            p.bind(mixed)
+            assert _page_types(p) == {_CuePage}
+            p.bind(stops)
+            assert _page_types(p) == {_CuePage, _StopOnlyPage}
+            p.bind(mixed)
+            assert _page_types(p) == {_CuePage}
+        finally:
+            p.detach()

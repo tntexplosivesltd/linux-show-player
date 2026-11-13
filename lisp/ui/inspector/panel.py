@@ -258,7 +258,7 @@ class InspectorPanel(QWidget):
             self._stack.setCurrentIndex(self._EMPTY_INDEX)
             return
 
-        superclass = greatest_common_superclass(new_cues)
+        superclass = greatest_common_superclass(new_cues, base=Cue)
 
         # Short-circuit: if the selection's *shape* hasn't changed
         # (same GCS, same size), we can keep the existing tab row

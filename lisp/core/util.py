@@ -133,11 +133,27 @@ def compose_url(scheme, host, port, path="/"):
     return f"{scheme}://{host}:{port}{path}"
 
 
-def greatest_common_superclass(instances):
+def greatest_common_superclass(instances, base=object):
+    """Return the most specific class shared by all `instances`.
+
+    Only subclasses of `base` are considered, so a mixin listed ahead
+    of the real base class in the MRO (e.g. `StopCue(TargetingCue,
+    Cue)`) can't be picked over it: with `base=Cue`, a StopCue +
+    ResumeCue selection resolves to `Cue`, not `TargetingCue`.
+
+    Falls back to `base` when `instances` is empty or no shared class
+    is a subclass of it, so the result is always a class and safe to
+    pass to `ClassBasedRegistry.filter`.
+    """
+    if not instances:
+        return base
+
     classes = [type(x).mro() for x in instances]
     for x in classes[0]:
-        if all(x in mro for mro in classes):
+        if issubclass(x, base) and all(x in mro for mro in classes):
             return x
+
+    return base
 
 
 def typename(obj):
