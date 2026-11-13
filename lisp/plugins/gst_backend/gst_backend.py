@@ -15,6 +15,7 @@
 # You should have received a copy of the GNU General Public License
 # along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
+import logging
 import os.path
 
 from PyQt5.QtCore import Qt, QT_TRANSLATE_NOOP
@@ -32,6 +33,7 @@ from lisp.ui.widgets.notification import NotificationLevel
 from lisp.plugins.gst_backend.gi_repository import Gst
 from lisp.plugins.gst_backend.video_exclusive import (
     VideoExclusiveManager,
+    active_video_sinks,
 )
 from lisp.plugins.gst_backend.gst_media_cue import (
     GstCueFactory,
@@ -52,6 +54,8 @@ from lisp.ui.settings.app_configuration import AppConfigurationDialog
 from lisp.ui.settings.cue_settings import CueSettingsRegistry
 from lisp.ui.ui_utils import translate, qfile_filters
 
+logger = logging.getLogger(__name__)
+
 
 class GstBackend(Plugin, BaseBackend):
     Name = "GStreamer Backend"
@@ -62,6 +66,7 @@ class GstBackend(Plugin, BaseBackend):
 
     _video_window = None
     _monitor_window = None
+    _video_compositor = None
 
     @classmethod
     def video_window(cls):
@@ -72,6 +77,11 @@ class GstBackend(Plugin, BaseBackend):
     def monitor_window(cls):
         """Return the singleton VideoMonitorWindow, or None."""
         return cls._monitor_window
+
+    @classmethod
+    def video_compositor(cls):
+        """Return the singleton VideoCompositor, or None."""
+        return cls._video_compositor
 
     def __init__(self, app):
         super().__init__(app)
@@ -88,6 +98,46 @@ class GstBackend(Plugin, BaseBackend):
         GstBackend._video_window = VideoOutputWindow(app.window)
         GstBackend._monitor_window = VideoMonitorWindow(app.window)
         self.__apply_video_config()
+
+        # One persistent projection pipeline that every video/image cue
+        # pumps into (no per-cue sink, so no surface hand-off).
+        from lisp.plugins.gst_backend.video_compositor import (
+            VideoCompositor,
+        )
+        try:
+            GstBackend._video_compositor = VideoCompositor(
+                GstBackend._video_window,
+                GstBackend._monitor_window,
+                canvas_size=GstBackend._video_window.render_size(),
+            )
+        except Exception:
+            # Degrade to audio only rather than lose the whole backend
+            # (and every audio cue) to a projection problem.
+            logger.exception("GstBackend: cannot create VideoCompositor")
+            GstBackend._video_compositor = None
+        compositor = GstBackend._video_compositor
+        if compositor is None or not compositor.available:
+            message = translate(
+                "GstBackend",
+                "Video projection unavailable — video cues will "
+                "play audio only",
+            )
+            reason = getattr(compositor, "unavailable_reason", None)
+            if reason:
+                message = f"{message} ({reason})"
+            self.app.notify.emit(message, NotificationLevel.Warning)
+        if compositor is not None:
+            # The canvas follows the output window's render area, so a
+            # cue's fit-to-canvas is its fit-to-window (fullscreen: the
+            # screen; windowed: the window).
+            GstBackend._video_window.render_size_changed.connect(
+                compositor.set_canvas_size
+            )
+            # A runtime error can still take the pipeline down later;
+            # the compositor then rebuilds it with backoff.
+            compositor.failed.connect(self.__on_compositor_failed)
+            compositor.restored.connect(self.__on_compositor_restored)
+            compositor.gave_up.connect(self.__on_compositor_gave_up)
 
         # Block overlapping video/image cue playback.
         self.app.video_exclusive_manager = (
@@ -154,6 +204,67 @@ class GstBackend(Plugin, BaseBackend):
         )
 
         backend.set_backend(self)
+
+    def __on_compositor_failed(self):
+        self.app.notify.emit(
+            translate(
+                "GstBackend",
+                "Video projection stopped after an error — restarting "
+                "it; video cues play audio only meanwhile",
+            ),
+            NotificationLevel.Warning,
+        )
+
+    def __on_compositor_restored(self):
+        # The old pipeline's registrations died with it: give every
+        # playing/paused video cue a fresh branch (main loop).
+        compositor = GstBackend._video_compositor
+        held_out = []
+        if compositor is not None:
+            for sink in active_video_sinks.snapshot():
+                sink.reattach(compositor)
+                if compositor.is_quarantined(sink):
+                    held_out.append(sink)
+        if held_out:
+            # A cue that broke the projection twice gets no branch back
+            # (see VideoCompositor._fail): it stays black on stage, so
+            # "restored" alone would mislead the operator.
+            names = ", ".join(
+                f'"{cue.name}"' for cue in self.app.cue_model
+                if getattr(cue, "media", None) is not None
+                and cue.media.element("VideoSink") in held_out
+            )
+            self.app.notify.emit(
+                translate(
+                    "GstBackend",
+                    "Video projection restored, but {} plays audio "
+                    "only for now: it failed the projection again",
+                ).format(names),
+                NotificationLevel.Warning,
+            )
+            return
+        self.app.notify.emit(
+            translate("GstBackend", "Video projection restored"),
+            NotificationLevel.Info,
+        )
+
+    def __on_compositor_gave_up(self):
+        self.app.notify.emit(
+            translate(
+                "GstBackend",
+                "Video projection could not be restarted — video cues "
+                "will play audio only",
+            ),
+            NotificationLevel.Warning,
+        )
+
+    def finalize(self):
+        # Stop the projection pipeline before the session and windows
+        # are torn down (see VideoCompositor.shutdown).
+        if GstBackend._video_compositor is not None:
+            GstBackend._video_compositor.shutdown()
+            GstBackend._video_compositor = None
+        super().finalize()
 
     def uri_duration(self, uri):
         return gst_uri_duration(uri)
@@ -408,28 +519,33 @@ class GstBackend(Plugin, BaseBackend):
         if window is None:
             return
 
+        target = self.__target_screen()
+        window.set_display_screen(target)
+
+        is_secondary = target is not QApplication.primaryScreen()
+        fullscreen = GstBackend.Config.get(
+            "video_fullscreen", True
+        )
+        window.set_fullscreen(fullscreen and is_secondary)
+
+    @staticmethod
+    def __target_screen():
+        """The QScreen the projection window should use.
+
+        * ``video_screen = -1`` (auto): the first non-primary screen if
+          one is connected, otherwise the primary screen.
+        * ``0..N``: that specific screen index.
+        """
         screens = QApplication.screens()
         primary = QApplication.primaryScreen()
         screen_cfg = GstBackend.Config.get("video_screen", -1)
 
         if screen_cfg >= 0 and screen_cfg < len(screens):
-            target = screens[screen_cfg]
-        elif len(screens) > 1:
+            return screens[screen_cfg]
+        if len(screens) > 1:
             # Auto: pick first non-primary screen
-            target = next(
-                (s for s in screens if s is not primary),
-                primary,
-            )
-        else:
-            target = primary
-
-        window.set_display_screen(target)
-
-        is_secondary = target is not primary
-        fullscreen = GstBackend.Config.get(
-            "video_fullscreen", True
-        )
-        window.set_fullscreen(fullscreen and is_secondary)
+            return next((s for s in screens if s is not primary), primary)
+        return primary
 
     def __update_video_window_visibility(self, cue=None):
         """Show the video window if any video/image cues exist.
@@ -478,10 +594,3 @@ class GstBackend(Plugin, BaseBackend):
         else:
             monitor.show()
             monitor.raise_()
-
-            # If a cue is already playing, the monitor missed
-            # the play() call — show its render surface now.
-            from lisp.plugins.gst_backend.elements.video_sink \
-                import VideoSink
-            if VideoSink._previous_sink is not None:
-                monitor.show_display()

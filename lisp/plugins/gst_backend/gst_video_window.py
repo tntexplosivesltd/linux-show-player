@@ -17,9 +17,11 @@
 
 import logging
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QCursor
 from PyQt5.QtWidgets import QMainWindow, QWidget, QApplication
+
+from lisp.plugins.gst_backend.video_compositor import canvas_size_for
 
 logger = logging.getLogger(__name__)
 
@@ -32,13 +34,20 @@ class VideoOutputWindow(QMainWindow):
     X11 window ID.
 
     A separate native child widget (_render_widget) holds the video
-    surface.  Hiding it reveals the black background underneath,
-    providing a reliable way to clear stale frames between cues
-    without needing a separate GStreamer pipeline.
+    surface.  It stays mapped for the process lifetime: the
+    VideoCompositor's sink binds to it once, and black-between-cues
+    is the compositor's own background layer, not a hidden widget.
 
     The window ignores close events while video/image cues exist
     (visibility is managed by GstBackend's auto-show/hide logic).
     """
+
+    # Render area in physical pixels, debounced; the VideoCompositor
+    # canvas follows it (see GstBackend).
+    render_size_changed = pyqtSignal(int, int)
+
+    # Coalesce a drag-resize burst into one canvas renegotiation.
+    RENDER_SIZE_DEBOUNCE_MS = 150
 
     def __init__(self, parent=None):
         super().__init__(parent, Qt.FramelessWindowHint)
@@ -50,9 +59,7 @@ class VideoOutputWindow(QMainWindow):
         central.setStyleSheet("background-color: black;")
         self.setCentralWidget(central)
 
-        # Native child widget for GStreamer rendering.  Hiding
-        # this widget unmaps its X11 window so the parent's
-        # black background shows through.
+        # Native child widget for GStreamer rendering.
         self._render_widget = QWidget(central)
         self._render_widget.setAttribute(Qt.WA_NativeWindow)
         self._render_widget.setAttribute(
@@ -60,20 +67,27 @@ class VideoOutputWindow(QMainWindow):
         )
 
         self._fullscreen = False
+
+        self._render_size_timer = QTimer(self)
+        self._render_size_timer.setSingleShot(True)
+        self._render_size_timer.setInterval(self.RENDER_SIZE_DEBOUNCE_MS)
+        self._render_size_timer.timeout.connect(self._emit_render_size)
+
         self.resize(640, 480)
 
     def window_handle(self):
         """Return the native window ID for GStreamer VideoOverlay."""
         return int(self._render_widget.winId())
 
-    def clear_display(self):
-        """Hide the render surface, showing the black background."""
-        self._render_widget.hide()
+    def render_size(self):
+        """The render area in physical pixels (the compositor canvas)."""
+        rw = self._render_widget
+        return canvas_size_for(
+            rw.width(), rw.height(), rw.devicePixelRatioF()
+        )
 
-    def show_display(self):
-        """Show the render surface for GStreamer output."""
-        self._render_widget.show()
-        self._sync_render_geometry()
+    def _emit_render_size(self):
+        self.render_size_changed.emit(*self.render_size())
 
     def set_display(self, screen_index):
         """Move the window to the specified screen by index.
@@ -136,6 +150,7 @@ class VideoOutputWindow(QMainWindow):
         central = self.centralWidget()
         if central is not None:
             self._render_widget.setGeometry(central.rect())
+            self._render_size_timer.start()
 
     def closeEvent(self, event):
         """Block close while video/image cues exist."""
@@ -148,7 +163,8 @@ class VideoMonitorWindow(QMainWindow):
     Provides a confidence monitor on the operator's primary screen
     so they can see what's being projected without line-of-sight to
     the projection surface.  GStreamer renders into this window via
-    a second VideoOverlay sink fed by a tee in the VideoSink pipeline.
+    the VideoCompositor's second (monitor) sink, fed by a leaky tee
+    branch off the projection mixer.
 
     Closing the window hides it (the menu toggle re-shows it).
     """
@@ -174,15 +190,6 @@ class VideoMonitorWindow(QMainWindow):
     def window_handle(self):
         """Return the native window ID for GStreamer VideoOverlay."""
         return int(self._render_widget.winId())
-
-    def clear_display(self):
-        """Hide the render surface, showing the black background."""
-        self._render_widget.hide()
-
-    def show_display(self):
-        """Show the render surface for GStreamer output."""
-        self._render_widget.show()
-        self._sync_render_geometry()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

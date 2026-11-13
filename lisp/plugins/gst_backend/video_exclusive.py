@@ -16,20 +16,66 @@
 # along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
 import logging
+import threading
+import weakref
 
-from lisp.cues.cue import CueState
-from lisp.plugins.gst_backend.gi_repository import Gst
 from lisp.ui.widgets.notification import NotificationLevel
 
 logger = logging.getLogger(__name__)
 
 
+class ActiveVideoSinks:
+    """The VideoSinks whose cue is playing or paused — what video
+    exclusivity is decided on.
+
+    Fed by the VideoSink lifecycle (play → stop/eos/dispose), NOT by
+    the compositor's render branches: a cue whose video cannot be
+    projected (compositor unavailable, attach failed, or the projection
+    shut down by an error) still plays its audio, and another video cue
+    must still not play over it. Called from cue worker threads, the
+    main thread and cue bus watches, hence the lock. Weak, so a sink
+    that is never stopped or disposed does not leak.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._sinks = weakref.WeakSet()
+
+    def add(self, sink):
+        with self._lock:
+            self._sinks.add(sink)
+
+    def discard(self, sink):
+        with self._lock:
+            self._sinks.discard(sink)
+
+    def contains(self, sink):
+        with self._lock:
+            return sink in self._sinks
+
+    def snapshot(self):
+        """The active sinks now, as a list safe to iterate unlocked."""
+        with self._lock:
+            return list(self._sinks)
+
+    def others(self, sink):
+        """True if any sink OTHER than `sink` is active."""
+        with self._lock:
+            return any(s is not sink for s in self._sinks)
+
+    def clear(self):
+        with self._lock:
+            self._sinks.clear()
+
+
+active_video_sinks = ActiveVideoSinks()
+
+
 class VideoExclusiveManager:
     """Blocks video/image cues from overlapping.
 
-    Only one video/image cue can be active at a time.  When a
-    second video/image cue tries to start, it is blocked —
-    following the same pattern as ExclusiveManager.
+    Only one video/image cue can be active at a time: blocked while
+    any OTHER VideoSink is active (see ActiveVideoSinks).
     """
 
     def __init__(self, app):
@@ -39,42 +85,25 @@ class VideoExclusiveManager:
         """Return True if the cue should be blocked from starting.
 
         A video/image cue is blocked if another video/image cue is
-        currently playing or paused — except when the cue asking to
-        start is the same one that owns the stuck sink (self-resume).
+        active (playing or paused), whether or not its video reaches
+        the projection — except when the asking cue is that active cue
+        (self-resume: CueAction.Resume / Fade & Resume of a paused
+        video).
         """
-        if not self._is_video_cue(cue):
+        sink = self._video_sink(cue)
+        if sink is None:
             return False
 
-        from lisp.plugins.gst_backend.elements.video_sink import (
-            VideoSink,
-        )
-
-        prev = VideoSink._previous_sink
-        if prev is None:
-            return False
-
-        # Self-resume guard: if the cue owns the "stuck" sink, let it
-        # through. VideoSink.stop() clears _previous_sink; pause() does
-        # not, so a paused video's own sink sticks around and would
-        # otherwise block its own resume (e.g. via CueAction.Resume
-        # or a Fade & Resume cue following a Fade & Stop).
-        if cue.media.element("VideoSink") is prev:
-            return False
-
-        # Check the previous sink's pipeline state
-        _, state, _ = prev.pipeline.get_state(0)
-        if state not in (Gst.State.PLAYING, Gst.State.PAUSED):
+        if not active_video_sinks.others(sink):
             return False
 
         message = "Blocked: another video/image cue is playing"
         logger.info(message)
-        self._app.notify.emit(
-            message, NotificationLevel.Info
-        )
+        self._app.notify.emit(message, NotificationLevel.Info)
         return True
 
     @staticmethod
-    def _is_video_cue(cue):
+    def _video_sink(cue):
         if not hasattr(cue, "media"):
-            return False
-        return cue.media.element("VideoSink") is not None
+            return None
+        return cue.media.element("VideoSink")

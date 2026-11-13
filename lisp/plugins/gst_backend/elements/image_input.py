@@ -139,10 +139,6 @@ class ImageInput(GstSrcElement):
 
     def _on_timer_expired(self):
         self._eos_timer = None
-        logger.debug(
-            "[FLICKER-DIAG] ImageInput posting EOS on pipeline=%s",
-            self.pipeline.get_name() if self.pipeline else "<none>",
-        )
         # Post EOS directly on the bus rather than send_event(),
         # because imagefreeze continuously pushes buffers and
         # swallows downstream EOS events.  The message source

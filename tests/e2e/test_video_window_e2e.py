@@ -16,6 +16,7 @@ Options:
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -94,6 +95,35 @@ def wait_current_time(cue_id, min_ms=1, timeout=5.0):
 
 def window_state():
     return call("video_window.state")
+
+
+DARK = 45  # luma below this = black
+
+
+def projection_brightest_pixel():
+    """Brightest pixel of a full grab of the projection render widget
+    (downscaled), or None without X / ffmpeg. Checks every sampled
+    pixel, so a partly-black projection is not mistaken for black."""
+    if not (os.environ.get("DISPLAY") and shutil.which("ffmpeg")):
+        return None
+    raw = subprocess.run(
+        ["ffmpeg", "-loglevel", "error", "-f", "x11grab",
+         "-window_id", str(window_state()["handle"]),
+         "-i", os.environ["DISPLAY"], "-frames:v", "1",
+         "-vf", "scale=64:-2", "-f", "rawvideo", "-pix_fmt", "gray",
+         "pipe:1"],
+        capture_output=True,
+    ).stdout
+    return max(raw) if raw else None
+
+
+def check_projection_black(name):
+    brightest = projection_brightest_pixel()
+    if brightest is None:
+        print(f"  SKIP: {name} (needs X + ffmpeg to read pixels)")
+        return
+    print(f"  brightest projection pixel: {brightest}")
+    check(name, brightest < DARK)
 
 
 # -- Media file generation --------------------------------------------
@@ -288,9 +318,14 @@ def test_4_shared_window_for_sequential_cues():
     wait_state(cue2_id, "Stop", timeout=3)
 
 
-def test_5_render_hidden_after_stop():
-    """Render widget should hide when a cue stops."""
-    print("\n=== Test 5: Render Hidden After Stop ===")
+def test_5_black_after_stop():
+    """Projection goes black when a cue stops.
+
+    The VideoCompositor keeps the render widget mapped and shows its
+    black background once the stopped cue's frame is released, so
+    this reads pixels rather than widget visibility.
+    """
+    print("\n=== Test 5: Black After Stop ===")
     clear_cues()
 
     video_path = os.path.join(MEDIA_DIR, "test_video.webm")
@@ -307,13 +342,11 @@ def test_5_render_hidden_after_stop():
     check("5a: Render visible during playback",
           ws["render_visible"] is True)
 
-    # Stop — render surface should be hidden
+    # Stop — projection should go black (after the standalone linger)
     call("cue.stop", {"id": cue_id})
     wait_state(cue_id, "Stop", timeout=3)
-    time.sleep(0.3)
-    ws = window_state()
-    check("5b: Render hidden after stop",
-          ws["render_visible"] is False)
+    time.sleep(0.6)
+    check_projection_black("5b: Projection black after stop")
 
 
 def test_6_image_then_video_sequence():
@@ -351,11 +384,9 @@ def test_6_image_then_video_sequence():
     check("6c: Image auto-stops",
           wait_state(image_id, "Stop", timeout=8))
 
-    # Render should be hidden after image stops
-    time.sleep(0.3)
-    ws = window_state()
-    check("6d: Render hidden after image stops",
-          ws["render_visible"] is False)
+    # Projection should be black after the image stops
+    time.sleep(0.6)
+    check_projection_black("6d: Projection black after image stops")
 
     # Now play the video
     call("cue.start", {"id": video_id})
@@ -495,7 +526,7 @@ def main():
         stop_all()
         test_4_shared_window_for_sequential_cues()
         stop_all()
-        test_5_render_hidden_after_stop()
+        test_5_black_after_stop()
         stop_all()
         test_6_image_then_video_sequence()
         stop_all()

@@ -21,6 +21,8 @@ GStreamer pipelines, **read this first**.
 | GStreamer bus callbacks     | GStreamer pipeline                     | `Gst.MessageType.{EOS,ERROR,SEGMENT_DONE,...}`                 |
 | `ThreadPoolExecutor`(1)     | `UriInput.__duration` and similar      | Async metadata discovery on URI change                         |
 | Test-harness server thread  | `lisp.plugins.test_harness.server`     | JSON-RPC requests over a TCP socket                            |
+| Cue video streaming threads | Each video cue's GStreamer pipeline    | `VideoSink`'s appsink `new-sample` / `new-preroll` (the pump)  |
+| Projection streaming threads| `VideoCompositor`'s pipeline           | Mixer/sink internals; `prepare-window-handle` sync messages    |
 
 The Qt main thread is "single-writer" for widget state, the layout's
 selection cursor, the cue model's row order, and anything else read by
@@ -153,6 +155,84 @@ If you add a path that calls `media.prearm()` or `media.play()` from a
 new thread, check whether it can race with an existing one. The lock
 will save you from corruption, but redundant rebuilds are still wasted
 CPU; hit the fast path by checking `media.state` first.
+
+---
+
+## `VideoCompositor` — the projection pump
+
+All video and image cues draw into ONE persistent projection pipeline
+(`lisp/plugins/gst_backend/video_compositor.py`). Each cue's pipeline
+ends in an appsink; `VideoSink` pumps every frame across the pipeline
+boundary into that cue's appsrc on the projection pipeline. Four
+threads meet here:
+
+* **The pump runs on the cue's streaming thread** (`new-sample` while
+  PLAYING, `new-preroll` while PAUSED/prerolling). It touches only
+  GStreamer objects, never Qt. It reads `VideoSink._registration` and
+  `compositor.pipeline` **once** into locals: either can be cleared
+  concurrently (stop on a worker thread, `shutdown()` on the main
+  thread). `play()` caches the compositor so the streaming thread never
+  does the lazy `GstBackend` import.
+* **Register/unregister** run wherever `GstMedia.play()`/`stop()` run:
+  cue worker threads, the main thread, or the cue's bus watch (EOS and
+  ERROR). `VideoSink` drops its `_registration` handle *before*
+  unregistering, so an in-flight pump stops pushing first.
+* **`VideoCompositor._lock`** (a plain, non-re-entrant
+  `threading.Lock`) guards `_registrations`, `_lingering` and
+  `_timers`. It is held only for bookkeeping and for `_attach` (live
+  element add). Never call back into anything that takes it from inside
+  it: `_detach` can run under it (a failed `_attach` rolls back inside
+  `register()`), which is why latency invalidation is lock-free.
+* **Teardown never runs on a projection streaming thread.** Releasing a
+  mixer pad from a streaming thread (e.g. in a blocking pad probe)
+  deadlocks `glvideomixer`. `unregister()` therefore only *schedules*
+  the release: `GLib.timeout_add` callbacks (`_on_linger_timeout`,
+  `_release`) run `_detach` on the main loop after the hand-off linger
+  (`LINGER_MS` / `HANDOFF_RELEASE_MS` / `LINGER_CAP_MS`). Timer ids are
+  tracked and cancelled by `shutdown()`.
+* **Recovery also runs on the main loop.** A shared-pipeline ERROR
+  (from the bus watch, on the main loop) tears the pipeline down and
+  schedules `_rebuild` as a tracked GLib timeout with backoff
+  (`REBUILD_BACKOFF_MS`). `_rebuild` never blocks the main loop
+  waiting for PLAYING (only the startup build does, for up to 1 s):
+  the bus watch completes the restore when the new pipeline reports
+  PLAYING, and an ERROR first, or no PLAYING within
+  `REBUILD_PLAYING_TIMEOUT_MS`, counts as a failed rebuild. A good
+  rebuild emits `restored`; GstBackend then calls
+  `VideoSink.reattach()` for every sink in
+  `ActiveVideoSinks` on the main loop. `reattach` re-checks that the
+  sink is still active after registering, because its cue can stop
+  on a worker thread at the same moment. A failure within
+  `REBUILD_STABLE_MS` of a good rebuild quarantines the sinks
+  registered at that moment: `register()` gives them no branch until
+  the projection has stayed up `REBUILD_STABLE_MS`, even across a stop
+  and re-fire, so a cue that keeps breaking a shared element plays
+  audio only instead of using up every attempt. `shutdown()`
+  cancels a pending rebuild and makes any later one a no-op.
+* **Video exclusivity is not the compositor's.** `ActiveVideoSinks`
+  (`video_exclusive.py`, its own lock) tracks playing/paused video
+  sinks from the `VideoSink` lifecycle, so exclusivity holds whether
+  or not a cue has a render branch.
+
+**Shared clock.** Every cue pipeline with a `VideoSink` adopts
+`compositor.clock()` (one `Gst.SystemClock`). That is what makes
+`projection_pts()` valid: it maps a cue's running time onto the
+projection's through the base-time difference of two pipelines on the
+*same* clock, plus the latency difference. The projection's latency is
+cached centrally (`VideoCompositor.latency()`); each pump re-queries
+its own cue's latency per buffer while the cue settles, then
+periodically. Audio-only pipelines keep their automatic clock (the audio sink's):
+slaved to the system clock, an audio sink resyncs by dropping or
+inserting samples whenever soundcard drift passes its tolerance, which
+can be audible on long cues and buys nothing when there is no video.
+
+**Dependency on Qt's GLib dispatcher.** The linger timers and the
+projection's async bus watch (`ERROR`/`WARNING`/`LATENCY`) are GLib
+sources on the default main context. They fire only because PyQt5 on
+Linux runs its event loop on `QEventDispatcherGlib`, which iterates
+that context — the same reason `GstMedia`'s bus watch works. Running
+LiSP with `QT_NO_GLIB=1` (or a non-GLib dispatcher) would silently stop
+releases, error handling and cue bus messages alike.
 
 ---
 

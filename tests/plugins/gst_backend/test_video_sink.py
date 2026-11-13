@@ -2,14 +2,21 @@
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from lisp.backend.media_element import ElementType, MediaType
 from lisp.plugins.gst_backend.gi_repository import Gst
+from lisp.plugins.gst_backend import video_compositor as vc
 from lisp.plugins.gst_backend.elements.video_sink import (
+    LATENCY_REFRESH_BUFFERS,
+    LATENCY_WARMUP_BUFFERS,
+    PUMP_LEAD,
     VideoSink,
-    _create_video_sink,
+    cue_latency_due,
 )
+
+# Patch the classmethod on the class itself (canonical location):
+# video_sink._compositor() does a lazy `from ... import GstBackend`
+# that resolves to this same class object, so the patch applies.
+_CM = "lisp.plugins.gst_backend.gst_backend.GstBackend.video_compositor"
 
 
 class TestVideoSinkProperties:
@@ -23,38 +30,110 @@ class TestVideoSinkProperties:
 class TestVideoSinkConstruction:
     def test_creates_audio_sink(self):
         pipeline = Gst.Pipeline()
-        element = VideoSink(pipeline)
-        assert element.audio_sink is not None
-
-    def test_creates_video_sink(self):
-        pipeline = Gst.Pipeline()
-        element = VideoSink(pipeline)
-        assert element.video_sink is not None
-
-    def test_creates_video_queue(self):
-        pipeline = Gst.Pipeline()
-        element = VideoSink(pipeline)
-        assert element.video_queue is not None
-
-    def test_creates_video_tee(self):
-        pipeline = Gst.Pipeline()
-        element = VideoSink(pipeline)
-        assert element.video_tee is not None
-
-    def test_creates_monitor_sink(self):
-        pipeline = Gst.Pipeline()
-        element = VideoSink(pipeline)
-        assert element.monitor_sink is not None
-
-    def test_creates_monitor_queue(self):
-        pipeline = Gst.Pipeline()
-        element = VideoSink(pipeline)
-        assert element.monitor_queue is not None
+        sink = VideoSink(pipeline)
+        assert sink.audio_sink is not None
 
     def test_sink_returns_audio_sink(self):
         pipeline = Gst.Pipeline()
-        element = VideoSink(pipeline)
-        assert element.sink() is element.audio_sink
+        sink = VideoSink(pipeline)
+        assert sink.sink() is sink.audio_sink
+
+    def test_creates_appsink_not_glimagesink(self):
+        pipeline = Gst.Pipeline()
+        sink = VideoSink(pipeline)
+        assert sink.video_appsink is not None
+        assert sink.video_appsink.get_factory().get_name() == "appsink"
+        # No projection/monitor sink or tee any more.
+        assert not hasattr(sink, "video_tee")
+        assert not hasattr(sink, "monitor_sink")
+
+    def test_appsink_is_bounded_drop_oldest(self):
+        pipeline = Gst.Pipeline()
+        sink = VideoSink(pipeline)
+        assert sink.video_appsink.get_property("drop") is True
+        assert sink.video_appsink.get_property("max-buffers") <= 4
+        assert sink.video_appsink.get_property("emit-signals") is True
+
+    def test_appsink_is_clock_synced_with_bounded_lead(self):
+        # Pump contract 1: sync=False runs seconds ahead and video
+        # keeps playing through a pause (Phase 1 spike).
+        pipeline = Gst.Pipeline()
+        sink = VideoSink(pipeline)
+        assert sink.video_appsink.get_property("sync") is True
+        assert sink.video_appsink.get_property("ts-offset") == -PUMP_LEAD
+        assert 0 < PUMP_LEAD <= 200 * Gst.MSECOND
+
+
+class TestAppsinkCaps:
+    """The appsink restricts caps to 8-bit system-memory formats both
+    projection plans accept, so the cue's own videoconvert converts
+    (on the cue's thread) instead of exotic formats reaching the shared
+    projection pipeline, where a failed negotiation hurts every cue.
+
+    Real VideoSink, real negotiation. The audio sink is removed before
+    the pipeline leaves NULL, so no audio device is opened."""
+
+    def _negotiated(self, fmt, width=320, height=240):
+        pipeline = Gst.Pipeline()
+        sink = VideoSink(pipeline)
+        pipeline.remove(sink.audio_sink)
+        upstream = Gst.parse_bin_from_description(
+            f"videotestsrc num-buffers=1 ! video/x-raw,format={fmt},"
+            f"width={width},height={height} ! videoconvert ! videoscale",
+            True,
+        )
+        pipeline.add(upstream)
+        assert upstream.link(sink.video_queue)
+        pipeline.set_state(Gst.State.PAUSED)
+        try:
+            ret, _, _ = pipeline.get_state(5 * Gst.SECOND)
+            assert ret != Gst.StateChangeReturn.FAILURE
+            caps = sink.video_appsink.get_static_pad(
+                "sink"
+            ).get_current_caps()
+        finally:
+            pipeline.set_state(Gst.State.NULL)
+        return caps
+
+    def test_gray16_converted_before_appsink(self):
+        caps = self._negotiated("GRAY16_LE")
+        fmt = caps.get_structure(0).get_string("format")
+        assert fmt != "GRAY16_LE"
+        assert fmt in vc.PROJECTION_FORMATS
+
+    def test_10bit_converted_before_appsink(self):
+        caps = self._negotiated("I420_10LE")
+        fmt = caps.get_structure(0).get_string("format")
+        assert fmt != "I420_10LE"
+        assert fmt in vc.PROJECTION_FORMATS
+
+    def test_v210_converted_before_appsink(self):
+        # glupload on GStreamer 1.24 cannot take v210 at all.
+        caps = self._negotiated("v210")
+        assert caps.get_structure(0).get_string("format") != "v210"
+
+    def test_common_decoder_format_passes_unconverted(self):
+        caps = self._negotiated("I420")
+        assert caps.get_structure(0).get_string("format") == "I420"
+
+    def test_system_memory_only(self):
+        caps = self._negotiated("NV12")
+        features = caps.get_features(0)
+        assert features.contains("memory:SystemMemory")
+
+    def test_every_allowed_format_feeds_software_compositor(self):
+        """The fallback plan's mixer takes every allowed format. (The
+        GL plan needs a display; probed on GStreamer 1.24 and 1.28 in
+        lisp-e2e-ci/pr14-fix/probe_negotiate.py.)"""
+        for fmt in vc.PROJECTION_FORMATS:
+            pipeline = Gst.parse_launch(
+                f"videotestsrc num-buffers=1 ! video/x-raw,format={fmt},"
+                "width=64,height=48 ! compositor ! fakesink"
+            )
+            pipeline.set_state(Gst.State.PAUSED)
+            ret, _, _ = pipeline.get_state(5 * Gst.SECOND)
+            pipeline.set_state(Gst.State.NULL)
+            assert ret != Gst.StateChangeReturn.FAILURE, fmt
 
 
 def _mock_input(**kwargs):
@@ -183,498 +262,393 @@ class TestVideoSinkPostLink:
         assert pipeline.get_by_name(name) is not None
 
 
-class TestVideoSinkFactory:
-    def test_creates_non_null_element(self):
-        element = _create_video_sink()
-        assert element is not None
-
-    def test_prefers_overlay_capable_sink(self):
-        """Should pick glimagesink or xvimagesink, not
-        autovideosink."""
-        element = _create_video_sink()
-        factory = element.get_factory()
-        name = factory.get_name() if factory else ""
-        # Should be one of the preferred sinks (or fallback
-        # on systems without them)
-        assert name in (
-            "glimagesink", "xvimagesink", "autovideosink"
-        )
-
-
-class TestVideoSinkClearDisplay:
-    def teardown_method(self):
-        # Don't leak the class-level pending-clear flag into the
-        # next test.
-        VideoSink._pending_clear = False
-
-    def test_stop_does_not_clear_immediately(self):
-        """stop() defers the clear so playlist auto-advance has a
-        chance to cancel it.  The clear only fires after the defer
-        timer expires (see _maybe_do_clear)."""
+class TestVideoSinkRegistration:
+    def _sink_with_compositor(self):
         pipeline = Gst.Pipeline()
         sink = VideoSink(pipeline)
+        comp = MagicMock()
+        reg = MagicMock()
+        reg.appsrc = MagicMock()
+        comp.register.return_value = reg
+        return sink, comp, reg
 
-        mock_window = MagicMock()
-        with patch.object(
-            VideoSink, "_video_window",
-            return_value=mock_window,
-        ), patch.object(
-            VideoSink, "_monitor_window",
-            return_value=None,
-        ):
+    def test_play_registers_with_compositor(self):
+        sink, comp, reg = self._sink_with_compositor()
+        with patch(_CM, return_value=comp):
+            sink.play()
+        comp.register.assert_called_once_with(sink)
+        assert sink._registration is reg
+
+    def test_stop_unregisters(self):
+        sink, comp, reg = self._sink_with_compositor()
+        with patch(_CM, return_value=comp):
+            sink.play()
             sink.stop()
+        comp.unregister.assert_called_once_with(sink)
+        assert sink._registration is None
 
-        mock_window.clear_display.assert_not_called()
-
-    def test_stop_marks_pending_clear(self):
-        pipeline = Gst.Pipeline()
-        sink = VideoSink(pipeline)
-        assert VideoSink._pending_clear is False
-        sink.stop()
-        assert VideoSink._pending_clear is True
-
-    def test_show_displays_calls_show_on_window(self):
-        """_show_displays is the deferred-show entry point.
-
-        Invoked from the first-buffer pad probe (cold-start) or
-        directly from play() when the pipeline already holds a
-        prerolled buffer (Armed / Paused resume)."""
-        pipeline = Gst.Pipeline()
-        sink = VideoSink(pipeline)
-
-        mock_window = MagicMock()
-        with patch.object(
-            VideoSink, "_video_window",
-            return_value=mock_window,
-        ), patch.object(
-            VideoSink, "_monitor_window",
-            return_value=None,
-        ):
-            sink._show_displays()
-
-        mock_window.show_display.assert_called_once()
-
-    def test_show_displays_calls_show_on_visible_monitor(self):
-        pipeline = Gst.Pipeline()
-        sink = VideoSink(pipeline)
-
-        mock_monitor = MagicMock()
-        mock_monitor.isVisible.return_value = True
-        with patch.object(
-            VideoSink, "_video_window",
-            return_value=MagicMock(),
-        ), patch.object(
-            VideoSink, "_monitor_window",
-            return_value=mock_monitor,
-        ):
-            sink._show_displays()
-
-        mock_monitor.show_display.assert_called_once()
-
-    def test_show_displays_skips_hidden_monitor(self):
-        pipeline = Gst.Pipeline()
-        sink = VideoSink(pipeline)
-
-        mock_monitor = MagicMock()
-        mock_monitor.isVisible.return_value = False
-        with patch.object(
-            VideoSink, "_video_window",
-            return_value=MagicMock(),
-        ), patch.object(
-            VideoSink, "_monitor_window",
-            return_value=mock_monitor,
-        ):
-            sink._show_displays()
-
-        mock_monitor.show_display.assert_not_called()
-
-    def test_maybe_do_clear_calls_clear_when_pending(self):
-        """The QTimer callback path: when _pending_clear is True
-        (set by a prior stop()), invoking _maybe_do_clear performs
-        the clear and resets the flag."""
-        pipeline = Gst.Pipeline()
-        sink = VideoSink(pipeline)
-
-        VideoSink._pending_clear = True
-
-        mock_window = MagicMock()
-        mock_monitor = MagicMock()
-        mock_monitor.isVisible.return_value = True
-
-        # _maybe_do_clear does a lazy import of GstBackend; patch the
-        # class methods it calls.
-        with patch(
-            "lisp.plugins.gst_backend.gst_backend"
-            ".GstBackend.video_window",
-            return_value=mock_window,
-        ), patch(
-            "lisp.plugins.gst_backend.gst_backend"
-            ".GstBackend.monitor_window",
-            return_value=mock_monitor,
-        ):
-            VideoSink._maybe_do_clear()
-
-        mock_window.clear_display.assert_called_once()
-        mock_monitor.clear_display.assert_called_once()
-        assert VideoSink._pending_clear is False
-        del sink
-
-    def test_maybe_do_clear_noop_when_not_pending(self):
-        """If a play() cancelled the pending clear, _maybe_do_clear
-        (firing later from the original timer) must not clear."""
-        pipeline = Gst.Pipeline()
-        sink = VideoSink(pipeline)
-
-        VideoSink._pending_clear = False
-
-        mock_window = MagicMock()
-        with patch(
-            "lisp.plugins.gst_backend.gst_backend"
-            ".GstBackend.video_window",
-            return_value=mock_window,
-        ), patch(
-            "lisp.plugins.gst_backend.gst_backend"
-            ".GstBackend.monitor_window",
-            return_value=None,
-        ):
-            VideoSink._maybe_do_clear()
-
-        mock_window.clear_display.assert_not_called()
-        del sink
-
-
-class TestVideoSinkDeferredClear:
-    """Verify the deferred-clear cancellation that produces seamless
-    transitions in playlist GroupCues.
-
-    Reasoning: QLab/SCS default behaviour is "clear the projection
-    when a video cue stops" (a black gap appears between cues).
-    Playlist mode in SCS is seamless because it's one cue, not many.
-    Our playlist GroupCue chains independent cues, so we approximate
-    seamlessness by deferring the clear briefly and cancelling it on
-    the next cue's play().  See
-    docs/bugs/2026-05-23-video-sink-stale-frame-bleedthrough.md."""
-
-    def teardown_method(self):
-        VideoSink._previous_sink = None
-        VideoSink._pending_clear = False
-
-    def test_play_cancels_pending_clear(self):
-        """stop() schedules a clear; an immediate play() (as happens
-        in playlist auto-advance) must clear the pending flag so the
-        timer fires harmlessly."""
-        pipeline = Gst.Pipeline()
-        sink_a = VideoSink(pipeline)
-        pipeline_b = Gst.Pipeline()
-        sink_b = VideoSink(pipeline_b)
-
-        mock_window = MagicMock()
-        with patch.object(
-            VideoSink, "_video_window",
-            return_value=mock_window,
-        ), patch.object(
-            VideoSink, "_monitor_window",
-            return_value=None,
-        ):
-            sink_a.stop()
-            assert VideoSink._pending_clear is True
-            sink_b.play()
-            assert VideoSink._pending_clear is False
-
-    def test_playlist_handoff_keeps_surface_alive(self):
-        """End-to-end: stop A, immediately play B, then fire the
-        deferred-clear timer.  The clear must NOT execute because B
-        cancelled it.  This is the property that makes a playlist of
-        videos in a GroupCue flow seamlessly."""
-        pipeline_a = Gst.Pipeline()
-        sink_a = VideoSink(pipeline_a)
-        pipeline_b = Gst.Pipeline()
-        sink_b = VideoSink(pipeline_b)
-
-        mock_window = MagicMock()
-        with patch.object(
-            VideoSink, "_video_window",
-            return_value=mock_window,
-        ), patch.object(
-            VideoSink, "_monitor_window",
-            return_value=None,
-        ), patch(
-            "lisp.plugins.gst_backend.gst_backend"
-            ".GstBackend.video_window",
-            return_value=mock_window,
-        ), patch(
-            "lisp.plugins.gst_backend.gst_backend"
-            ".GstBackend.monitor_window",
-            return_value=None,
-        ):
-            sink_a.stop()
-            sink_b.play()
-            # Simulate the deferred timer firing now.
-            VideoSink._maybe_do_clear()
-
-        mock_window.clear_display.assert_not_called()
-
-    def test_standalone_stop_eventually_clears(self):
-        """The counter-test: when no follow-up play() happens, the
-        timer firing actually performs the clear.  This is the
-        QLab/SCS "clear on stop" default behaviour for cues that
-        aren't part of a chain."""
-        pipeline = Gst.Pipeline()
-        sink = VideoSink(pipeline)
-
-        mock_window = MagicMock()
-        with patch.object(
-            VideoSink, "_video_window",
-            return_value=mock_window,
-        ), patch.object(
-            VideoSink, "_monitor_window",
-            return_value=None,
-        ), patch(
-            "lisp.plugins.gst_backend.gst_backend"
-            ".GstBackend.video_window",
-            return_value=mock_window,
-        ), patch(
-            "lisp.plugins.gst_backend.gst_backend"
-            ".GstBackend.monitor_window",
-            return_value=None,
-        ):
-            sink.stop()
-            # Timer fires — no intervening play().
-            VideoSink._maybe_do_clear()
-
-        mock_window.clear_display.assert_called_once()
-
-
-class TestVideoSinkDeferredShow:
-    """Verify the stale-frame bleed-through fix: play() must not show
-    the projection surface synchronously when the pipeline is in READY
-    (cold start), or the previous cue's last frame remains composited
-    until the new sink prerolls its first buffer.
-
-    See docs/bugs/2026-05-23-video-sink-stale-frame-bleedthrough.md"""
-
-    def teardown_method(self):
-        VideoSink._previous_sink = None
-
-    def test_play_defers_show_display_in_ready_state(self):
-        """Cold-start path: pipeline is in READY when play() runs.
-        show_display must wait for the first-buffer probe."""
-        pipeline = Gst.Pipeline()
-        sink = VideoSink(pipeline)
-        # Pipeline starts in NULL by default; that's fine — we just
-        # need it to not be in PAUSED so the deferred path is taken.
-
-        mock_window = MagicMock()
-        mock_monitor = MagicMock()
-        mock_monitor.isVisible.return_value = True
-        with patch.object(
-            VideoSink, "_video_window",
-            return_value=mock_window,
-        ), patch.object(
-            VideoSink, "_monitor_window",
-            return_value=mock_monitor,
-        ):
+    def test_eos_unregisters(self):
+        sink, comp, reg = self._sink_with_compositor()
+        with patch(_CM, return_value=comp):
             sink.play()
+            sink.eos()
+        comp.unregister.assert_called_once_with(sink)
 
-        mock_window.show_display.assert_not_called()
-        mock_monitor.show_display.assert_not_called()
-
-    def test_play_installs_first_buffer_probe_in_ready_state(self):
-        """Cold-start path must register a buffer probe on
-        proj_queue.src so the deferred show fires on first buffer."""
-        pipeline = Gst.Pipeline()
-        sink = VideoSink(pipeline)
-
-        mock_window = MagicMock()
-        with patch.object(
-            VideoSink, "_video_window",
-            return_value=mock_window,
-        ), patch.object(
-            VideoSink, "_monitor_window",
-            return_value=None,
-        ):
+    def test_dispose_unregisters(self):
+        sink, comp, reg = self._sink_with_compositor()
+        with patch(_CM, return_value=comp):
             sink.play()
-
-        assert sink._first_buffer_probe is not None
-
-    def test_play_calls_show_display_when_pipeline_already_paused(self):
-        """Pre-armed / resume-from-pause path: the sink already holds
-        a prerolled buffer when play() runs, so showing immediately is
-        safe and avoids adding latency.
-
-        Real preroll requires a working video sink which CI can't
-        guarantee, so we stub pipeline.get_state to report PAUSED
-        directly — what matters here is the decision branch."""
-        pipeline = Gst.Pipeline()
-        sink = VideoSink(pipeline)
-
-        mock_window = MagicMock()
-        with patch.object(
-            VideoSink, "_video_window",
-            return_value=mock_window,
-        ), patch.object(
-            VideoSink, "_monitor_window",
-            return_value=None,
-        ), patch.object(
-            sink.pipeline, "get_state",
-            return_value=(Gst.StateChangeReturn.SUCCESS,
-                          Gst.State.PAUSED, Gst.State.PAUSED),
-        ):
-            sink.play()
-
-        mock_window.show_display.assert_called_once()
-        # Fast path must not also install a probe.
-        assert sink._first_buffer_probe is None
-
-    def test_stop_removes_pending_first_buffer_probe(self):
-        """A cue stopped before its first buffer arrives must clean
-        up the installed probe, or the probe leaks past pipeline
-        teardown."""
-        pipeline = Gst.Pipeline()
-        sink = VideoSink(pipeline)
-
-        mock_window = MagicMock()
-        with patch.object(
-            VideoSink, "_video_window",
-            return_value=mock_window,
-        ), patch.object(
-            VideoSink, "_monitor_window",
-            return_value=None,
-        ):
-            sink.play()
-            assert sink._first_buffer_probe is not None
-            sink.stop()
-            assert sink._first_buffer_probe is None
-
-    def test_dispose_removes_pending_first_buffer_probe(self):
-        """dispose() may run without a preceding stop() (e.g. cue
-        removed mid-play); it must clean up the probe too."""
-        pipeline = Gst.Pipeline()
-        sink = VideoSink(pipeline)
-
-        mock_window = MagicMock()
-        with patch.object(
-            VideoSink, "_video_window",
-            return_value=mock_window,
-        ), patch.object(
-            VideoSink, "_monitor_window",
-            return_value=None,
-        ):
-            sink.play()
-            assert sink._first_buffer_probe is not None
             sink.dispose()
-            assert sink._first_buffer_probe is None
+        comp.unregister.assert_called_once_with(sink)
+        assert sink._registration is None
 
-    def test_first_buffer_callback_clears_probe_handle(self):
-        """When the probe fires once it is consumed; subsequent
-        buffers must not retrigger show_display."""
+    def test_play_no_compositor_is_safe(self):
         pipeline = Gst.Pipeline()
         sink = VideoSink(pipeline)
+        with patch(_CM, return_value=None):
+            sink.play()  # must not raise
+        assert sink._registration is None
 
-        mock_window = MagicMock()
-        with patch.object(
-            VideoSink, "_video_window",
-            return_value=mock_window,
-        ), patch.object(
-            VideoSink, "_monitor_window",
-            return_value=None,
-        ):
+
+def _vcaps(width=320, height=240):
+    return Gst.Caps.from_string(
+        f"video/x-raw,format=I420,width={width},height={height},"
+        "pixel-aspect-ratio=1/1,framerate=30/1")
+
+
+class TestVideoSinkPump:
+    """Pump contract 3: PTS = rt + base diff + (L_cue − L_proj). L_cue
+    is re-queried per buffer while the cue settles, then periodically;
+    L_proj comes from the compositor's shared cache."""
+
+    _QL = "lisp.plugins.gst_backend.elements.video_sink.query_min_latency"
+
+    def _setup(self, caps=None):
+        pipeline = MagicMock()
+        pipeline.get_base_time.return_value = 11500 * Gst.MSECOND
+        with patch("lisp.plugins.gst_backend.elements.video_sink."
+                   "Gst.ElementFactory"):
+            sink = VideoSink(pipeline)
+        comp = MagicMock()
+        comp.pipeline.get_base_time.return_value = 10000 * Gst.MSECOND
+        comp.latency.return_value = 86 * Gst.MSECOND
+        # Projection "now" = 3.4s: the 3414ms sample is 14ms ahead.
+        comp.clock.return_value.get_time.return_value = (
+            13400 * Gst.MSECOND)
+
+        def fit(reg, new_caps):
+            reg.caps = new_caps
+
+        comp.fit_registration.side_effect = fit
+        reg = vc.Registration()
+        reg.appsrc = MagicMock()
+        reg.appsrc.push_buffer.return_value = Gst.FlowReturn.OK
+        comp.register.return_value = reg
+        with patch(_CM, return_value=comp):
             sink.play()
-            assert sink._first_buffer_probe is not None
-            # Simulate the probe firing without needing the streaming
-            # thread to push a real buffer.
-            sink._consume_first_buffer_probe()
-            assert sink._first_buffer_probe is None
+
+        buf = MagicMock()
+        buf.pts = 2000 * Gst.MSECOND
+        sample = MagicMock()
+        sample.get_buffer.return_value = buf
+        sample.get_caps.return_value = caps or _vcaps()
+        sample.get_segment.return_value.to_running_time.return_value = (
+            2000 * Gst.MSECOND)
+        appsink = MagicMock()
+        appsink.pull_sample.return_value = sample
+        appsink.pull_preroll.return_value = sample
+        return sink, comp, reg, buf, sample, appsink
+
+    def _run(self, sink, appsink, n=1, preroll=False, ql=0):
+        fn = (sink._VideoSink__on_new_preroll if preroll
+              else sink._VideoSink__on_new_sample)
+        with patch(self._QL, return_value=ql) as query:
+            rets = [fn(appsink) for _ in range(n)]
+        return rets, query
+
+    def test_pushed_pts_includes_latency_offset(self):
+        sink, comp, reg, buf, _, appsink = self._setup()
+        rets, _ = self._run(sink, appsink)
+        out = buf.copy.return_value
+        assert out.pts == (2000 + 1500 - 86) * Gst.MSECOND
+        reg.appsrc.push_buffer.assert_called_once_with(out)
+        assert rets == [Gst.FlowReturn.OK]
+
+    def test_projection_latency_comes_from_compositor_cache(self):
+        sink, comp, reg, buf, _, appsink = self._setup()
+        _, query = self._run(sink, appsink, n=3)
+        assert comp.latency.call_count == 3
+        for call in query.call_args_list:
+            assert call.args[0] is sink.pipeline  # never the projection
+
+    def test_cue_latency_due_policy(self):
+        due = [cue_latency_due(i) for i in range(LATENCY_WARMUP_BUFFERS)]
+        assert all(due)  # every buffer while the cue settles
+        later = range(LATENCY_WARMUP_BUFFERS,
+                      LATENCY_WARMUP_BUFFERS + 3 * LATENCY_REFRESH_BUFFERS)
+        assert [i for i in later if cue_latency_due(i)] == [
+            i for i in later if i % LATENCY_REFRESH_BUFFERS == 0]
+
+    def test_frame_due_before_projection_start_is_dropped(self, caplog):
+        # Just after the projection pipeline is (re)built its running
+        # time is near 0, and L_proj can exceed rt + (cue_base −
+        # proj_base): the mapped PTS goes negative. That frame is due
+        # before the projection existed — late — and is dropped, not
+        # pushed (a negative PTS cannot even be set on a buffer).
+        sink, comp, reg, buf, sample, appsink = self._setup()
+        comp.pipeline.get_base_time.return_value = 11500 * Gst.MSECOND
+        comp.clock.return_value.get_time.return_value = (
+            11510 * Gst.MSECOND)
+        sample.get_segment.return_value.to_running_time.return_value = 0
+        buf.copy.return_value = Gst.Buffer.new()  # real: rejects < 0
+        rets, _ = self._run(sink, appsink)  # pts = 0 + 0 + (0 − 86ms)
+        assert rets == [Gst.FlowReturn.OK]
+        reg.appsrc.push_buffer.assert_not_called()
+        assert "pump failed" not in caplog.text
+
+    def test_cue_latency_change_during_warmup_applies_next_buffer(self):
+        # A cue latency that settles after the first buffer must be
+        # picked up straight away, not ~1s later.
+        sink, comp, reg, buf, _, appsink = self._setup()
+        self._run(sink, appsink, ql=0)
+        self._run(sink, appsink, ql=50 * Gst.MSECOND)
+        out = buf.copy.return_value
+        assert out.pts == (2000 + 1500 + 50 - 86) * Gst.MSECOND
+
+    def test_first_sample_sets_caps_fits_and_signals_frame(self):
+        sink, comp, reg, buf, sample, appsink = self._setup()
+        self._run(sink, appsink, n=3)
+        caps = sample.get_caps.return_value
+        reg.appsrc.set_property.assert_called_once_with("caps", caps)
+        comp.fit_registration.assert_called_once_with(reg, caps)
+        comp.frame_ready.assert_called_once_with(reg)
+
+    def test_mid_stream_caps_change_refits(self):
+        sink, comp, reg, buf, sample, appsink = self._setup()
+        self._run(sink, appsink)
+        wide = _vcaps(640, 240)
+        sample.get_caps.return_value = wide
+        self._run(sink, appsink)
+        reg.appsrc.set_property.assert_called_with("caps", wide)
+        assert comp.fit_registration.call_count == 2
+        assert reg.caps is wide
+
+    def test_none_running_time_is_skipped(self):
+        sink, comp, reg, buf, sample, appsink = self._setup()
+        sample.get_segment.return_value.to_running_time.return_value = (
+            Gst.CLOCK_TIME_NONE)
+        rets, _ = self._run(sink, appsink)
+        reg.appsrc.push_buffer.assert_not_called()
+        assert rets == [Gst.FlowReturn.OK]
+
+    def test_unregistered_sample_is_dropped(self):
+        sink, comp, reg, buf, _, appsink = self._setup()
+        sink._registration = None
+        rets, _ = self._run(sink, appsink)
+        reg.appsrc.push_buffer.assert_not_called()
+        assert rets == [Gst.FlowReturn.OK]
+
+    def test_compositor_shut_down_drops(self):
+        sink, comp, reg, buf, _, appsink = self._setup()
+        comp.pipeline = None
+        self._run(sink, appsink)
+        reg.appsrc.push_buffer.assert_not_called()
+
+    def test_failed_push_is_logged_once(self, caplog):
+        sink, comp, reg, buf, _, appsink = self._setup()
+        reg.appsrc.push_buffer.return_value = Gst.FlowReturn.FLUSHING
+        self._run(sink, appsink, n=5)
+        warnings = [r for r in caplog.records
+                    if "projection push" in r.getMessage()]
+        assert len(warnings) == 1
+
+    def test_frame_far_ahead_of_projection_is_dropped(self):
+        # Projection now = 750ms; a frame stamped 3.4s would park the
+        # mixer pad until then and freeze everything queued behind it.
+        sink, comp, reg, buf, sample, appsink = self._setup()
+        comp.clock.return_value.get_time.return_value = 10000 * Gst.MSECOND
+        self._run(sink, appsink)  # pts 3414ms vs now 0 → > MAX_AHEAD
+        reg.appsrc.push_buffer.assert_not_called()
+
+    def test_frame_within_lead_is_pushed(self):
+        sink, comp, reg, buf, sample, appsink = self._setup()
+        # pts 3414ms; now 3400ms → 14ms ahead (a normal lead).
+        comp.clock.return_value.get_time.return_value = 13400 * Gst.MSECOND
+        self._run(sink, appsink)
+        reg.appsrc.push_buffer.assert_called_once()
+
+    def test_pump_does_not_look_up_compositor(self):
+        # play() caches it; the streaming thread must not do the lazy
+        # GstBackend import.
+        sink, comp, reg, buf, _, appsink = self._setup()
+        with patch(_CM) as lookup:
+            self._run(sink, appsink)
+        lookup.assert_not_called()
 
 
-class TestVideoSinkOverlay:
-    def test_play_sets_previous_sink(self):
-        """play() registers the sink as the active one."""
-        pipeline = Gst.Pipeline()
-        sink = VideoSink(pipeline)
+class TestVideoSinkPreroll:
+    """Tier 2 #10: a paused seek re-prerolls the cue; that frame must
+    reach the projection (the old glimagesink showed it)."""
 
-        mock_window = MagicMock()
-        with patch.object(
-            VideoSink, "_video_window",
-            return_value=mock_window,
-        ), patch.object(
-            VideoSink, "_monitor_window",
-            return_value=None,
-        ):
-            sink.play()
-            assert VideoSink._previous_sink is sink
+    _setup = TestVideoSinkPump._setup
+    _run = TestVideoSinkPump._run
+    _QL = TestVideoSinkPump._QL
 
-        VideoSink._previous_sink = None
+    def test_re_preroll_frame_is_stamped_now(self):
+        sink, comp, reg, buf, _, appsink = self._setup()
+        self._run(sink, appsink)  # playing
+        reg.appsrc.push_buffer.reset_mock()
+        rets, _ = self._run(sink, appsink, preroll=True)  # paused seek
+        out = buf.copy.return_value
+        # clock 13.4s − projection base 10s = 3.4s running time.
+        assert out.pts == 3400 * Gst.MSECOND
+        reg.appsrc.push_buffer.assert_called_once_with(out)
+        assert rets == [Gst.FlowReturn.OK]
 
-    def test_stop_clears_previous_sink(self):
-        """stop() clears _previous_sink if this is the active
-        sink."""
-        pipeline = Gst.Pipeline()
-        sink = VideoSink(pipeline)
+    def test_initial_preroll_is_not_pushed(self):
+        # A starting cue prerolls before PLAYING; that frame comes
+        # again as the first timed sample. Pushing the preroll too left
+        # that sample stamped seconds ahead and froze the video (host
+        # E2E: av_sync, wedge, image). Nothing is pushed or flushed.
+        sink, comp, reg, buf, _, appsink = self._setup()
+        rets, _ = self._run(sink, appsink, preroll=True)
+        reg.appsrc.push_buffer.assert_not_called()
+        reg.appsrc.send_event.assert_not_called()
+        comp.frame_ready.assert_not_called()
+        assert rets == [Gst.FlowReturn.OK]
 
-        mock_window = MagicMock()
-        with patch.object(
-            VideoSink, "_video_window",
-            return_value=mock_window,
-        ), patch.object(
-            VideoSink, "_monitor_window",
-            return_value=None,
-        ):
-            sink.play()
-            assert VideoSink._previous_sink is sink
+    def test_both_start_prerolls_are_not_pushed(self):
+        # GstMedia.play() from READY prerolls twice before PLAYING:
+        # set_state(PAUSED), then the flushing seek to start_time.
+        sink, comp, reg, buf, _, appsink = self._setup()
+        self._run(sink, appsink, n=2, preroll=True)
+        reg.appsrc.push_buffer.assert_not_called()
+
+    def test_pause_before_first_timed_frame_shows_preroll(self):
+        # Started and paused straight away: pause()'s flush-seek
+        # preroll is the only frame there will be. It must be shown,
+        # not suppressed as if it were the start preroll (black).
+        sink, comp, reg, buf, _, appsink = self._setup()
+        self._run(sink, appsink, preroll=True)  # start preroll
+        sink.pause()
+        self._run(sink, appsink, preroll=True)  # pause flush-seek
+        reg.appsrc.push_buffer.assert_called_once_with(
+            buf.copy.return_value)
+        comp.frame_ready.assert_called_once_with(reg)
+
+    def test_seek_after_dropped_timed_frames_shows_preroll(self):
+        # Every early timed sample dropped by MAX_AHEAD (nothing ever
+        # pushed): a later seek preroll must still be shown.
+        sink, comp, reg, buf, sample, appsink = self._setup()
+        sample.get_segment.return_value.to_running_time.return_value = (
+            60 * Gst.SECOND)  # far past now + MAX_AHEAD
+        self._run(sink, appsink)
+        reg.appsrc.push_buffer.assert_not_called()
+        self._run(sink, appsink, preroll=True)  # seek
+        reg.appsrc.push_buffer.assert_called_once()
+
+    def test_resume_preroll_still_shown(self):
+        # Resume = play() on a still-registered (paused) cue: not a
+        # start, so its seek preroll is shown as before.
+        sink, comp, reg, buf, _, appsink = self._setup()
+        self._run(sink, appsink)  # playing
+        sink.pause()
+        self._run(sink, appsink, preroll=True)
+        reg.appsrc.push_buffer.reset_mock()
+        with patch(_CM, return_value=comp):
+            sink.play()  # resume
+        self._run(sink, appsink, preroll=True)
+        reg.appsrc.push_buffer.assert_called_once()
+
+    def test_restart_after_stop_suppresses_start_preroll(self):
+        sink, comp, reg, buf, _, appsink = self._setup()
+        self._run(sink, appsink)  # playing
+        with patch(_CM, return_value=comp):
             sink.stop()
-            assert VideoSink._previous_sink is None
+            sink.play()
+        reg.appsrc.push_buffer.reset_mock()
+        self._run(sink, appsink, preroll=True)
+        reg.appsrc.push_buffer.assert_not_called()
 
-    def test_stop_does_not_clear_other_sink(self):
-        """stop() on a non-active sink leaves _previous_sink
-        intact."""
-        pipeline1 = Gst.Pipeline()
-        sink1 = VideoSink(pipeline1)
-        pipeline2 = Gst.Pipeline()
-        sink2 = VideoSink(pipeline2)
+    def test_re_preroll_flushes_stale_frames_first(self):
+        sink, comp, reg, buf, _, appsink = self._setup()
+        self._run(sink, appsink)  # playing
+        calls = MagicMock()
+        calls.attach_mock(reg.appsrc.send_event, "event")
+        calls.attach_mock(reg.appsrc.push_buffer, "push")
+        self._run(sink, appsink, preroll=True)  # seek while paused
+        names = [c[0] for c in calls.mock_calls]
+        assert names == ["event", "event", "push"]
+        start, stop = (c.args[0] for c in reg.appsrc.send_event.call_args_list)
+        assert start.type == Gst.EventType.FLUSH_START
+        assert stop.type == Gst.EventType.FLUSH_STOP
 
-        mock_window = MagicMock()
-        with patch.object(
-            VideoSink, "_video_window",
-            return_value=mock_window,
-        ), patch.object(
-            VideoSink, "_monitor_window",
-            return_value=None,
-        ):
-            sink2.play()
-            assert VideoSink._previous_sink is sink2
-            sink1.stop()
-            assert VideoSink._previous_sink is sink2
+    def test_preroll_when_not_registered_is_dropped(self):
+        # A prearmed (not yet playing) cue prerolls without a
+        # registration: nothing may reach the projection.
+        sink, comp, reg, buf, _, appsink = self._setup()
+        sink._registration = None
+        self._run(sink, appsink, preroll=True)
+        reg.appsrc.push_buffer.assert_not_called()
 
-        VideoSink._previous_sink = None
-
-    def test_dispose_disconnects_sync_handler(self):
+    def test_preroll_handler_disconnected_on_dispose(self):
         pipeline = Gst.Pipeline()
         sink = VideoSink(pipeline)
-        # Should not raise
-        sink.dispose()
+        with patch(_CM, return_value=None):
+            sink.dispose()
+        assert sink._preroll_handler is None
+
+
+class TestPumpExceptionGuard:
+    """The pump runs on a cue streaming thread against objects the main
+    loop can tear down concurrently. An exception must reach LiSP's
+    log (PyGObject would only print it), rate-limited, and the callback
+    must still return OK so the cue (and its audio) keeps running."""
+
+    _setup = TestVideoSinkPump._setup
+    _run = TestVideoSinkPump._run
+    _QL = TestVideoSinkPump._QL
+    _MONO = "lisp.plugins.gst_backend.elements.video_sink.time.monotonic"
+
+    def _broken(self):
+        sink, comp, reg, buf, sample, appsink = self._setup()
+        reg.appsrc.push_buffer.side_effect = RuntimeError("torn down")
+        return sink, appsink
+
+    def test_sample_exception_logged_and_ok(self, caplog):
+        sink, appsink = self._broken()
+        rets, _ = self._run(sink, appsink)
+        assert rets == [Gst.FlowReturn.OK]
+        assert "torn down" in caplog.text
+
+    def test_preroll_exception_logged_and_ok(self, caplog):
+        sink, appsink = self._broken()
+        sink._starting = False  # a paused seek, not the start preroll
+        rets, _ = self._run(sink, appsink, preroll=True)
+        assert rets == [Gst.FlowReturn.OK]
+        assert "torn down" in caplog.text
+
+    def test_exceptions_are_rate_limited(self, caplog):
+        sink, appsink = self._broken()
+        with patch(self._MONO, return_value=100.0):
+            self._run(sink, appsink, n=30)  # one second at 30 fps
+        assert caplog.text.count("torn down") == 1
+        with patch(self._MONO, return_value=200.0):
+            self._run(sink, appsink)  # much later: logged again
+        assert caplog.text.count("torn down") == 2
 
 
 class TestVideoSinkDispose:
     """Cover the conditional branches in VideoSink.dispose()."""
 
-    def test_dispose_removes_full_video_branch(self):
+    def test_dispose_removes_video_branch(self):
         pipeline = Gst.Pipeline()
         sink = VideoSink(pipeline)
-
-        video_queue_name = sink.video_queue.get_name()
-        video_tee_name = sink.video_tee.get_name()
-        proj_queue_name = sink.proj_queue.get_name()
-        video_sink_name = sink.video_sink.get_name()
-        monitor_queue_name = sink.monitor_queue.get_name()
-        monitor_sink_name = sink.monitor_sink.get_name()
-
-        sink.dispose()
-
-        for name in (
-            video_queue_name, video_tee_name, proj_queue_name,
-            video_sink_name, monitor_queue_name, monitor_sink_name,
-        ):
+        names = (sink.video_queue.get_name(),
+                 sink.video_appsink.get_name())
+        with patch(_CM, return_value=None):
+            sink.dispose()
+        for name in names:
             assert pipeline.get_by_name(name) is None
 
     def test_dispose_removes_audio_sink_when_not_already_removed(self):
@@ -682,9 +656,8 @@ class TestVideoSinkDispose:
         sink = VideoSink(pipeline)
         audio_sink_name = sink.audio_sink.get_name()
         assert sink._audio_removed is False
-
-        sink.dispose()
-
+        with patch(_CM, return_value=None):
+            sink.dispose()
         assert pipeline.get_by_name(audio_sink_name) is None
 
     def test_dispose_skips_audio_sink_when_already_removed(self):
@@ -693,136 +666,268 @@ class TestVideoSinkDispose:
         second removal."""
         pipeline = Gst.Pipeline()
         sink = VideoSink(pipeline)
-        # Simulate post_link() outcome for an image pipeline.
         pipeline.remove(sink.audio_sink)
         sink._audio_removed = True
-
-        # Should not raise even though audio_sink is already gone.
-        sink.dispose()
-
-    def test_dispose_skips_video_branch_when_marked_removed(self):
-        pipeline = Gst.Pipeline()
-        sink = VideoSink(pipeline)
-        video_queue_name = sink.video_queue.get_name()
-
-        # Simulate a scenario where the video branch has been
-        # removed externally (e.g. a future post_link path that
-        # trims it out).  dispose() must honour the flag.
-        pipeline.remove(sink.video_queue)
-        pipeline.remove(sink.video_tee)
-        pipeline.remove(sink.proj_queue)
-        pipeline.remove(sink.video_sink)
-        pipeline.remove(sink.monitor_queue)
-        pipeline.remove(sink.monitor_sink)
-        sink._video_removed = True
-
-        # Should not raise.
-        sink.dispose()
-        assert pipeline.get_by_name(video_queue_name) is None
+        with patch(_CM, return_value=None):
+            sink.dispose()  # must not raise
 
     def test_dispose_is_idempotent(self):
-        """Calling dispose twice must not raise.
-
-        The second call finds the bus disconnected and the elements
-        already removed; guards inside dispose() should make this a
-        no-op rather than an error."""
         pipeline = Gst.Pipeline()
         sink = VideoSink(pipeline)
+        with patch(_CM, return_value=None):
+            sink.dispose()
+            sink.dispose()  # must not raise
 
-        sink.dispose()
-        # Second dispose should not raise.
-        sink.dispose()
 
 
-class TestFindOwnerSink:
-    """Test _find_owner_sink parent-chain walking.
+class TestPumpRealTiming:
+    """The pump against real pipelines on one shared clock: frame n
+    must render on the projection when the cue renders it,
+    base_cue + n·frame + L_cue (A/V sync), through the real appsink,
+    real projection_pts and real latency queries.
 
-    Bin-based sinks like glimagesink post prepare-window-handle
-    from an internal child element.  _find_owner_sink walks up
-    the parent chain to match back to our stored sink reference.
-    """
+    The projection's appsrc declares 200ms of latency so the
+    (L_cue − L_proj) term matters: a sign error would land frames
+    ±400ms off. Video only into fakesinks; the cue's audio sink is
+    removed before it leaves NULL, so nothing is audible."""
 
-    def test_direct_match_video_sink(self):
-        pipeline = Gst.Pipeline()
-        sink = VideoSink(pipeline)
+    PROJ_LATENCY = 200 * Gst.MSECOND
+    FRAMES = 20
+    FRAME = Gst.SECOND // 30
+    # Robust to a loaded runner: the appsink is drop-oldest, so a
+    # scheduler hiccup may cost a frame or two, and one late wake-up
+    # must not fail the run. Sync is judged on the median; every frame
+    # must still land within 1.5 frames. A sign error in the latency
+    # term is ~400ms off, a dropped term ~200ms: far outside both.
+    MAX_DROPPED = 2
+    MEDIAN_TOLERANCE = 20 * Gst.MSECOND
+    WORST_TOLERANCE = 50 * Gst.MSECOND
+    PRIME = 1 << 40  # buffer offset of the priming frame
 
-        mock_window = MagicMock()
-        with patch.object(
-            VideoSink, "_video_window",
-            return_value=mock_window,
-        ):
-            result = sink._find_owner_sink(sink.video_sink)
-        assert result is mock_window
+    def _projection(self, clock):
+        proj = Gst.Pipeline.new("projection-test")
+        proj.use_clock(clock)
+        appsrc = Gst.ElementFactory.make("appsrc", None)
+        vc._configure_appsrc(appsrc)
+        appsrc.set_property("min-latency", self.PROJ_LATENCY)
+        sink = Gst.ElementFactory.make("fakesink", None)
+        sink.set_property("sync", True)
+        sink.set_property("signal-handoffs", True)
+        proj.add(appsrc)
+        proj.add(sink)
+        assert appsrc.link(sink)
+        return proj, appsrc, sink
 
-    def test_direct_match_monitor_sink(self):
-        pipeline = Gst.Pipeline()
-        sink = VideoSink(pipeline)
+    def _compositor(self, proj, clock, reg):
+        comp = MagicMock()
+        comp.pipeline = proj
+        comp.clock.return_value = clock
+        comp.latency.side_effect = lambda: vc.query_min_latency(proj)
+        comp.register.return_value = reg
 
-        mock_window = MagicMock()
-        with patch.object(
-            VideoSink, "_monitor_window",
-            return_value=mock_window,
-        ):
-            result = sink._find_owner_sink(sink.monitor_sink)
-        assert result is mock_window
+        def fit(r, caps):
+            r.caps = caps
 
-    def _first_bin_child(self, gst_bin):
-        """Get the first child element of a GstBin."""
-        it = gst_bin.iterate_elements()
-        ok, child = it.next()
-        if ok == Gst.IteratorResult.OK:
-            return child
-        return None
+        comp.fit_registration.side_effect = fit
+        return comp
 
-    def test_child_of_bin_matches_video_sink(self):
-        """Simulate glimagesink: message.src is a child element
-        inside the bin, not the bin itself."""
-        pipeline = Gst.Pipeline()
-        sink = VideoSink(pipeline)
+    def test_frames_render_on_cue_schedule(self):
+        clock = Gst.SystemClock.obtain()
+        proj, appsrc, proj_sink = self._projection(clock)
+        reg = vc.Registration()
+        reg.appsrc = appsrc
+        comp = self._compositor(proj, clock, reg)
 
-        if not isinstance(sink.video_sink, Gst.Bin):
-            pytest.skip("video_sink is not a GstBin")
-        child = self._first_bin_child(sink.video_sink)
-        if child is None:
-            pytest.skip("video_sink bin has no children")
+        rendered = {}
+        primed = []
 
-        mock_window = MagicMock()
-        with patch.object(
-            VideoSink, "_video_window",
-            return_value=mock_window,
-        ):
-            result = sink._find_owner_sink(child)
-        assert result is mock_window
+        def on_handoff(_sink, buf, _pad):
+            if buf.offset == self.PRIME:
+                primed.append(clock.get_time())
+            else:
+                rendered[buf.offset] = clock.get_time()
 
-    def test_child_of_bin_matches_monitor_sink(self):
-        """Same test for the monitor sink branch."""
-        pipeline = Gst.Pipeline()
-        sink = VideoSink(pipeline)
+        proj_sink.connect("handoff", on_handoff)
 
-        if not isinstance(sink.monitor_sink, Gst.Bin):
-            pytest.skip("monitor_sink is not a GstBin")
-        child = self._first_bin_child(sink.monitor_sink)
-        if child is None:
-            pytest.skip("monitor_sink bin has no children")
-
-        mock_window = MagicMock()
-        with patch.object(
-            VideoSink, "_monitor_window",
-            return_value=mock_window,
-        ):
-            result = sink._find_owner_sink(child)
-        assert result is mock_window
-
-    def test_unknown_element_returns_none(self):
-        pipeline = Gst.Pipeline()
-        sink = VideoSink(pipeline)
-
-        unrelated = Gst.ElementFactory.make(
-            "fakesink", None
+        cue = Gst.Pipeline.new("cue-test")
+        cue.use_clock(clock)
+        video_sink = VideoSink(cue)
+        cue.remove(video_sink.audio_sink)
+        src = Gst.parse_bin_from_description(
+            f"videotestsrc num-buffers={self.FRAMES} ! capsfilter "
+            "caps=video/x-raw,format=I420,width=64,height=48,"
+            "framerate=30/1",
+            True,
         )
-        assert sink._find_owner_sink(unrelated) is None
+        cue.add(src)
+        assert src.link(video_sink.video_queue)
 
-    def test_none_element_returns_none(self):
-        pipeline = Gst.Pipeline()
-        sink = VideoSink(pipeline)
-        assert sink._find_owner_sink(None) is None
+        proj.set_state(Gst.State.PLAYING)
+        try:
+            # In production the projection runs from process start,
+            # its sinks already prerolled by the live background. Do
+            # the same with one priming frame: a sink prerolling on
+            # the first cue frame would re-base the projection (new
+            # base time) under frames already mapped. Wait until it is
+            # shown (the projection is then past its own latency, see
+            # the negative-PTS test) rather than for a fixed time.
+            appsrc.set_property("caps", Gst.Caps.from_string(
+                "video/x-raw,format=I420,width=64,height=48,"
+                "framerate=30/1"))
+            prime = Gst.Buffer.new_allocate(None, 64 * 48 * 3 // 2, None)
+            prime.offset = self.PRIME
+            prime.pts = clock.get_time() - proj.get_base_time()
+            appsrc.push_buffer(prime)
+            deadline = clock.get_time() + 5 * Gst.SECOND
+            while not primed and clock.get_time() < deadline:
+                proj.get_bus().timed_pop(10 * Gst.MSECOND)
+            assert primed, "projection never rendered the priming frame"
+            with patch(_CM, return_value=comp):
+                video_sink.play()
+            cue.set_state(Gst.State.PLAYING)
+            msg = cue.get_bus().timed_pop_filtered(
+                10 * Gst.SECOND,
+                Gst.MessageType.EOS | Gst.MessageType.ERROR)
+            assert msg is not None and msg.type == Gst.MessageType.EOS
+            # The last frames are still due on the projection.
+            deadline = clock.get_time() + 2 * Gst.SECOND
+            while (len(rendered) < self.FRAMES
+                   and clock.get_time() < deadline):
+                proj.get_bus().timed_pop(10 * Gst.MSECOND)
+            cue_base = cue.get_base_time()
+            cue_latency = vc.query_min_latency(cue)
+        finally:
+            cue.set_state(Gst.State.NULL)
+            proj.set_state(Gst.State.NULL)
+
+        assert len(rendered) >= self.FRAMES - self.MAX_DROPPED, (
+            f"only {len(rendered)}/{self.FRAMES} frames rendered")
+        errors = sorted(
+            rendered[n] - (cue_base + n * self.FRAME + cue_latency)
+            for n in rendered
+        )
+        median = errors[len(errors) // 2]
+        worst = max(errors, key=abs)
+        assert abs(median) < self.MEDIAN_TOLERANCE, (
+            f"median A/V offset {median / Gst.MSECOND:.1f}ms")
+        assert abs(worst) < self.WORST_TOLERANCE, (
+            f"worst A/V offset {worst / Gst.MSECOND:.1f}ms")
+
+
+class TestVideoEnded:
+    """A cue whose video branch ends before its first frame (a file
+    with no video stream) tells the compositor, so a lingering
+    predecessor is released instead of frozen for LINGER_CAP_MS. Real
+    cue pipeline and appsink; the audio sink is removed before the
+    pipeline leaves NULL."""
+
+    def _run(self, frames):
+        clock = Gst.SystemClock.obtain()
+        cue = Gst.Pipeline.new("cue-ended-test")
+        cue.use_clock(clock)
+        sink = VideoSink(cue)
+        cue.remove(sink.audio_sink)
+        sink._audio_removed = True
+        src = Gst.parse_bin_from_description(
+            f"videotestsrc num-buffers={frames} ! capsfilter "
+            "caps=video/x-raw,format=I420,width=64,height=48,"
+            "framerate=30/1",
+            True,
+        )
+        cue.add(src)
+        assert src.link(sink.video_queue)
+        # A projection on the same clock, based at 0: frames map to
+        # "now" and pass the pump's PTS guards.
+        comp = MagicMock()
+        comp.pipeline.get_base_time.return_value = 0
+        comp.clock.return_value = clock
+        comp.latency.return_value = 0
+        reg = vc.Registration()
+        reg.appsrc = MagicMock()
+        comp.register.return_value = reg
+        with patch(_CM, return_value=comp):
+            sink.play()
+            cue.set_state(Gst.State.PLAYING)
+            try:
+                msg = cue.get_bus().timed_pop_filtered(
+                    5 * Gst.SECOND,
+                    Gst.MessageType.EOS | Gst.MessageType.ERROR)
+                assert msg is not None
+                assert msg.type == Gst.MessageType.EOS
+            finally:
+                cue.set_state(Gst.State.NULL)
+            sink.dispose()
+        return comp, reg
+
+    def test_no_frame_before_eos_reports_video_ended(self):
+        comp, reg = self._run(frames=0)
+        comp.video_ended.assert_called_once_with(reg)
+
+    def test_eos_after_frames_does_not_report(self):
+        comp, reg = self._run(frames=3)
+        assert reg.pushed is True
+        comp.video_ended.assert_not_called()
+
+
+class TestReattach:
+    """After a projection rebuild every registration of the old
+    pipeline is gone; GstBackend calls reattach() on each active sink
+    so playing cues get their picture back without a restart."""
+
+    def _comp(self):
+        comp = MagicMock()
+        comp.register.side_effect = lambda _sink: vc.Registration()
+        return comp
+
+    def test_active_sink_gets_fresh_registration(self):
+        sink = VideoSink(Gst.Pipeline())
+        old_comp, new_comp = self._comp(), self._comp()
+        with patch(_CM, return_value=old_comp):
+            sink.play()
+        old_reg = sink._registration
+        sink.reattach(new_comp)
+        new_comp.register.assert_called_once_with(sink)
+        assert sink._registration is not old_reg
+        assert sink._registration is not None
+        assert sink._compositor is new_comp
+
+    def test_reattach_mid_playback_is_not_a_start(self):
+        # No start preroll follows a reattach: timed samples flow.
+        sink = VideoSink(Gst.Pipeline())
+        with patch(_CM, return_value=self._comp()):
+            sink.play()
+        sink._starting = False  # timed samples were flowing
+        sink.reattach(self._comp())
+        assert sink._starting is False
+
+    def test_inactive_sink_is_not_reattached(self):
+        sink = VideoSink(Gst.Pipeline())
+        comp = self._comp()
+        with patch(_CM, return_value=comp):
+            sink.play()
+            sink.stop()
+        new_comp = self._comp()
+        sink.reattach(new_comp)
+        new_comp.register.assert_not_called()
+        assert sink._registration is None
+
+    def test_stop_racing_reattach_leaves_no_registration(self):
+        sink = VideoSink(Gst.Pipeline())
+        with patch(_CM, return_value=self._comp()):
+            sink.play()
+        new_comp = self._comp()
+
+        def register_while_stopping(s):
+            # The cue stops on a worker thread mid-reattach.
+            from lisp.plugins.gst_backend.video_exclusive import (
+                active_video_sinks,
+            )
+
+            active_video_sinks.discard(s)
+            return vc.Registration()
+
+        new_comp.register.side_effect = register_while_stopping
+        with patch(_CM, return_value=new_comp):
+            sink.reattach(new_comp)
+        assert sink._registration is None
+        new_comp.unregister.assert_called_once_with(sink)
