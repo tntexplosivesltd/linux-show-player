@@ -375,7 +375,11 @@ class TestVideoOutputWindowOutputScreen:
         window = VideoOutputWindow()
         qtbot.addWidget(window)
         window.set_display_screen(_FakeScreen(3840, 2160))  # not listed
-        assert window.output_screen() is not window._target_screen
+        # Falls back to the screen Qt has the window on, else the
+        # primary: a real, listed screen either way.
+        expected = window.screen() or QApplication.primaryScreen()
+        assert expected in QApplication.screens()
+        assert window.output_screen() is expected
 
     def test_shown_window_uses_its_actual_screen(self, qtbot,
                                                  monkeypatch):
