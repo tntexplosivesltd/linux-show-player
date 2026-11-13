@@ -129,10 +129,16 @@ class GstBackend(Plugin, BaseBackend):
         if compositor is not None:
             # The canvas is the output screen's resolution; the
             # projection sink letterboxes it into the window, so a
-            # window resize never renegotiates the canvas.
+            # window resize never renegotiates the canvas. A sink that
+            # cannot scale (ximagesink) gets the window's size instead.
             GstBackend._video_window.canvas_size_changed.connect(
                 compositor.set_canvas_size
             )
+            if not compositor.sink_scales():
+                GstBackend._video_window.set_canvas_follows_window(True)
+                compositor.set_canvas_size(
+                    *GstBackend._video_window.canvas_size()
+                )
             # A runtime error can still take the pipeline down later;
             # the compositor then rebuilds it with backoff.
             compositor.failed.connect(self.__on_compositor_failed)

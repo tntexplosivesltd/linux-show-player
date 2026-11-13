@@ -74,6 +74,9 @@ class VideoOutputWindow(QMainWindow):
         )
 
         self._fullscreen = False
+        # The canvas is the screen unless the projection sink cannot
+        # scale (see set_canvas_follows_window()).
+        self._canvas_follows_window = False
         # Where set_display_screen() put the window: what the canvas is
         # sized from while hidden (screen() of a never-shown window may
         # still be the primary, not the projector it will open on).
@@ -115,10 +118,26 @@ class VideoOutputWindow(QMainWindow):
             screen = QApplication.primaryScreen()
         return screen
 
+    def set_canvas_follows_window(self, enabled):
+        """Size the canvas from the render area instead of the screen.
+
+        For a projection sink that draws the canvas 1:1 (ximagesink): a
+        screen-sized canvas in a smaller window would show only its
+        middle. Such a sink has no letterbox of its own to race, so
+        following window resizes is safe there."""
+        self._canvas_follows_window = bool(enabled)
+        self._schedule_canvas_check()
+
     def canvas_size(self):
-        """The compositor canvas: the output screen's resolution in
-        physical pixels. Fullscreen (a show) it is the window; windowed
-        glimagesink letterboxes it into the window."""
+        """The compositor canvas in physical pixels: the output screen's
+        resolution (fullscreen, a show, that is the window; windowed,
+        the sink letterboxes it into the window), or the render area
+        when set_canvas_follows_window() is on."""
+        if self._canvas_follows_window:
+            rw = self._render_widget
+            return canvas_size_for(
+                rw.width(), rw.height(), rw.devicePixelRatioF()
+            )
         screen = self.output_screen()
         geo = screen.geometry()
         return canvas_size_for(

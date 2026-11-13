@@ -324,6 +324,18 @@ def plan_pipeline():
     return {"gl": False, "upload": None, "mixer": "compositor", "sink": sink}
 
 
+# Sinks that letterbox any canvas into their window themselves. Another
+# sink (the autovideosink fallback: ximagesink when there is no GL and
+# no Xv) draws the canvas 1:1, so its canvas must be the window's size.
+SCALING_SINKS = ("glimagesink", "xvimagesink")
+
+
+def sink_scales(plan):
+    """Whether `plan`'s sink scales the canvas to its window. True with
+    no plan (an unavailable compositor draws nothing)."""
+    return plan is None or plan["sink"] in SCALING_SINKS
+
+
 class VideoCompositor:
     """Owns the single persistent projection pipeline.
 
@@ -445,6 +457,12 @@ class VideoCompositor:
 
     def canvas_size(self):
         return self._canvas
+
+    def sink_scales(self):
+        """Whether the projection sink letterboxes the canvas into its
+        window (see SCALING_SINKS). When not, the canvas must follow the
+        window's render area (GstBackend sets that up)."""
+        return sink_scales(self._plan)
 
     def latency(self):
         """The projection pipeline's min latency (ns), shared by every

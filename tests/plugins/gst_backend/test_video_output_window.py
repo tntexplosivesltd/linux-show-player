@@ -11,6 +11,7 @@ from lisp.plugins.gst_backend.gst_video_window import (
 from lisp.plugins.gst_backend.video_compositor import (
     COMP_HEIGHT,
     COMP_WIDTH,
+    canvas_size_for,
 )
 
 
@@ -301,6 +302,54 @@ class TestVideoOutputWindowCanvasSize:
         monkeypatch.setattr(window, "output_screen",
                             lambda: _FakeScreen(32, 32))
         assert window.canvas_size() == (COMP_WIDTH, COMP_HEIGHT)
+
+
+class TestVideoOutputWindowCanvasFollowsWindow:
+    """With a sink that cannot scale (ximagesink), the canvas must be
+    the render area, as before: a screen-sized canvas would be drawn
+    1:1 and cropped to the window's middle."""
+
+    def _shown(self, qtbot):
+        window = VideoOutputWindow()
+        qtbot.addWidget(window)
+        window.set_canvas_follows_window(True)
+        window.show()
+        qtbot.waitExposed(window)
+        qtbot.wait(400)
+        return window
+
+    def test_canvas_is_the_render_area(self, qtbot):
+        window = self._shown(qtbot)
+        rw = window._render_widget
+        dpr = rw.devicePixelRatioF()
+        assert window.canvas_size() == (
+            int(round(rw.width() * dpr)) & ~1,
+            int(round(rw.height() * dpr)) & ~1,
+        )
+
+    def test_resize_emits_the_new_render_area(self, qtbot):
+        window = self._shown(qtbot)
+        emitted = _recorder(window)
+        window.resize(700, 500)
+        window.resize(740, 520)
+        qtbot.waitUntil(lambda: bool(emitted), timeout=1500)
+        qtbot.wait(300)
+        assert emitted == [window.canvas_size()]  # debounced
+        screen = window.output_screen()
+        geo = screen.geometry()
+        assert emitted[0] != canvas_size_for(
+            geo.width(), geo.height(), screen.devicePixelRatio())
+
+    def test_enabling_rechecks_the_canvas(self, qtbot):
+        window = VideoOutputWindow()
+        qtbot.addWidget(window)
+        window.show()
+        qtbot.waitExposed(window)
+        qtbot.wait(400)
+        emitted = _recorder(window)
+        window.set_canvas_follows_window(True)
+        qtbot.waitUntil(lambda: bool(emitted), timeout=1500)
+        assert emitted == [window.canvas_size()]
 
 
 class TestVideoOutputWindowOutputScreen:

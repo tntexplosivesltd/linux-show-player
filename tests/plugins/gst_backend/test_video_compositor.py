@@ -56,6 +56,22 @@ class TestPlanPipeline:
             plan = vc.plan_pipeline()
         assert plan["sink"] == "autovideosink"
 
+    def test_scaling_sinks_scale(self):
+        # glimagesink and xvimagesink letterbox any canvas into their
+        # window, so the canvas can stay the screen's size.
+        for sink in ("glimagesink", "xvimagesink"):
+            assert vc.sink_scales({"sink": sink}) is True
+
+    def test_autovideosink_fallback_does_not_scale(self):
+        # Reached only with no GL and no Xv: autovideosink is then
+        # ximagesink, which draws the canvas 1:1 (a screen-sized canvas
+        # in a smaller window shows only its middle).
+        assert vc.sink_scales({"sink": "autovideosink"}) is False
+
+    def test_no_plan_counts_as_scaling(self):
+        # Unavailable compositor: nothing is drawn, keep the default.
+        assert vc.sink_scales(None) is True
+
     def test_no_plan_below_minimum_gstreamer(self):
         # appsrc's max-buffers/max-time/leaky-type (the per-cue queue
         # bounds) need GStreamer 1.20: on 1.18 every attach would raise
@@ -1099,6 +1115,20 @@ class TestFailedBuild:
         comp, _ = self._comp()
         comp.set_canvas_size(1024, 768)  # must not raise
         assert comp.canvas_size() == (1024, 768)
+
+
+class TestSinkScales:
+    def test_compositor_reports_its_plans_sink(self):
+        plan = {"gl": False, "upload": None, "mixer": "compositor",
+                "sink": "fakesink"}
+        out, mon = _fake_windows()
+        with patch.object(vc, "plan_pipeline", return_value=plan):
+            comp = vc.VideoCompositor(out, mon)
+        try:
+            assert comp.available
+            assert comp.sink_scales() is False
+        finally:
+            comp.shutdown()
 
 
 class TestBuildRaises:

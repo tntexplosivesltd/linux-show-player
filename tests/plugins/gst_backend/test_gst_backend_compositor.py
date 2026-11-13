@@ -37,6 +37,7 @@ class _FakeCompositor:
         self.register = MagicMock(return_value=None)
         self.unregister = MagicMock()
         self.is_quarantined = MagicMock(return_value=False)
+        self.sink_scales = MagicMock(return_value=True)
 
 
 def _window():
@@ -111,6 +112,22 @@ class TestCompositorWiring:
         backend, app, comp, _ = build()
         GstBackend.video_window().canvas_size_changed.emit(1280, 720)
         comp.set_canvas_size.assert_called_once_with(1280, 720)
+
+    def test_scaling_sink_keeps_the_screen_canvas(self, build):
+        backend, app, comp, _ = build()
+        window = GstBackend.video_window()
+        window.set_canvas_follows_window.assert_not_called()
+        comp.set_canvas_size.assert_not_called()
+
+    def test_non_scaling_sink_makes_the_canvas_follow_the_window(
+            self, build):
+        comp = _FakeCompositor()
+        comp.sink_scales.return_value = False
+        build(comp)
+        window = GstBackend.video_window()
+        window.set_canvas_follows_window.assert_called_once_with(True)
+        comp.set_canvas_size.assert_called_once_with(
+            *window.canvas_size())
 
     def test_available_compositor_does_not_warn(self, build):
         backend, app, comp, _ = build()
