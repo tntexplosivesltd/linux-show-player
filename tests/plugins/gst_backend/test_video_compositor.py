@@ -55,6 +55,21 @@ class TestPlanPipeline:
             plan = vc.plan_pipeline()
         assert plan["sink"] == "autovideosink"
 
+    def test_no_plan_below_minimum_gstreamer(self):
+        # appsrc's max-buffers/max-time/leaky-type (the per-cue queue
+        # bounds) need GStreamer 1.20: on 1.18 every attach would raise
+        # and every video cue would silently play audio only.
+        with patch.object(vc, "_have_factory", return_value=True), \
+                patch.object(vc.Gst, "version",
+                             return_value=(1, 18, 4, 0)):
+            assert vc.plan_pipeline() is None
+
+    def test_plan_at_minimum_gstreamer(self):
+        with patch.object(vc, "_have_factory", return_value=True), \
+                patch.object(vc.Gst, "version",
+                             return_value=(1, 20, 0, 0)):
+            assert vc.plan_pipeline() is not None
+
 
 def _fake_windows():
     out = MagicMock()
@@ -921,6 +936,17 @@ class TestBuildRaises:
             comp = vc.VideoCompositor(out, mon)
         assert comp.available is False
         assert comp.pipeline is None
+
+    def test_old_gstreamer_degrades_with_a_reason(self):
+        # The real _build: no plan → unavailable before any pipeline
+        # exists, and the reason is kept for the operator notice.
+        out, mon = _fake_windows()
+        with patch.object(vc.Gst, "version", return_value=(1, 18, 4, 0)):
+            comp = vc.VideoCompositor(out, mon)
+        assert comp.available is False
+        assert comp.pipeline is None
+        assert "1.20" in comp.unavailable_reason
+        assert "1.18.4" in comp.unavailable_reason
 
     def test_upload_bin_parse_error_degrades(self):
         plan = {"gl": True, "upload": "glupload ! glcolorconvert",

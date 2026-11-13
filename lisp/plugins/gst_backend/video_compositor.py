@@ -227,6 +227,21 @@ def _make_upload(description):
     return Gst.parse_bin_from_description(description, True)
 
 
+# The oldest GStreamer the projection supports: appsrc's max-buffers,
+# max-time and leaky-type (the per-cue queue bounds) and
+# GstApp.AppLeakyType appeared in 1.20. Mainstream distros in support
+# ship 1.20+ (Ubuntu 22.04, Debian 12), and the Flatpak runtime 1.24.
+MIN_GST_VERSION = (1, 20)
+
+
+def gst_version_string():
+    return ".".join(str(part) for part in Gst.version()[:3])
+
+
+def gst_version_supported():
+    return tuple(Gst.version()[:2]) >= MIN_GST_VERSION
+
+
 def _configure_appsrc(appsrc):
     """A cue's projection input: live, pre-timestamped by the pump,
     and bounded by time (APPSRC_MAX_QUEUE_TIME), with a buffer-count
@@ -256,7 +271,11 @@ def plan_pipeline():
     bin: the bin's release_pad over-unrefs on GStreamer 1.24 (the
     first cue release frees the mixer; the next attach segfaults). The
     bin only adds a per-pad upload + convert, which "upload" provides.
+
+    None below MIN_GST_VERSION: no plan works there (see the constant).
     """
+    if not gst_version_supported():
+        return None
     if all(
         _have_factory(name)
         for name in (
@@ -355,6 +374,9 @@ class VideoCompositor:
         self._unschedule = GLib.source_remove
         # The build plan (factories, GL or not), fixed for the process.
         self._plan = None
+        # Why the projection can never work in this process (shown to
+        # the operator), or None when it is merely down.
+        self.unavailable_reason = None
         self._bus_handler = None
         # Cached projection min latency (ns) and when it was queried;
         # None = re-query on the next latency() call.
@@ -727,6 +749,14 @@ class VideoCompositor:
     def _build(self):
         plan = plan_pipeline()
         logger.debug("VideoCompositor: build plan %s", plan)
+        if plan is None:
+            self.unavailable_reason = (
+                "needs GStreamer {}.{} or newer (found {})".format(
+                    *MIN_GST_VERSION, gst_version_string()
+                )
+            )
+            logger.warning("VideoCompositor: %s", self.unavailable_reason)
+            return False
         self._plan = plan
         self._gl = plan["gl"]
 

@@ -71,7 +71,9 @@ What follows are guidelines to run LiSP without a "proper" installation, **if so
 
 ### Dependencies (1/2)
 
-To start, you'll need to install these packages using your package manager:
+To start, you'll need to install these packages using your package manager.
+Video and image cues need **GStreamer 1.20 or newer** (Ubuntu 22.04,
+Debian 12 and later); on older GStreamer they play audio only.
 
 ```{tab} Debian/Ubuntu/Mint
  * `python3` (>= 3.10)

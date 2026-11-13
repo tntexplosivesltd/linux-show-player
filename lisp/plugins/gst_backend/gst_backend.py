@@ -117,14 +117,15 @@ class GstBackend(Plugin, BaseBackend):
             GstBackend._video_compositor = None
         compositor = GstBackend._video_compositor
         if compositor is None or not compositor.available:
-            self.app.notify.emit(
-                translate(
-                    "GstBackend",
-                    "Video projection unavailable — video cues will "
-                    "play audio only",
-                ),
-                NotificationLevel.Warning,
+            message = translate(
+                "GstBackend",
+                "Video projection unavailable — video cues will "
+                "play audio only",
             )
+            reason = getattr(compositor, "unavailable_reason", None)
+            if reason:
+                message = f"{message} ({reason})"
+            self.app.notify.emit(message, NotificationLevel.Warning)
         if compositor is not None:
             # The canvas follows the output window's render area, so a
             # cue's fit-to-canvas is its fit-to-window (fullscreen: the
