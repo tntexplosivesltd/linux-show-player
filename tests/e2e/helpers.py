@@ -89,7 +89,7 @@ def _create_empty_session(layout="ListLayout"):
 
 def start_lisp(
     layout="ListLayout",
-    log_level="warning",
+    log_level=None,
     log_file=None,
     session_path=None,
     expected_cues=None,
@@ -97,8 +97,9 @@ def start_lisp(
 ):
     """Start LiSP with the given layout and wait for the harness.
 
-    ``log_level`` overrides the default ``warning`` (e.g. ``info``
-    surfaces ``UriAvInput: no audio stream found`` lines).
+    ``log_level`` overrides the default: ``$LISP_E2E_LOG_LEVEL`` if
+    set, else ``warning`` (e.g. ``info`` surfaces ``UriAvInput: no
+    audio stream found`` lines).
 
     ``log_file`` redirects the subprocess' stderr (where Python
     logging and GStreamer-CRITICAL warnings both land) to the
@@ -131,7 +132,24 @@ def start_lisp(
     # may be an out-of-repo env override) or the caller's cwd.
     repo_root = portfile.find_repo_root(__file__) or os.getcwd()
 
-    if log_file is None:
+    # Default: LISP_E2E_LOG_LEVEL for a whole run (e.g. debug for
+    # timing / negotiation bugs), else warning. An explicit level wins.
+    if log_level is None:
+        log_level = os.environ.get("LISP_E2E_LOG_LEVEL") or "warning"
+
+    if log_file is None and os.environ.get("LISP_E2E_LOG"):
+        # Opt-in run-wide log (LISP_E2E_LOG=<file>): every LiSP launch
+        # of the run is appended, each under a header, so a failure in
+        # any one of them leaves a trace.
+        path = os.path.expanduser(os.environ["LISP_E2E_LOG"])
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        stderr = open(path, "a")
+        stderr.write(
+            f"\n===== LiSP launch {time.strftime('%Y-%m-%d %H:%M:%S')} "
+            f"log_level={log_level} session={session_path} =====\n"
+        )
+        stderr.flush()
+    elif log_file is None:
         stderr = subprocess.DEVNULL
     else:
         # Truncate and open for append-only by the child.
@@ -153,6 +171,8 @@ def start_lisp(
         cwd=repo_root,
         env=child_env,
     )
+    if stderr is not subprocess.DEVNULL:
+        stderr.close()  # the child holds its own copy
     atexit.register(stop_lisp)
 
     deadline = time.time() + timeout
@@ -523,7 +543,7 @@ def run_suite(
     description,
     test_fn,
     layout="ListLayout",
-    log_level="warning",
+    log_level=None,
     log_file=None,
 ):
     """Full lifecycle: parse args, start LiSP, run test_fn, exit.
