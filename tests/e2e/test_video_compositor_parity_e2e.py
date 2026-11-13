@@ -211,7 +211,7 @@ def check_playlist_seamless(t, handle, a_id, b_id):
 
 def run_tests(t):
     if not have_tools():
-        print("  SKIP: need X display + ffmpeg + gstreamer")
+        t.skip("need X display + ffmpeg + gstreamer")
         return
     create_media()
     call("cue.add_video_from_uri", {"uri": CLIP_A})

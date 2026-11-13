@@ -258,8 +258,8 @@ def measure_first_transition(t):
 def main():
     t = TestTracker()
     if not have_tools():
-        print("  SKIP: need X display + ffmpeg + xwininfo + gstreamer")
-        sys.exit(0)
+        t.skip("need X display + ffmpeg + xwininfo + gstreamer")
+        sys.exit(t.summary())
     print("Generating test media (1920x1080 H.264, motion)...")
     create_media()
     print("Phase 1: building + saving session...")

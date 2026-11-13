@@ -5,7 +5,9 @@ Each tests/e2e/test_*.py is its own LiSP lifecycle driven over the
 harness on a fixed port (127.0.0.1:8070), so they MUST run one at a
 time. This runner discovers them, runs each in a subprocess with a
 timeout and an optional retry, kills any stale LiSP between runs, and
-returns a single aggregate exit code (0 = all passed, 1 = any failed).
+returns a single aggregate exit code (0 = none failed, 1 = any failed).
+A script exiting EXIT_SKIP (it checked nothing here, e.g. no window
+manager) is reported as skipped, not passed, and is not retried.
 
 Run:
     poetry run python tests/e2e/run_all.py
@@ -19,6 +21,11 @@ import os
 import subprocess
 import sys
 import time
+
+try:
+    from tests.e2e.tracker import EXIT_SKIP
+except ImportError:  # run as a script: tests/e2e is on sys.path
+    from tracker import EXIT_SKIP
 
 E2E_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -39,13 +46,17 @@ def kill_stale():
 
 
 def run_one(path, timeout):
-    """Run one test script; return True on exit code 0."""
+    """Run one test script; return "passed", "failed" or "skipped"."""
     try:
         result = subprocess.run([sys.executable, path], timeout=timeout)
-        return result.returncode == 0
     except subprocess.TimeoutExpired:
         print(f"  TIMEOUT after {timeout}s", flush=True)
-        return False
+        return "failed"
+    if result.returncode == 0:
+        return "passed"
+    if result.returncode == EXIT_SKIP:
+        return "skipped"
+    return "failed"
 
 
 def main():
@@ -71,31 +82,36 @@ def main():
         print(f"\n{len(tests)} test(s)")
         return 0
 
-    passed, failed, retried = [], [], []
+    passed, failed, skipped, retried = [], [], [], []
     for path in tests:
         name = os.path.basename(path)
         print(f"\n{'=' * 60}\nRUN {name}\n{'=' * 60}", flush=True)
         kill_stale()
-        ok = run_one(path, args.timeout)
+        status = run_one(path, args.timeout)
         attempt = 0
-        while not ok and attempt < args.retries:
+        while status == "failed" and attempt < args.retries:
             attempt += 1
             print(f"--- {name} FAILED, retry {attempt}/{args.retries} ---",
                   flush=True)
             kill_stale()
-            ok = run_one(path, args.timeout)
-        if ok:
+            status = run_one(path, args.timeout)
+        if status == "passed":
             passed.append(name)
             if attempt:
                 retried.append(name)
+        elif status == "skipped":
+            skipped.append(name)
         else:
             failed.append(name)
         kill_stale()
 
     print(f"\n{'=' * 60}")
     print(f"SUMMARY: {len(passed)} passed, {len(failed)} failed, "
-          f"{len(retried)} needed retry")
+          f"{len(skipped)} skipped, {len(retried)} needed retry")
     print(f"{'=' * 60}")
+    if skipped:
+        # Checked nothing here: not a pass, not a failure.
+        print("SKIPPED: " + ", ".join(skipped))
     if retried:
         print("RETRIED (flaky): " + ", ".join(retried))
         # Surface flakiness on the PR even when the run is green: a

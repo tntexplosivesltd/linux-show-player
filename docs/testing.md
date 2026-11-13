@@ -125,7 +125,8 @@ E2E tests work fundamentally differently. Each test file is a
 2. Waits for the test-harness JSON-RPC server to come up.
 3. Calls JSON-RPC methods to drive the app and read its state.
 4. Asserts via a tiny in-house `TestTracker`.
-5. Tears LiSP down and exits with `0` (passed) or `1` (failed).
+5. Tears LiSP down and exits with `0` (passed), `1` (failed) or `77`
+   (skipped: it could not check anything here, e.g. missing tools).
 
 There is no pytest involvement. Trying to run them via pytest will
 fail; `tests/e2e/conftest.py` uses `collect_ignore` to keep pytest from
@@ -177,7 +178,7 @@ PR still reports the required check green (a skipped job counts as success)
 without spending ~30 minutes on the serial suite.
 
 One test is a deliberate no-op in CI: `test_video_transition_flicker_e2e.py`
-self-skips (exit 0, no checks) unless `ffmpeg`, `xwininfo`, and
+self-skips (exit 77, reported under `SKIPPED:` by `run_all.py`) unless `ffmpeg`, `xwininfo`, and
 `gst-launch-1.0` are all present. It works by screen-capturing frames from a
 GL-composited video projection window, which headless Xvfb + llvmpipe cannot
 produce — the tools are intentionally *not* installed in the `e2e` job, so it
@@ -283,6 +284,10 @@ Key points:
 - **`TestTracker` (`t`)**. `t.check("descriptive name", condition)` is
   the entire assertion API. The summary at the end prints pass/fail
   counts and lists failed checks by name — keep names searchable.
+  When the script cannot test anything here (a tool, display or window
+  manager is missing), call `t.skip("reason")` and return: it exits 77
+  and `run_all.py` lists it as skipped, not passed, and never retries
+  it. A failed check still fails the run.
 - **Wrap each test in try/except in `run_tests`**. Without it, one test
   erroring would prevent the rest from running and skew results. The
   pattern in `test_seek_cue_e2e.py` is the convention.
