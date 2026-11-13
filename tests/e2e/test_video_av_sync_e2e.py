@@ -37,6 +37,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -45,8 +46,9 @@ from helpers import (  # noqa: E402
 )
 
 MEDIA_DIR = media_cache_dir("avsync")
-CAPTURE_VIDEO = os.path.join(MEDIA_DIR, "capture_video.nut")
-CAPTURE_AUDIO = os.path.join(MEDIA_DIR, "capture_audio.nut")
+# Captures are per run, not cached: set in __main__ to a fresh private
+# directory, so two concurrent runs never write the same file.
+CAPTURE_VIDEO = CAPTURE_AUDIO = None
 FLASH_TIMES_S = (1, 2, 3, 4, 5)
 CLIP_SECONDS = 6
 # The pulse demuxer stamps packets as wall clock minus a latency
@@ -270,4 +272,10 @@ def run_tests(t):
 
 if __name__ == "__main__":
     MONITOR = setup_null_sink()
-    run_suite("A/V Sync (cross-pipeline)", run_tests)
+    run_dir = tempfile.mkdtemp(prefix="capture-", dir=MEDIA_DIR)
+    CAPTURE_VIDEO = os.path.join(run_dir, "capture_video.nut")
+    CAPTURE_AUDIO = os.path.join(run_dir, "capture_audio.nut")
+    try:
+        run_suite("A/V Sync (cross-pipeline)", run_tests)
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
