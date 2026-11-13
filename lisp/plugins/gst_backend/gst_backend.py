@@ -219,9 +219,30 @@ class GstBackend(Plugin, BaseBackend):
         # The old pipeline's registrations died with it: give every
         # playing/paused video cue a fresh branch (main loop).
         compositor = GstBackend._video_compositor
+        held_out = []
         if compositor is not None:
             for sink in active_video_sinks.snapshot():
                 sink.reattach(compositor)
+                if compositor.is_quarantined(sink):
+                    held_out.append(sink)
+        if held_out:
+            # A cue that broke the projection twice gets no branch back
+            # (see VideoCompositor._fail): it stays black on stage, so
+            # "restored" alone would mislead the operator.
+            names = ", ".join(
+                f'"{cue.name}"' for cue in self.app.cue_model
+                if getattr(cue, "media", None) is not None
+                and cue.media.element("VideoSink") in held_out
+            )
+            self.app.notify.emit(
+                translate(
+                    "GstBackend",
+                    "Video projection restored, but {} plays audio "
+                    "only for now: it failed the projection again",
+                ).format(names),
+                NotificationLevel.Warning,
+            )
+            return
         self.app.notify.emit(
             translate("GstBackend", "Video projection restored"),
             NotificationLevel.Info,

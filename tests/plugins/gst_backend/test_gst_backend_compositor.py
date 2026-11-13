@@ -26,8 +26,9 @@ from lisp.ui.widgets.notification import NotificationLevel
 
 
 class _FakeCompositor:
-    def __init__(self, available=True):
+    def __init__(self, available=True, unavailable_reason=None):
         self.available = available
+        self.unavailable_reason = unavailable_reason
         self.failed = Signal()
         self.restored = Signal()
         self.gave_up = Signal()
@@ -35,6 +36,7 @@ class _FakeCompositor:
         self.shutdown = MagicMock()
         self.register = MagicMock(return_value=None)
         self.unregister = MagicMock()
+        self.is_quarantined = MagicMock(return_value=False)
 
 
 def _window():
@@ -118,6 +120,13 @@ class TestCompositorWiring:
         backend, app, comp, _ = build(_FakeCompositor(available=False))
         assert len(_warnings(app)) == 1
 
+    def test_unavailable_warning_gives_the_reason(self, build):
+        reason = "needs GStreamer 1.20 or newer (found 1.18.4)"
+        backend, app, comp, _ = build(
+            _FakeCompositor(available=False, unavailable_reason=reason))
+        (call,) = _warnings(app)
+        assert reason in call.args[0]
+
     def test_runtime_failure_warns(self, build):
         backend, app, comp, _ = build()
         comp.failed.emit()
@@ -145,10 +154,22 @@ class TestRecovery:
     """failed → a rebuild is coming; restored → active cues re-attach
     (and the operator is told); gave_up → audio only for good."""
 
+    @pytest.fixture(autouse=True)
+    def _stop_played(self):
+        # A played sink left active leaks into later tests: when it is
+        # finally stopped or collected it unregisters from whatever
+        # compositor that test has patched in.
+        self._sinks = []
+        yield
+        with patch.object(GstBackend, "_video_compositor", None):
+            for sink in self._sinks:
+                sink.stop()
+
     def _played(self):
         sink = VideoSink(Gst.Pipeline())  # never started: no audio
         with patch.object(GstBackend, "_video_compositor", None):
             sink.play()  # active, no branch (compositor down)
+        self._sinks.append(sink)
         return sink
 
     def test_failure_warns_that_a_restart_is_coming(self, build):
@@ -181,6 +202,30 @@ class TestRecovery:
         comp.restored.emit()
         levels = [c.args[1] for c in app.notify.emit.call_args_list]
         assert NotificationLevel.Info in levels
+
+    @staticmethod
+    def _cue(name, sink):
+        cue = MagicMock()
+        cue.name = name
+        cue.media.element.side_effect = (
+            lambda kind: sink if kind == "VideoSink" else None)
+        return cue
+
+    def test_restored_names_cues_left_audio_only(self, build):
+        # A quarantined cue gets no branch back: the operator must not
+        # be told "restored" while it stays black on stage.
+        backend, app, comp, _ = build()
+        bad, good = self._played(), self._played()
+        app.cue_model = [self._cue("Storm clip", bad),
+                         self._cue("Sunrise", good)]
+        comp.is_quarantined.side_effect = lambda sink: sink is bad
+        comp.restored.emit()
+        (call,) = _warnings(app)
+        assert "Storm clip" in call.args[0]
+        assert "Sunrise" not in call.args[0]
+        assert "audio only" in call.args[0]
+        levels = [c.args[1] for c in app.notify.emit.call_args_list]
+        assert NotificationLevel.Info not in levels
 
     def test_gave_up_warns_audio_only(self, build):
         backend, app, comp, _ = build()
