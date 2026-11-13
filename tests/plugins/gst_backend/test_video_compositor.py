@@ -460,19 +460,30 @@ class TestCanvasSizeFor:
         assert vc.canvas_size_for(3840, 2160, 1.0) == (3840, 2160)
         assert vc.canvas_size_for(1920, 1080, 2.0) == (3840, 2160)
 
+    def test_spanned_projectors_are_not_capped(self):
+        # Edge-blended spans (Mosaic / Xinerama): triple and quad
+        # 1080p, dual 4K. Capping these upscaled, and softened, the
+        # whole blend.
+        assert vc.canvas_size_for(5760, 1080, 1.0) == (5760, 1080)
+        assert vc.canvas_size_for(7680, 1080, 1.0) == (7680, 1080)
+        assert vc.canvas_size_for(7680, 2160, 1.0) == (7680, 2160)
+
+    def test_8k_is_not_capped(self):
+        assert vc.canvas_size_for(7680, 4320, 1.0) == (7680, 4320)
+
     def test_above_max_is_scaled_down_keeping_aspect(self):
-        # 8K would composite 33 MP per frame and can exceed the GL
-        # max texture size: capped to MAX_CANVAS on the long side.
-        assert vc.canvas_size_for(7680, 4320, 1.0) == (
+        # Past the smallest GL_MAX_TEXTURE_SIZE of current desktop
+        # drivers: capped to MAX_CANVAS on the long side.
+        assert vc.canvas_size_for(15360, 8640, 1.0) == (
             vc.MAX_CANVAS, vc.MAX_CANVAS * 9 // 16)
 
     def test_portrait_above_max_caps_the_height(self):
-        w, h = vc.canvas_size_for(4320, 7680, 1.0)
+        w, h = vc.canvas_size_for(8640, 15360, 1.0)
         assert h == vc.MAX_CANVAS
         assert w == vc.MAX_CANVAS * 9 // 16
 
     def test_capped_size_stays_even(self):
-        w, h = vc.canvas_size_for(5001, 3001, 1.0)
+        w, h = vc.canvas_size_for(10001, 3001, 1.0)
         assert max(w, h) <= vc.MAX_CANVAS
         assert w % 2 == 0 and h % 2 == 0
 

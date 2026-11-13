@@ -36,11 +36,12 @@ COMP_WIDTH = 1920
 COMP_HEIGHT = 1080
 COMP_FPS = 30
 MIN_CANVAS = 64
-# Longest canvas side. Covers UHD / DCI-4K projectors 1:1 and stays well
-# under GL_MAX_TEXTURE_SIZE (8192+ on current drivers, llvmpipe
-# included). An 8K screen, or a windowed preview on a HiDPI panel, is
-# composited at this size and scaled up by the sink, not at full size.
-MAX_CANVAS = 4096
+# Longest canvas side. Stays within GL_MAX_TEXTURE_SIZE on current
+# desktop drivers (most report 16384 or more). Covers 8K
+# and edge-blended spans (triple / quad 1080p, dual 4K) 1:1, so a
+# blend is never upscaled and softened. Anything larger is composited
+# at this size and scaled up by the sink.
+MAX_CANVAS = 8192
 
 # After a canvas re-pin, the sinks are asked to redraw at these delays
 # (ms). A re-pin happens on a screen change, which also resizes the
