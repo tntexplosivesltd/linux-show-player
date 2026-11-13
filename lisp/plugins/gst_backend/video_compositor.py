@@ -20,7 +20,12 @@ import threading
 import time
 
 from lisp.core.signal import Signal
-from lisp.plugins.gst_backend.gi_repository import GLib, GstApp, Gst
+from lisp.plugins.gst_backend.gi_repository import (
+    GLib,
+    GstApp,
+    Gst,
+    GstVideo,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -330,6 +335,20 @@ def plan_pipeline():
 SCALING_SINKS = ("glimagesink", "xvimagesink")
 
 
+def _overlay_of(sink):
+    """The element that draws for `sink`: the GstVideoOverlay inside a
+    bin (glimagesink is a GstGLImageSinkBin, autovideosink wraps its
+    pick), else `sink` itself if it is one; None when nothing draws.
+    Exposing the inner element does not rely on a bin forwarding."""
+    if isinstance(sink, Gst.Bin):
+        inner = sink.get_by_interface(GstVideo.VideoOverlay.__gtype__)
+        if inner is not None:
+            return inner
+    if isinstance(sink, GstVideo.VideoOverlay):
+        return sink
+    return None
+
+
 def sink_scales(plan):
     """Whether `plan`'s sink scales the canvas to its window. True with
     no plan (an unavailable compositor draws nothing)."""
@@ -526,9 +545,15 @@ class VideoCompositor:
         if not self.available or self.pipeline is None:
             return
         for sink in (self._proj_sink, self._mon_sink):
-            expose = getattr(sink, "expose", None)  # GstVideoOverlay
-            if expose is not None:
-                expose()
+            overlay = _overlay_of(sink)
+            if overlay is None:
+                logger.debug(
+                    "VideoCompositor: no GstVideoOverlay in %s to expose",
+                    sink.get_name() if isinstance(sink, Gst.Element)
+                    else sink,
+                )
+                continue
+            overlay.expose()
 
     def shutdown(self):
         """Stop the projection pipeline for good. Idempotent.

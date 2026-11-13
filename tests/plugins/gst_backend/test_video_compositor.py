@@ -3,6 +3,8 @@
 import time
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from lisp.plugins.gst_backend import video_compositor as vc
 
 
@@ -690,8 +692,9 @@ class TestCanvasSizing:
         assert sorted(p[0] for p in sched.pending) == sorted(
             vc.CANVAS_EXPOSE_MS)
         comp._proj_sink.expose.assert_not_called()  # deferred
-        for ms in vc.CANVAS_EXPOSE_MS:
-            sched.fire(ms)
+        with patch.object(vc, "_overlay_of", side_effect=lambda s: s):
+            for ms in vc.CANVAS_EXPOSE_MS:
+                sched.fire(ms)
         assert comp._proj_sink.expose.call_count == len(vc.CANVAS_EXPOSE_MS)
         assert comp._mon_sink.expose.call_count == len(vc.CANVAS_EXPOSE_MS)
 
@@ -701,16 +704,21 @@ class TestCanvasSizing:
         comp.set_canvas_size(1024, 768)
         assert sched.pending == []
 
-    def test_expose_skips_sink_without_overlay(self):
-        # autovideosink does not implement GstVideoOverlay.
+    def test_expose_skips_sink_without_overlay(self, caplog):
+        # A sink with no overlay element: skipped, and said so.
         comp = self._comp()
         sched = _FakeScheduler(comp)
-        comp._proj_sink = object()
-        comp._mon_sink = MagicMock()
+        proj, mon = MagicMock(), MagicMock()
+        comp._proj_sink, comp._mon_sink = proj, mon
         comp.set_canvas_size(1024, 768)
-        for ms in vc.CANVAS_EXPOSE_MS:
-            sched.fire(ms)  # must not raise
-        assert comp._mon_sink.expose.called
+        with patch.object(vc, "_overlay_of",
+                          side_effect=lambda s: s if s is mon else None), \
+                caplog.at_level("DEBUG", logger=vc.__name__):
+            for ms in vc.CANVAS_EXPOSE_MS:
+                sched.fire(ms)  # must not raise
+        assert mon.expose.called
+        assert not proj.expose.called
+        assert "no GstVideoOverlay" in caplog.text
 
     def test_pending_expose_is_cancelled_by_shutdown(self):
         comp = self._comp()
@@ -722,6 +730,59 @@ class TestCanvasSizing:
         assert sched.pending == []
         proj.expose.assert_not_called()
 
+
+
+def _make(factory):
+    element = vc.Gst.ElementFactory.make(factory, None)
+    if element is None:
+        pytest.skip(f"{factory} not installed")
+    return element
+
+
+class TestOverlayOf:
+    """_expose_sinks() exposes the element that draws, found on REAL
+    elements (no display needed: nothing here leaves NULL)."""
+
+    def test_gl_sink_bin_resolves_to_its_inner_sink(self):
+        # glimagesink is GstGLImageSinkBin: expose the inner
+        # glimagesinkelement itself, not rely on the bin forwarding.
+        sink = _make("glimagesink")
+        overlay = vc._overlay_of(sink)
+        assert overlay is not None
+        assert overlay is not sink
+        assert isinstance(overlay, vc.GstVideo.VideoOverlay)
+        assert overlay.get_parent() is sink
+
+    def test_plain_overlay_sink_is_itself(self):
+        sink = _make("ximagesink")
+        assert vc._overlay_of(sink) is sink
+
+    def test_bin_wrapping_an_overlay_sink_finds_it(self):
+        # autovideosink's shape: a bin whose child draws.
+        inner = _make("ximagesink")
+        wrapper = vc.Gst.Bin.new(None)
+        wrapper.add(inner)
+        assert vc._overlay_of(wrapper) is inner
+
+    def test_sink_without_overlay_is_none(self):
+        wrapper = vc.Gst.Bin.new(None)
+        wrapper.add(_make("fakesink"))
+        assert vc._overlay_of(wrapper) is None
+        assert vc._overlay_of(_make("fakesink")) is None
+
+    def test_expose_on_a_real_pipeline_without_overlay_is_safe(
+            self, caplog):
+        plan = {"gl": False, "upload": None, "mixer": "compositor",
+                "sink": "fakesink"}
+        out, mon = _fake_windows()
+        with patch.object(vc, "plan_pipeline", return_value=plan):
+            comp = vc.VideoCompositor(out, mon)
+        try:
+            with caplog.at_level("DEBUG", logger=vc.__name__):
+                comp._expose_sinks()
+            assert "no GstVideoOverlay" in caplog.text
+        finally:
+            comp.shutdown()
 
 
 class _FakeScheduler:
