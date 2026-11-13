@@ -26,7 +26,7 @@ from READY after EOS is covered too. No audio: an image has no audio
 source, so VideoSink removes its audio sink before PAUSED.
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -167,8 +167,12 @@ def test_image_frames_reach_projection_and_eos_unregisters(tiny_png):
                 # handoff hook fired for a lingering predecessor.
                 assert projection.rendered > before, f"run {run}"
                 projection.comp.frame_ready.assert_called()
-                # The timer EOS ended the cue like any other.
-                projection.comp.unregister.assert_called_once_with(sink)
+                # The timer EOS ended the cue like any other. Counted
+                # for this sink only: a GstMedia left by an earlier
+                # test can be collected meanwhile, and its VideoSink's
+                # dispose() unregisters through the patched compositor.
+                calls = projection.comp.unregister.call_args_list
+                assert calls.count(call(sink)) == 1, calls
                 assert not active_video_sinks.contains(sink)
                 assert media._GstMedia__pipeline.get_state(0)[1] == (
                     Gst.State.READY)
