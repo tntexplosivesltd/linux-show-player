@@ -1,5 +1,6 @@
 """Tests for VideoCompositor build-plan and register bookkeeping."""
 
+import time
 from unittest.mock import MagicMock, patch
 
 from lisp.plugins.gst_backend import video_compositor as vc
@@ -1445,9 +1446,9 @@ class TestRebuildAfterFailure:
         sched = _FakeScheduler(comp)
         builds = []
 
-        def rebuild_ok():
+        def rebuild_ok(wait=True):
             fake_build(comp)
-            builds.append(True)
+            builds.append(wait)
             return True
 
         comp._build = MagicMock(side_effect=rebuild_ok)
@@ -1459,7 +1460,75 @@ class TestRebuildAfterFailure:
             handlers[name] = handler  # strong ref: signals are weak
             getattr(comp, name).connect(handler)
         comp._test_handlers = handlers
+        comp._test_builds = builds
         return comp, sched, events
+
+    @staticmethod
+    def _playing(comp, src=None):
+        """The bus reports the rebuilt pipeline (or `src`) PLAYING."""
+        message = _bus_message(
+            vc.Gst.MessageType.STATE_CHANGED,
+            comp.pipeline if src is None else src)
+        message.parse_state_changed.return_value = (
+            vc.Gst.State.PAUSED, vc.Gst.State.PLAYING,
+            vc.Gst.State.VOID_PENDING)
+        comp._on_bus_message(None, message)
+
+    def _rebuild(self, comp, sched, delay):
+        """Fire the rebuild due at `delay` and, if it built, let the
+        new pipeline reach PLAYING (the bus message that completes a
+        restore)."""
+        sched.fire(delay)
+        if comp.pipeline is not None and not comp.available:
+            self._playing(comp)
+
+    def test_rebuild_does_not_wait_on_the_main_thread(self):
+        # A blocking get_state(1 s) here froze GO handling while the
+        # operator was already dealing with a lost projection.
+        comp, sched, events = self._comp()
+        self._fail(comp)
+        sched.fire(vc.REBUILD_BACKOFF_MS[0])
+        assert comp._test_builds == [False]
+
+    def test_restored_only_once_the_rebuild_is_playing(self):
+        comp, sched, events = self._comp()
+        self._fail(comp)
+        sched.fire(vc.REBUILD_BACKOFF_MS[0])
+        assert comp.available is False
+        assert events["restored"] == 0
+        child = MagicMock()
+        child.get_parent.return_value = comp.pipeline
+        self._playing(comp, src=child)  # an element, not the pipeline
+        assert events["restored"] == 0
+        self._playing(comp)
+        assert comp.available is True
+        assert events["restored"] == 1
+        assert sched.pending == []  # the PLAYING deadline is cancelled
+
+    def test_rebuild_failing_before_playing_backs_off(self):
+        # Not a new failure of a running projection: no second
+        # "failed" notice and nobody is quarantined.
+        comp, sched, events = self._comp()
+        sink = object()
+        self._register(comp, sink)
+        self._fail(comp)
+        sched.fire(vc.REBUILD_BACKOFF_MS[0])
+        self._fail(comp)  # ERROR from the new pipeline, before PLAYING
+        assert events == {"failed": 1, "restored": 0, "gave_up": 0}
+        assert comp.pipeline is None
+        assert [p[0] for p in sched.pending] == [vc.REBUILD_BACKOFF_MS[1]]
+        self._rebuild(comp, sched, vc.REBUILD_BACKOFF_MS[1])
+        assert self._register(comp, sink) is not None
+
+    def test_rebuild_never_playing_times_out_and_backs_off(self):
+        comp, sched, events = self._comp()
+        self._fail(comp)
+        sched.fire(vc.REBUILD_BACKOFF_MS[0])
+        sched.fire(vc.REBUILD_PLAYING_TIMEOUT_MS)
+        assert comp.available is False
+        assert comp.pipeline is None
+        assert events["restored"] == 0
+        assert [p[0] for p in sched.pending] == [vc.REBUILD_BACKOFF_MS[1]]
 
     def _fail(self, comp):
         """A pipeline-level ERROR (from an element of the pipeline)."""
@@ -1481,7 +1550,7 @@ class TestRebuildAfterFailure:
     def test_rebuild_restores_the_projection(self):
         comp, sched, events = self._comp()
         self._fail(comp)
-        sched.fire(vc.REBUILD_BACKOFF_MS[0])
+        self._rebuild(comp, sched, vc.REBUILD_BACKOFF_MS[0])
         assert comp.available is True
         assert comp.pipeline is not None
         assert events["restored"] == 1
@@ -1492,7 +1561,7 @@ class TestRebuildAfterFailure:
         self._fail(comp)
         for delay in vc.REBUILD_BACKOFF_MS:
             assert [p[0] for p in sched.pending] == [delay]
-            sched.fire(delay)
+            self._rebuild(comp, sched, delay)
         assert sched.pending == []
         assert comp._build.call_count == len(vc.REBUILD_BACKOFF_MS)
         assert comp.available is False
@@ -1503,7 +1572,7 @@ class TestRebuildAfterFailure:
         comp, sched, events = self._comp()
         comp._build = MagicMock(side_effect=RuntimeError("GL gone"))
         self._fail(comp)
-        sched.fire(vc.REBUILD_BACKOFF_MS[0])
+        self._rebuild(comp, sched, vc.REBUILD_BACKOFF_MS[0])
         assert comp.available is False
         assert [p[0] for p in sched.pending] == [vc.REBUILD_BACKOFF_MS[1]]
 
@@ -1511,7 +1580,7 @@ class TestRebuildAfterFailure:
         comp, sched, events = self._comp()
         with patch(self._MONO, return_value=1000.0):
             self._fail(comp)
-            sched.fire(vc.REBUILD_BACKOFF_MS[0])
+            self._rebuild(comp, sched, vc.REBUILD_BACKOFF_MS[0])
             self._fail(comp)  # fails again right after the rebuild
         assert [p[0] for p in sched.pending] == [vc.REBUILD_BACKOFF_MS[1]]
 
@@ -1519,7 +1588,7 @@ class TestRebuildAfterFailure:
         comp, sched, events = self._comp()
         with patch(self._MONO, return_value=1000.0):
             self._fail(comp)
-            sched.fire(vc.REBUILD_BACKOFF_MS[0])
+            self._rebuild(comp, sched, vc.REBUILD_BACKOFF_MS[0])
         later = 1000.0 + vc.REBUILD_STABLE_MS / 1000 + 1
         with patch(self._MONO, return_value=later):
             self._fail(comp)
@@ -1533,7 +1602,7 @@ class TestRebuildAfterFailure:
         with patch(self._MONO, return_value=1000.0):
             for delay in vc.REBUILD_BACKOFF_MS:
                 self._fail(comp)
-                sched.fire(delay)
+                self._rebuild(comp, sched, delay)
             assert events["restored"] == len(vc.REBUILD_BACKOFF_MS)
             failed_before = events["failed"]
             self._fail(comp)
@@ -1556,10 +1625,10 @@ class TestRebuildAfterFailure:
         with patch(self._MONO, return_value=1000.0):
             self._register(comp, bad)
             self._fail(comp)
-            sched.fire(vc.REBUILD_BACKOFF_MS[0])
+            self._rebuild(comp, sched, vc.REBUILD_BACKOFF_MS[0])
             self._register(comp, bad)  # GstBackend re-attaches it
             self._fail(comp)           # ...and it fails again
-            sched.fire(vc.REBUILD_BACKOFF_MS[1])
+            self._rebuild(comp, sched, vc.REBUILD_BACKOFF_MS[1])
             assert self._register(comp, bad) is None
             assert self._register(comp, good) is not None
             assert comp.is_registered(bad) is False
@@ -1569,10 +1638,10 @@ class TestRebuildAfterFailure:
         """Fail, rebuild, re-attach `sink`, fail again at once: `sink`
         is quarantined and the second rebuild is up. Clock at 1000."""
         self._fail(comp)
-        sched.fire(vc.REBUILD_BACKOFF_MS[0])
+        self._rebuild(comp, sched, vc.REBUILD_BACKOFF_MS[0])
         self._register(comp, sink)
         self._fail(comp)
-        sched.fire(vc.REBUILD_BACKOFF_MS[1])
+        self._rebuild(comp, sched, vc.REBUILD_BACKOFF_MS[1])
 
     def test_refiring_a_quarantined_cue_keeps_it_out(self):
         # The operator re-fires the cue that just went black, or a
@@ -1617,7 +1686,7 @@ class TestRebuildAfterFailure:
         sink = object()
         self._register(comp, sink)
         self._fail(comp)
-        sched.fire(vc.REBUILD_BACKOFF_MS[0])
+        self._rebuild(comp, sched, vc.REBUILD_BACKOFF_MS[0])
         assert self._register(comp, sink) is not None
 
     def test_failure_long_after_rebuild_quarantines_nobody(self):
@@ -1625,12 +1694,12 @@ class TestRebuildAfterFailure:
         sink = object()
         with patch(self._MONO, return_value=1000.0):
             self._fail(comp)
-            sched.fire(vc.REBUILD_BACKOFF_MS[0])
+            self._rebuild(comp, sched, vc.REBUILD_BACKOFF_MS[0])
             self._register(comp, sink)
         later = 1000.0 + vc.REBUILD_STABLE_MS / 1000 + 1
         with patch(self._MONO, return_value=later):
             self._fail(comp)
-            sched.fire(vc.REBUILD_BACKOFF_MS[0])
+            self._rebuild(comp, sched, vc.REBUILD_BACKOFF_MS[0])
         assert self._register(comp, sink) is not None
 
     def test_shutdown_cancels_pending_rebuild(self):
@@ -1649,7 +1718,7 @@ class TestRebuildAfterFailure:
             comp.register(sink)
         self._fail(comp)
         assert comp.is_registered(sink) is False
-        sched.fire(vc.REBUILD_BACKOFF_MS[0])
+        self._rebuild(comp, sched, vc.REBUILD_BACKOFF_MS[0])
         assert comp.is_registered(sink) is False  # re-attach is explicit
 
     def test_real_pipeline_fail_rebuild_reregister(self):
@@ -1670,6 +1739,15 @@ class TestRebuildAfterFailure:
                 assert comp.pipeline is None
                 assert first.get_state(0)[1] == vc.Gst.State.NULL
                 sched.fire(vc.REBUILD_BACKOFF_MS[0])
+                # Not restored until the bus says PLAYING. No main loop
+                # runs here, so hand the bus messages over by hand.
+                assert comp.available is False
+                bus = comp.pipeline.get_bus()
+                deadline = time.monotonic() + 5
+                while not comp.available and time.monotonic() < deadline:
+                    message = bus.timed_pop(20 * vc.Gst.MSECOND)
+                    if message is not None:
+                        comp._on_bus_message(bus, message)
                 assert comp.available is True
                 assert comp.pipeline is not first
                 ret, state, _ = comp.pipeline.get_state(vc.Gst.SECOND)

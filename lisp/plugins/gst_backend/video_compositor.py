@@ -62,6 +62,9 @@ LINGER_CAP_MS = 3000
 # exclusivity means that is normally the one active video cue.)
 REBUILD_BACKOFF_MS = (1000, 5000, 30000)
 REBUILD_STABLE_MS = 60000
+# A rebuild that has not reached PLAYING this long after starting has
+# failed (the main loop does not block waiting for it).
+REBUILD_PLAYING_TIMEOUT_MS = 4000
 
 # The black background source is tiny; its mixer pad is scaled to the
 # canvas, so resizing the canvas never renegotiates the source.
@@ -401,6 +404,10 @@ class VideoCompositor:
         # the last one succeeded (time.monotonic()).
         self._rebuild_attempt = 0
         self._rebuilt_at = None
+        # A rebuilt pipeline is starting; restored is emitted once the
+        # bus reports it PLAYING (see _rebuild).
+        self._restoring = False
+        self._restore_timer = None
 
         self.available = self._try_build()
         if not self.available:
@@ -496,6 +503,7 @@ class VideoCompositor:
             # the lock after this sees no pipeline to attach to (see
             # register), so nothing is recorded on the dying one.
             self.available = False
+            self._restoring = False
             pipeline = self.pipeline
             self.pipeline = None
             self._registrations.clear()
@@ -611,6 +619,15 @@ class VideoCompositor:
         with self._lock:
             timer.append(self._schedule(ms, fire))
             self._timers.add(timer[0])
+        return timer[0]
+
+    def _cancel_timer(self, timer_id):
+        """Cancel a _schedule_once timer that may already have fired."""
+        with self._lock:
+            pending = timer_id in self._timers
+            self._timers.discard(timer_id)
+        if pending:
+            self._unschedule(timer_id)
 
     def _on_linger_timeout(self, reg):
         """Main loop. With no successor, release now (black on stop).
@@ -764,7 +781,10 @@ class VideoCompositor:
                 logger.exception("VideoCompositor: detach step failed")
         self._invalidate_latency()
 
-    def _build(self):
+    def _build(self, wait=True):
+        """Build and start the projection pipeline. With `wait`
+        (startup) block up to 1 s for PLAYING; without (a rebuild,
+        mid-show on the main loop) return once it is starting."""
         plan = plan_pipeline()
         logger.debug("VideoCompositor: build plan %s", plan)
         if plan is None:
@@ -883,6 +903,10 @@ class VideoCompositor:
             logger.warning("VideoCompositor: set_state(PLAYING) FAILURE")
             self.pipeline.set_state(Gst.State.NULL)
             return False
+        if not wait:
+            # A rebuild (main loop, mid-show): the bus reports PLAYING
+            # or an ERROR, see _on_bus_message / _restore_done.
+            return True
         state_ret, *_ = self.pipeline.get_state(Gst.SECOND)
         if state_ret == Gst.StateChangeReturn.FAILURE:
             logger.warning("VideoCompositor: pipeline did not reach PLAYING")
@@ -899,6 +923,11 @@ class VideoCompositor:
         if message.type == Gst.MessageType.LATENCY:
             # The pipeline recalculates its latency; re-query it.
             self._invalidate_latency()
+        elif message.type == Gst.MessageType.STATE_CHANGED:
+            if self._restoring and message.src == self.pipeline:
+                _old, new, _pending = message.parse_state_changed()
+                if new == Gst.State.PLAYING:
+                    self._restore_done()
         elif message.type == Gst.MessageType.WARNING:
             warning, debug = message.parse_warning()
             logger.warning(
@@ -931,12 +960,12 @@ class VideoCompositor:
             )
             self._fail()
 
-    def _try_build(self):
+    def _try_build(self, **kwargs):
         """_build(), with an exception treated as a failed build (e.g.
         a GLib.Error from parse_bin_from_description): it must degrade
         to audio only, never take the backend down with it."""
         try:
-            return self._build()
+            return self._build(**kwargs)
         except Exception:
             logger.exception("VideoCompositor: projection build failed")
             return False
@@ -951,6 +980,13 @@ class VideoCompositor:
         mixer or sink posts, so not caught as a branch error). The cues
         registered now are quarantined, so the next rebuild comes up
         without them instead of failing on them again."""
+        if self._restoring:
+            # The rebuilt pipeline never reached PLAYING: a failed
+            # rebuild, not a running projection failing (no notice, no
+            # quarantine — nothing is registered on it yet).
+            logger.warning("VideoCompositor: rebuild failed to start")
+            self._rebuild_failed()
+            return
         recent = not self._stable()
         if recent:
             with self._lock:
@@ -1021,15 +1057,40 @@ class VideoCompositor:
         does: never on a projection streaming thread."""
         if self._closed:
             return False
-        if self._try_build():
-            self.available = True
-            self._rebuilt_at = time.monotonic()
-            logger.info("VideoCompositor: projection restored")
-            self.restored.emit()
+        # No blocking wait for PLAYING here: this is the main loop,
+        # mid-show (a GL pipeline can take most of a second). The bus
+        # completes the restore (_restore_done), or an ERROR or the
+        # deadline fails it (_rebuild_failed).
+        if self._try_build(wait=False):
+            self._restoring = True
+            self._restore_timer = self._schedule_once(
+                REBUILD_PLAYING_TIMEOUT_MS, self._restore_timed_out)
         else:
-            self._teardown()  # drop the half-built pipeline
-            self._schedule_rebuild()
+            self._rebuild_failed()
         return False
+
+    def _restore_done(self):
+        """Main loop: the rebuilt pipeline reached PLAYING."""
+        self._restoring = False
+        self._cancel_timer(self._restore_timer)
+        self._restore_timer = None
+        self.available = True
+        self._rebuilt_at = time.monotonic()
+        logger.info("VideoCompositor: projection restored")
+        self.restored.emit()
+
+    def _restore_timed_out(self):
+        if not self._restoring:
+            return
+        logger.warning(
+            "VideoCompositor: rebuilt projection did not reach PLAYING "
+            "within %d ms", REBUILD_PLAYING_TIMEOUT_MS,
+        )
+        self._rebuild_failed()
+
+    def _rebuild_failed(self):
+        self._teardown()  # drop the half-built pipeline (and deadline)
+        self._schedule_rebuild()
 
     def _branch_of(self, element):
         """The registration whose appsrc/upload bin owns `element`."""

@@ -193,8 +193,13 @@ threads meet here:
 * **Recovery also runs on the main loop.** A shared-pipeline ERROR
   (from the bus watch, on the main loop) tears the pipeline down and
   schedules `_rebuild` as a tracked GLib timeout with backoff
-  (`REBUILD_BACKOFF_MS`). A good rebuild emits `restored`; GstBackend
-  then calls `VideoSink.reattach()` for every sink in
+  (`REBUILD_BACKOFF_MS`). `_rebuild` never blocks the main loop
+  waiting for PLAYING (only the startup build does, for up to 1 s):
+  the bus watch completes the restore when the new pipeline reports
+  PLAYING, and an ERROR first, or no PLAYING within
+  `REBUILD_PLAYING_TIMEOUT_MS`, counts as a failed rebuild. A good
+  rebuild emits `restored`; GstBackend then calls
+  `VideoSink.reattach()` for every sink in
   `ActiveVideoSinks` on the main loop. `reattach` re-checks that the
   sink is still active after registering, because its cue can stop
   on a worker thread at the same moment. A failure within
