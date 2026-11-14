@@ -41,6 +41,9 @@ from lisp.plugins.gst_backend.video_exclusive import (
 _CM = "lisp.plugins.gst_backend.gst_backend.GstBackend.video_compositor"
 
 
+# Real UriInputs: keep their duration probe off the Application.
+pytestmark = pytest.mark.usefixtures("bypass_session_paths")
+
 @pytest.fixture(scope="module", autouse=True)
 def load_elements():
     gst_elements.load()
