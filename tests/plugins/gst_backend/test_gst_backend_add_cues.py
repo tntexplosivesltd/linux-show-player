@@ -21,23 +21,11 @@ def load_elements():
     gst_elements.load()
 
 
-@pytest.fixture(autouse=True)
-def _bypass_session_paths():
-    """Stop SessionURI from trying to resolve paths through the
-    Application singleton during URI assignment.
-
-    The production backend passes raw filesystem paths (no scheme)
-    to the factory; SessionURI would normally call
-    Application().session.abs_path(...) to resolve them.
-    """
-    with patch.object(
-        SessionURI, "path_to_absolute",
-        staticmethod(lambda p: p),
-    ), patch.object(
-        SessionURI, "path_to_relative",
-        staticmethod(lambda p: p),
-    ):
-        yield
+# The production backend passes raw filesystem paths, which
+# SessionURI would resolve through the Application singleton (here
+# and in a duration probe on a worker thread, if a /tmp file below
+# happens to exist): module-scoped, drained before it unpatches.
+pytestmark = pytest.mark.usefixtures("bypass_session_paths")
 
 
 def _make_backend():

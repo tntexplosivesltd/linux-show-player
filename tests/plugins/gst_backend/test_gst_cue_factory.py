@@ -14,6 +14,9 @@ from lisp.plugins.gst_backend.gst_media_cue import (
 )
 
 
+# Real Uri*Inputs: keep a duration probe off the Application.
+pytestmark = pytest.mark.usefixtures("bypass_session_paths")
+
 @pytest.fixture(scope="module", autouse=True)
 def load_elements():
     gst_elements.load()
@@ -48,9 +51,11 @@ class TestUriVideoCueFactory:
         cue = factory(mock_app)
         assert cue.icon == "camera"
 
-    def test_sets_uri_when_given(self, mock_app):
+    def test_sets_uri_when_given(self, mock_app, tmp_path):
         factory = UriVideoCueFactory(BASE_VIDEO_PIPE)
-        uri = "file:///tmp/test.mp4"
+        # A file that does not exist: no duration probe is started
+        # (a fixed /tmp path would start one whenever it existed).
+        uri = (tmp_path / "missing.mp4").as_uri()
         cue = factory(mock_app, uri=uri)
         # Query the underlying GStreamer element to avoid the
         # getter's path_to_relative() Application lookup.

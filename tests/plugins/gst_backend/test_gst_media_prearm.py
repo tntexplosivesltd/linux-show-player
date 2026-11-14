@@ -25,6 +25,9 @@ from lisp.plugins.gst_backend import elements as gst_elements
 from lisp.plugins.gst_backend.gst_media import GstMedia
 
 
+# Real UriInputs: keep their duration probe off the Application.
+pytestmark = pytest.mark.usefixtures("bypass_session_paths")
+
 @pytest.fixture(scope="module", autouse=True)
 def load_elements():
     """Load GStreamer element classes into the registry."""
