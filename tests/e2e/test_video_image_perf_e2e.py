@@ -188,16 +188,24 @@ def measure(t, path):
     return result
 
 
-def judge(t, r, control):
+def judge(t, r, control, is_control=False):
+    """Check measurement `r`. The control (is_control) is checked only
+    for playing at all; a huge still against `control`, or for its caps
+    alone when there is no baseline (control None)."""
     name, size, canvas = r["name"], r["size"], r["canvas"]
     # The cause, deterministically: what the cue pushes fits the canvas.
     t.check(f"{name}: pushed frames {size} fit the canvas {canvas}",
             size is not None
             and size[0] <= canvas[0] and size[1] <= canvas[1])
-    if control is None:
+    if is_control:
         # The baseline itself: only meaningful if it actually played.
         t.check(f"{name}: control plays ({r['fps']:.1f} fps > 0)",
                 r["fps"] > 0)
+        return
+    if control is None:
+        # Already failed once, as the control's own check.
+        print(f"  NOTE: {name}: no baseline (the control did not play): "
+              "timing checks skipped")
         return
     most_s = control["first"] + FIRST_FRAME_ALLOWANCE_S
     t.check(f"{name}: first frame in {r['first']:.2f}s (<= {most_s:.2f}s:"
@@ -214,7 +222,7 @@ def judge(t, r, control):
 
 def run_tests(t):
     if not os.environ.get("DISPLAY"):
-        print("  SKIP: need an X display")
+        t.skip("need an X display")
         return
     t.check("gst-launch-1.0 available (generates the stills)",
             bool(shutil.which("gst-launch-1.0")))
@@ -228,7 +236,7 @@ def run_tests(t):
 
         control = measure(t, synth(CONTROL))
         if control is not None:
-            judge(t, control, None)
+            judge(t, control, None, is_control=True)
             if control["fps"] <= 0:
                 control = None  # no baseline: judge only the caps
         files = [f for f in
