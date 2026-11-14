@@ -113,13 +113,20 @@ def geometry(handle):
 
 def record_rgb(handle, seconds):
     """60fps whole-window average RGB per frame via XGetImage."""
-    raw = subprocess.run(
+    # The display LiSP runs on: xvfb-run -a picks a free one (often :99),
+    # so a hard-coded :0 captured nothing.
+    result = subprocess.run(
         ["ffmpeg", "-y", "-f", "x11grab", "-framerate", str(FPS),
-         "-window_id", str(handle), "-i", ":0.0", "-t", str(seconds),
+         "-window_id", str(handle), "-i", os.environ["DISPLAY"],
+         "-t", str(seconds),
          "-vf", "scale=1:1", "-f", "rawvideo", "-pix_fmt", "rgb24",
          "pipe:1"],
         capture_output=True,
-    ).stdout
+    )
+    raw = result.stdout
+    if not raw:
+        print("  ffmpeg captured nothing:\n"
+              + result.stderr.decode(errors="replace")[-800:])
     return [(raw[i], raw[i + 1], raw[i + 2])
             for i in range(0, len(raw) - 2, 3)]
 

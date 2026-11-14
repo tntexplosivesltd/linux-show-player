@@ -154,6 +154,10 @@ jobs:
       # The unit-test deps PLUS the headless media stack: Xvfb + Mesa
       # software GL, PulseAudio, extra GStreamer plugins (x264enc via
       # -ugly, gst-launch-1.0 via -tools), and the Qt xcb runtime libs.
+      # ffmpeg / x11-utils (xwininfo) / imagemagick let the E2Es that
+      # judge the projection from screen pixels run; without them they
+      # skip (exit 77). test_video_image_fit_e2e still skips: it needs
+      # a window manager.
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -192,7 +196,10 @@ jobs:
             gstreamer1.0-plugins-bad \
             gstreamer1.0-plugins-ugly \
             gstreamer1.0-libav \
-            gstreamer1.0-tools
+            gstreamer1.0-tools \
+            ffmpeg \
+            x11-utils \
+            imagemagick
 
       - name: Install Poetry
         run: pipx install poetry

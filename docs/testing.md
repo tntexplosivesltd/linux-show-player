@@ -177,13 +177,13 @@ The job is skipped for pull requests that only touch documentation
 PR still reports the required check green (a skipped job counts as success)
 without spending ~30 minutes on the serial suite.
 
-One test is a deliberate no-op in CI: `test_video_transition_flicker_e2e.py`
-self-skips (exit 77, reported under `SKIPPED:` by `run_all.py`) unless `ffmpeg`, `xwininfo`, and
-`gst-launch-1.0` are all present. It works by screen-capturing frames from a
-GL-composited video projection window, which headless Xvfb + llvmpipe cannot
-produce — the tools are intentionally *not* installed in the `e2e` job, so it
-skips rather than failing the gate. Run it locally on a real display to
-exercise the flicker regression it characterises.
+Six E2Es judge the video projection from screen pixels. They need
+`ffmpeg`, `xwininfo` (`x11-utils`) or ImageMagick, which the `e2e` job
+installs, and they run under Xvfb + llvmpipe like the rest:
+A/V sync, compositor parity, paused seek, transition flicker and wedge.
+`test_video_image_fit_e2e.py` still skips there (exit 77, reported
+under `SKIPPED:` by `run_all.py`): it needs a window manager that acts
+on `_NET_WM_STATE` fullscreen. Run it on a desktop session to exercise it.
 
 ### The harness, conceptually
 
