@@ -22,10 +22,11 @@ _APP_OFF_THREAD = []
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _guard_application_threads():
+def _guard_application_threads(qapp_session):
     """Refuse to construct the Application singleton off the main thread,
     for the whole session (a worker started by one test can run after
-    it ends).
+    it ends). Takes qapp_session: importing lisp.application needs the
+    QApplication.
 
     Application() builds the whole MainWindow. Called first from a
     worker thread (e.g. a UriInput duration probe resolving a
@@ -34,6 +35,13 @@ def _guard_application_threads():
     SIGILL, intermittent). Main-thread construction is let through:
     some UI tests rely on it (against the mock_app rule), and it does
     not corrupt Qt.
+
+    Limit: only the FIRST construction runs __init__. Once a
+    main-thread test has built the singleton, Application() returns it
+    from any thread and this guard is silent, so a missing SessionURI
+    bypass is caught only in tests that run before that (test order
+    matters). Off-thread reuse is not flagged on purpose: LiSP's own
+    duration probe reuses the Application from a worker thread.
     """
     from lisp.application import Application
 
