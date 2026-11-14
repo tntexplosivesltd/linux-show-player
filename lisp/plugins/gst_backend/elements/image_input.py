@@ -82,15 +82,18 @@ def prescale_size(src_w, src_h, par_n, par_d, canvas_w, canvas_h):
     return max(2, width & ~1), max(2, height & ~1)
 
 
-def _canvas_size():
-    """The projection canvas, or FALLBACK_CANVAS when there is none.
-
-    Imported inside the call (not at module top) to avoid the
-    gst_backend <-> elements import cycle (see video_sink._compositor).
-    """
+def _compositor():
+    """The VideoCompositor, or None. Imported inside the call (not at
+    module top) to avoid the gst_backend <-> elements import cycle (see
+    video_sink._compositor). Not for the streaming thread: ImageInput
+    caches it at construction (docs/threading.md)."""
     from lisp.plugins.gst_backend.gst_backend import GstBackend
 
-    compositor = GstBackend.video_compositor()
+    return GstBackend.video_compositor()
+
+
+def _canvas_size(compositor):
+    """`compositor`'s canvas, or FALLBACK_CANVAS when there is none."""
     if compositor is None:
         return FALLBACK_CANVAS
     return compositor.canvas_size()
@@ -135,6 +138,11 @@ class ImageInput(GstSrcElement):
 
     def __init__(self, pipeline):
         super().__init__(pipeline)
+        # Resolved here, not on the streaming thread that prescales
+        # (pad-added), and not in play(): a pre-arm preroll links the
+        # decoded pad before play() is called. GstBackend creates the
+        # compositor once, before any cue exists.
+        self._compositor = _compositor()
 
         self.decoder = Gst.ElementFactory.make("uridecodebin", None)
         # Pass-through unless the decoder's format is one videoscale
@@ -295,7 +303,9 @@ class ImageInput(GstSrcElement):
             par_n, par_d = 1, 1
         size = None
         if ok_w and ok_h:
-            size = prescale_size(width, height, par_n, par_d, *_canvas_size())
+            size = prescale_size(
+                width, height, par_n, par_d, *_canvas_size(self._compositor)
+            )
         if size is None:
             self.scale_filter.set_property("caps", Gst.Caps.new_any())
             return

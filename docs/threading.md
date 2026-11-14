@@ -173,6 +173,11 @@ threads meet here:
   concurrently (stop on a worker thread, `shutdown()` on the main
   thread). `play()` caches the compositor so the streaming thread never
   does the lazy `GstBackend` import.
+* **`ImageInput` prescales on uridecodebin's streaming thread**
+  (`pad-added`), reading only the canvas size of the compositor it
+  cached at construction. It can't wait for `play()` to cache it, as
+  `VideoSink` does: a pre-arm preroll links the decoded pad before
+  `play()` runs.
 * **Register/unregister** run wherever `GstMedia.play()`/`stop()` run:
   cue worker threads, the main thread, or the cue's bus watch (EOS and
   ERROR). `VideoSink` drops its `_registration` handle *before*

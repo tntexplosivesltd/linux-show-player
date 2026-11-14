@@ -139,7 +139,7 @@ class TestImageInputPadAdded:
         assert element._linked is True
 
     def test_large_image_scaled_to_canvas(self, monkeypatch):
-        monkeypatch.setattr(image_input, "_canvas_size", lambda: (1920, 1080))
+        monkeypatch.setattr(image_input, "_canvas_size", lambda _comp: (1920, 1080))
         element = self._make_element()
         pad = self._make_pad("video/x-raw", "8000x5333")
         pad.link.return_value = Gst.PadLinkReturn.OK
@@ -152,7 +152,7 @@ class TestImageInputPadAdded:
         assert s.get_fraction("pixel-aspect-ratio") == (True, 1, 1)
 
     def test_small_image_not_scaled(self, monkeypatch):
-        monkeypatch.setattr(image_input, "_canvas_size", lambda: (1920, 1080))
+        monkeypatch.setattr(image_input, "_canvas_size", lambda _comp: (1920, 1080))
         element = self._make_element()
         pad = self._make_pad("video/x-raw", "736x552")
         pad.link.return_value = Gst.PadLinkReturn.OK
@@ -162,7 +162,7 @@ class TestImageInputPadAdded:
         assert element.scale_filter.get_property("caps").is_any()
 
     def test_missing_size_not_scaled(self, monkeypatch):
-        monkeypatch.setattr(image_input, "_canvas_size", lambda: (1920, 1080))
+        monkeypatch.setattr(image_input, "_canvas_size", lambda _comp: (1920, 1080))
         element = self._make_element()
         pad = MagicMock()
         pad.get_current_caps.return_value = Gst.Caps.from_string(
@@ -178,7 +178,7 @@ class TestImageInputPadAdded:
     def test_explicit_par_is_honoured(self, monkeypatch):
         """Missing PAR means square; a given one is used: 1000x1000 at
         2/1 displays 2000x1000, too wide for the canvas."""
-        monkeypatch.setattr(image_input, "_canvas_size", lambda: (1920, 1080))
+        monkeypatch.setattr(image_input, "_canvas_size", lambda _comp: (1920, 1080))
         element = self._make_element()
         pad = MagicMock()
         pad.get_current_caps.return_value = Gst.Caps.from_string(
@@ -197,7 +197,7 @@ class TestImageInputPadAdded:
         from lisp.plugins.gst_backend.gst_backend import GstBackend
 
         monkeypatch.setattr(GstBackend, "_video_compositor", None)
-        assert image_input._canvas_size() == image_input.FALLBACK_CANVAS
+        assert image_input._canvas_size(None) == image_input.FALLBACK_CANVAS
         element = self._make_element()
         pad = self._make_pad("video/x-raw", "8000x4500")
         pad.link.return_value = Gst.PadLinkReturn.OK
@@ -213,12 +213,37 @@ class TestImageInputPadAdded:
         compositor = MagicMock()
         compositor.canvas_size.return_value = (1280, 720)
         monkeypatch.setattr(GstBackend, "_video_compositor", compositor)
-        assert image_input._canvas_size() == (1280, 720)
+        assert image_input._canvas_size(compositor) == (1280, 720)
+
+    def test_streaming_thread_does_not_look_up_the_compositor(
+            self, monkeypatch):
+        """pad-added runs on uridecodebin's streaming thread: it must
+        only read the compositor cached at construction, never do the
+        lazy GstBackend import (docs/threading.md). Cached at
+        construction, not in play(): a pre-arm preroll links the
+        decoded pad before play() is ever called."""
+        from lisp.plugins.gst_backend.gst_backend import GstBackend
+
+        compositor = MagicMock()
+        compositor.canvas_size.return_value = (1280, 720)
+        monkeypatch.setattr(GstBackend, "_video_compositor", compositor)
+        element = self._make_element()
+
+        def no_lookup():
+            raise AssertionError("compositor looked up on pad-added")
+
+        monkeypatch.setattr(image_input, "_compositor", no_lookup)
+        pad = self._make_pad("video/x-raw", "6000x3375")
+        pad.link.return_value = Gst.PadLinkReturn.OK
+        element._ImageInput__on_pad_added(element.decoder, pad)
+
+        s = element.scale_filter.get_property("caps").get_structure(0)
+        assert (s.get_int("width")[1], s.get_int("height")[1]) == (1280, 720)
 
     def test_prescale_failure_still_links(self, monkeypatch):
         """Slow beats blank: an error sizing the image must not stop
         it from being shown."""
-        def broken():
+        def broken(_comp):
             raise RuntimeError("no canvas")
 
         monkeypatch.setattr(image_input, "_canvas_size", broken)
@@ -235,7 +260,7 @@ class TestImageInputPadAdded:
         """Each play re-decodes (stop() resets _linked): a canvas that
         changed in between (another screen) is picked up."""
         canvas = [(1920, 1080)]
-        monkeypatch.setattr(image_input, "_canvas_size", lambda: canvas[0])
+        monkeypatch.setattr(image_input, "_canvas_size", lambda _comp: canvas[0])
         element = self._make_element()
         pad = self._make_pad("video/x-raw", "6000x3375")
         pad.link.return_value = Gst.PadLinkReturn.OK
@@ -327,7 +352,7 @@ def needs_real_pipeline():
 def _pull_frame(tmp_path, monkeypatch, size, canvas, fmt):
     """Encode a white `size` PNG and pull the first frame the real
     ImageInput chain hands on, as `fmt`. Returns the sample."""
-    monkeypatch.setattr(image_input, "_canvas_size", lambda: canvas)
+    monkeypatch.setattr(image_input, "_canvas_size", lambda _comp: canvas)
     path = tmp_path / "still.png"
     _encode_png(path, *size)
 
