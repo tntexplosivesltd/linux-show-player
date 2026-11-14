@@ -1027,19 +1027,25 @@ def register_all(dispatcher, app, signal_manager):
                 "average_rate": s.get_value("average-rate"),
             }
 
-        def cue_id_of(sink):
+        def sink_owners():
+            # Main thread: the cue model is the main thread's to walk
+            # (a cue added or removed mid-walk would break iteration).
+            owners = {}
             for cue in app.cue_model:
                 media = getattr(cue, "media", None)
-                if media is not None and (
-                    media.element("VideoSink") is sink
-                ):
-                    return cue.id
-            return None
+                sink = (media.element("VideoSink")
+                        if media is not None else None)
+                if sink is not None:
+                    owners[id(sink)] = cue.id
+            return owners
 
+        # One walk per call, keyed by the VideoSink's identity; the
+        # sinks stay alive in `registrations` while they are looked up.
+        owners = invoke_on_main_thread(sink_owners)
         cues = []
         for sink, reg in compositor.registrations():
             cues.append({
-                "cue_id": cue_id_of(sink),
+                "cue_id": owners.get(id(sink)),
                 "frame_seen": reg.frame_seen,
                 "caps": reg.caps.to_string() if reg.caps else None,
                 "appsink": sink_stats(sink.video_appsink),

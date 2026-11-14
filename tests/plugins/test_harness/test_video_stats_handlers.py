@@ -100,6 +100,16 @@ def stats(monkeypatch):
         assert "error" not in resp, resp
         return resp["result"]
 
+    invoked = []
+
+    def fake_invoke(fn, timeout=10.0):
+        # Stands in for the Qt main thread: records that the cue walk
+        # was handed to it rather than run on the RPC thread.
+        invoked.append(fn)
+        return fn()
+
+    monkeypatch.setattr(handlers, "invoke_on_main_thread", fake_invoke)
+    call.invoked = invoked
     set_compositor(None)
     return call, set_compositor, cues
 
@@ -176,3 +186,65 @@ def test_cue_entries_carry_their_cue_id(stats):
     assert entries[0]["appsink"]["rendered"] == 5
     assert entries[1]["appsink"] is None
     assert entries[0]["caps"] is None
+
+
+def _cue_with_sink(cue_id):
+    sink = SimpleNamespace(video_appsink=None)
+    return SimpleNamespace(id=cue_id, media=FakeMedia(sink)), sink
+
+
+def test_cue_model_is_walked_on_the_main_thread_once(stats):
+    """The cue model belongs to the main thread: video.stats hands the
+    walk to it, once per call, not once per registration."""
+    call, set_compositor, cues = stats
+    regs = []
+    for n in range(3):
+        cue, sink = _cue_with_sink(f"cue-{n}")
+        cues.append(cue)
+        regs.append((sink, SimpleNamespace(frame_seen=False, caps=None)))
+    set_compositor(FakeCompositor(registrations=regs))
+    entries = call()["cues"]
+    assert [e["cue_id"] for e in entries] == ["cue-0", "cue-1", "cue-2"]
+    assert len(call.invoked) == 1
+
+
+class _MutatingModel:
+    """A cue model the main thread changes while the RPC thread would
+    walk it: iterating it the way the old handler did (once per
+    registration, off the main thread) changes its size mid-walk."""
+
+    def __init__(self, cues):
+        self._cues = {c.id: c for c in cues}
+        self.on_main_thread = False
+
+    def __iter__(self):
+        for cue in self._cues.values():
+            if not self.on_main_thread:
+                self._cues[f"added-{len(self._cues)}"] = SimpleNamespace(
+                    id="late")
+            yield cue
+
+
+def test_cue_added_during_the_call_does_not_break_it(monkeypatch):
+    cue, sink = _cue_with_sink("cue-a")
+    # A cue without media first, so the walk must go on past a change.
+    model = _MutatingModel([SimpleNamespace(id="plain"), cue])
+    app = SimpleNamespace(cue_model=model)
+    d = Dispatcher()
+    handlers.register_all(d, app, signal_manager=None)
+
+    def on_main_thread(fn, timeout=10.0):
+        model.on_main_thread = True
+        try:
+            return fn()
+        finally:
+            model.on_main_thread = False
+
+    monkeypatch.setattr(handlers, "invoke_on_main_thread", on_main_thread)
+    monkeypatch.setattr(GstBackend, "_video_compositor", FakeCompositor(
+        registrations=[(sink, SimpleNamespace(frame_seen=True, caps=None))],
+    ))
+    resp = d.dispatch({"jsonrpc": "2.0", "id": 1, "method": "video.stats",
+                       "params": {}})
+    assert "error" not in resp, resp
+    assert resp["result"]["cues"][0]["cue_id"] == "cue-a"
