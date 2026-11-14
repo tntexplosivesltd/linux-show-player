@@ -158,6 +158,17 @@ class TestRegistrationBookkeeping:
         assert reg is not None
         assert comp.is_registered(sink) is True
 
+    def test_registrations_is_a_snapshot(self):
+        comp = self._comp()
+        sink = object()
+        with patch.object(comp, "_attach",
+                          return_value=vc.Registration()):
+            reg = comp.register(sink)
+        snapshot = comp.registrations()
+        assert snapshot == [(sink, reg)]
+        snapshot.clear()
+        assert comp.registrations() == [(sink, reg)]
+
     def test_register_returns_none_when_unavailable(self):
         comp = self._comp()
         comp.available = False
@@ -363,6 +374,22 @@ class TestShutdown:
             comp.register(sink)
         comp.shutdown()
         assert comp.is_registered(sink) is False
+
+    def test_projection_sink_cleared_by_shutdown(self):
+        """video.stats reads it from the harness thread: after a
+        teardown it must not hand out the dead pipeline's sink."""
+        comp = self._comp()
+        comp._proj_sink = sink = MagicMock()
+        assert comp.projection_sink() is sink
+        comp.shutdown()
+        assert comp.projection_sink() is None
+        assert comp._proj_sink is None
+
+    def test_projection_sink_none_while_pipeline_gone(self):
+        comp = self._comp()
+        comp._proj_sink = MagicMock()
+        comp.pipeline = None  # mid-teardown, sink not yet cleared
+        assert comp.projection_sink() is None
 
     def test_shutdown_is_idempotent(self):
         comp = self._comp()

@@ -16,6 +16,7 @@
 # along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
 import logging
+import os
 import time
 import threading
 
@@ -27,13 +28,95 @@ from lisp.plugins.gst_backend.gi_repository import Gst
 from lisp.plugins.gst_backend.gst_element import GstSrcElement
 from lisp.plugins.gst_backend.gst_properties import GstURIProperty
 
+# Cycle-safe: video_compositor imports only gi_repository.
+from lisp.plugins.gst_backend.video_compositor import fit_rect
+
 logger = logging.getLogger(__name__)
+
+# videoscale method (by nick) for the one-off downscale: a still can be
+# 3-4x the projector, where bilinear aliases fine detail. It runs once
+# per image, so the best filter is affordable: decode+scale+convert of
+# a 6000x3375 PNG measured ~380-440 ms with lanczos or bilinear alike
+# (decoding it alone ~380 ms).
+PRESCALE_METHOD = "lanczos"
+
+# Prescale target when there is no compositor (video disabled, or not
+# built yet). Larger than any canvas we expect, so a still is never
+# shrunk below the real output and then upscaled soft by the mixer;
+# still 4-5x smaller than an 8000x5333 original.
+FALLBACK_CANVAS = (3840, 2160)
+
+# Threads for the one-off scale/convert of a big still. Bounded: every
+# image cue holds its pools for its lifetime, and the scale must not
+# starve the streaming threads of cues already playing.
+SCALE_THREADS = min(4, max(1, (os.cpu_count() or 1) - 1))
+
+
+def _set_threads(element, count):
+    """n-threads where supported (videoscale/videoconvert gained it in
+    GStreamer 1.20); older versions just run single-threaded."""
+    if element.find_property("n-threads") is not None:
+        element.set_property("n-threads", count)
+
+
+def prescale_size(src_w, src_h, par_n, par_d, canvas_w, canvas_h):
+    """The size a still is scaled to before imagefreeze, or None to
+    leave it as decoded.
+
+    imagefreeze repeats its input every frame, and each repeat is
+    copied into the projection and uploaded to the GPU. A still larger
+    than the canvas is scaled down to fit inside it, square pixels,
+    once, so every repeat is canvas-sized, not e.g. an 81 MB 6000x3375
+    frame (which dropped the whole projection to ~1 fps). Never
+    upscaled: the GPU mixer does that for free. Rounded down to even,
+    which chroma-subsampled formats (I420) need.
+    """
+    if src_w <= 0 or src_h <= 0 or par_n <= 0 or par_d <= 0:
+        return None
+    display_w = src_w * par_n / par_d
+    if display_w <= canvas_w and src_h <= canvas_h:
+        return None
+    _, _, width, height = fit_rect(
+        src_w, src_h, par_n, par_d, canvas_w, canvas_h
+    )
+    return max(2, width & ~1), max(2, height & ~1)
+
+
+def _compositor():
+    """The VideoCompositor, or None. Imported inside the call (not at
+    module top) to avoid the gst_backend <-> elements import cycle (see
+    video_sink._compositor). Not for the streaming thread: ImageInput
+    caches it at construction (docs/threading.md)."""
+    from lisp.plugins.gst_backend.gst_backend import GstBackend
+
+    return GstBackend.video_compositor()
+
+
+def _canvas_size(compositor):
+    """`compositor`'s canvas, or FALLBACK_CANVAS when there is none."""
+    if compositor is None:
+        return FALLBACK_CANVAS
+    return compositor.canvas_size()
 
 
 class ImageInput(GstSrcElement):
     """Still image source using imagefreeze for continuous video.
 
-    Pipeline: uridecodebin -> imagefreeze -> videoconvert -> videoscale
+    Pipeline: uridecodebin -> videoconvert -> videoscale -> capsfilter
+              -> videoconvert -> imagefreeze
+
+    imagefreeze is last: what comes before it runs once per image,
+    what comes after it on every repeated frame. So a still is scaled
+    down to the projection canvas (prescale_size) and converted once,
+    before it is frozen. The first videoconvert is normally
+    pass-through; it makes sure the scaler can always negotiate with
+    whatever the decoder emits.
+
+    The prescale target is the canvas when the image is decoded (each
+    play re-decodes). A canvas change while it is on screen (output
+    moved to another screen) is not re-applied until the next play:
+    the mixer still fits the frame, only a smaller-than-canvas frame
+    is upscaled by the GPU until then.
 
     imagefreeze converts a single decoded frame into a continuous video
     stream, allowing still images to flow through the same video
@@ -55,13 +138,36 @@ class ImageInput(GstSrcElement):
 
     def __init__(self, pipeline):
         super().__init__(pipeline)
+        # Resolved here, not on the streaming thread that prescales
+        # (pad-added), and not in play(): a pre-arm preroll links the
+        # decoded pad before play() is called. GstBackend creates the
+        # compositor once, before any cue exists.
+        self._compositor = _compositor()
 
         self.decoder = Gst.ElementFactory.make("uridecodebin", None)
-        self.freeze = Gst.ElementFactory.make("imagefreeze", None)
-        self.video_convert = Gst.ElementFactory.make(
+        # Pass-through unless the decoder's format is one videoscale
+        # cannot take: then a still is converted (slow) not blank.
+        self.decode_convert = Gst.ElementFactory.make(
             "videoconvert", None
         )
         self.video_scale = Gst.ElementFactory.make("videoscale", None)
+        Gst.util_set_object_arg(
+            self.video_scale, "method", PRESCALE_METHOD
+        )
+        # prescale_size rounds, so the target's aspect can differ from
+        # the source's by a fraction of a pixel: stretch, never pad it
+        # with a black edge (the default).
+        self.video_scale.set_property("add-borders", False)
+        # Set per image in __on_pad_added (prescale_size).
+        self.scale_filter = Gst.ElementFactory.make("capsfilter", None)
+        self.video_convert = Gst.ElementFactory.make(
+            "videoconvert", None
+        )
+        self.freeze = Gst.ElementFactory.make("imagefreeze", None)
+        for element in (
+            self.decode_convert, self.video_scale, self.video_convert
+        ):
+            _set_threads(element, SCALE_THREADS)
 
         self._pad_handler = self.decoder.connect(
             "pad-added", self.__on_pad_added
@@ -69,12 +175,16 @@ class ImageInput(GstSrcElement):
         self._linked = False
 
         self.pipeline.add(self.decoder)
-        self.pipeline.add(self.freeze)
-        self.pipeline.add(self.video_convert)
+        self.pipeline.add(self.decode_convert)
         self.pipeline.add(self.video_scale)
+        self.pipeline.add(self.scale_filter)
+        self.pipeline.add(self.video_convert)
+        self.pipeline.add(self.freeze)
 
-        self.freeze.link(self.video_convert)
-        self.video_convert.link(self.video_scale)
+        self.decode_convert.link(self.video_scale)
+        self.video_scale.link(self.scale_filter)
+        self.scale_filter.link(self.video_convert)
+        self.video_convert.link(self.freeze)
 
         # Default display duration: 5 seconds.
         self.duration = 5000
@@ -97,7 +207,7 @@ class ImageInput(GstSrcElement):
 
     def video_src(self):
         """Video source -- feeds the video branch via post_link."""
-        return self.video_scale
+        return self.freeze
 
     def play(self):
         """Start EOS timer. Called by GstMedia before pipeline plays."""
@@ -165,7 +275,14 @@ class ImageInput(GstSrcElement):
                     "ImageInput: ignoring extra video pad"
                 )
                 return
-            sink_pad = self.freeze.get_static_pad("sink")
+            try:
+                self.__set_prescale(caps)
+            except Exception:
+                # Slow beats blank: show it as decoded. (A format the
+                # scaler cannot take is decode_convert's job.)
+                logger.exception("ImageInput: prescale failed")
+                self.scale_filter.set_property("caps", Gst.Caps.new_any())
+            sink_pad = self.decode_convert.get_static_pad("sink")
             result = pad.link(sink_pad)
             if result == Gst.PadLinkReturn.OK:
                 self._linked = True
@@ -174,3 +291,31 @@ class ImageInput(GstSrcElement):
                     "ImageInput: failed to link video pad: %s",
                     result,
                 )
+
+    def __set_prescale(self, caps):
+        """Streaming thread, before the decoded pad is linked: pin the
+        scale filter to this image's prescale_size() (ANY = as is)."""
+        struct = caps.get_structure(0)
+        ok_w, width = struct.get_int("width")
+        ok_h, height = struct.get_int("height")
+        ok_par, par_n, par_d = struct.get_fraction("pixel-aspect-ratio")
+        if not ok_par:
+            par_n, par_d = 1, 1
+        size = None
+        if ok_w and ok_h:
+            size = prescale_size(
+                width, height, par_n, par_d, *_canvas_size(self._compositor)
+            )
+        if size is None:
+            self.scale_filter.set_property("caps", Gst.Caps.new_any())
+            return
+        logger.debug(
+            "ImageInput: prescaling %dx%d to %dx%d", width, height, *size
+        )
+        self.scale_filter.set_property(
+            "caps",
+            Gst.Caps.from_string(
+                f"video/x-raw,width={size[0]},height={size[1]},"
+                "pixel-aspect-ratio=1/1"
+            ),
+        )

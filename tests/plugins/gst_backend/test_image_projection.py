@@ -85,6 +85,7 @@ class _Projection:
         comp = MagicMock()
         comp.pipeline = self.pipeline
         comp.clock.return_value = self.clock
+        comp.canvas_size.return_value = (vc.COMP_WIDTH, vc.COMP_HEIGHT)
         comp.latency.side_effect = lambda: vc.query_min_latency(
             self.pipeline)
         comp.register.side_effect = self._register
