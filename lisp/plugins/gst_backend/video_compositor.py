@@ -244,6 +244,13 @@ class Registration:
         self.cue_latency = 0  # L_cue, see VideoSink's refresh policy
         self.latency_buffers = 0  # buffers since registration
         self.push_warned = False  # a failed push was logged
+        # Pump timing (read by the harness's video.stats): timed frames
+        # mapped, how many reached the projection after their output
+        # slot (now > pts + L_proj), and the cue running time (ns) of
+        # the last such frame — None while every frame was on time.
+        self.timed_frames = 0
+        self.late_frames = 0
+        self.last_late_rt = None
 
 
 def _have_factory(name):

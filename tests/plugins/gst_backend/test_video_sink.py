@@ -406,6 +406,41 @@ class TestVideoSinkPump:
         reg.appsrc.push_buffer.assert_not_called()
         assert "pump failed" not in caplog.text
 
+    def test_on_time_frame_is_counted_not_late(self):
+        # pts 3414ms + L_proj 86ms = its slot at 3500ms; now is 3400ms.
+        sink, comp, reg, buf, _, appsink = self._setup()
+        self._run(sink, appsink, n=2)
+        assert reg.timed_frames == 2
+        assert reg.late_frames == 0
+        assert reg.last_late_rt is None
+
+    def test_frame_past_its_slot_is_counted_late(self):
+        # now 3600ms > slot 3500ms: the mixer has already composited
+        # that output frame, so this one is shown late (or not at all).
+        sink, comp, reg, buf, _, appsink = self._setup()
+        comp.clock.return_value.get_time.return_value = (
+            13600 * Gst.MSECOND)
+        self._run(sink, appsink)
+        assert reg.timed_frames == 1
+        assert reg.late_frames == 1
+        assert reg.last_late_rt == 2000 * Gst.MSECOND
+
+    def test_frame_due_before_projection_start_is_counted_late(self):
+        sink, comp, reg, buf, sample, appsink = self._setup()
+        comp.pipeline.get_base_time.return_value = 11500 * Gst.MSECOND
+        comp.clock.return_value.get_time.return_value = (
+            11510 * Gst.MSECOND)
+        sample.get_segment.return_value.to_running_time.return_value = 0
+        self._run(sink, appsink)  # pts < 0: dropped
+        assert (reg.timed_frames, reg.late_frames) == (1, 1)
+        assert reg.last_late_rt == 0
+
+    def test_preroll_frame_is_not_timed(self):
+        sink, comp, reg, buf, _, appsink = self._setup()
+        sink._starting = False  # a seek re-preroll: pushed "now"
+        self._run(sink, appsink, preroll=True)
+        assert (reg.timed_frames, reg.late_frames) == (0, 0)
+
     def test_cue_latency_change_during_warmup_applies_next_buffer(self):
         # A cue latency that settles after the first buffer must be
         # picked up straight away, not ~1s later.
