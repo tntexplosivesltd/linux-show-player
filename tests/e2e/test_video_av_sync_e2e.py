@@ -17,6 +17,16 @@ pulse input — dropped video frames and bunched audio timestamps.)
 Each flash onset is paired with the nearest beep onset and
 |flash − beep| must be within TOL_MS.
 
+Beeps are timed on the SAMPLE CLOCK, not on the pulse demuxer's
+per-packet stamps. Those stamps are wall clock minus a latency
+estimate that wanders by ~35 ms as the stream goes idle → playing →
+idle, which made the first pair read 20-75 ms late although the audio
+was on time (2026-11-15: beeps are exactly 48000 samples apart while
+their stamps were 1015-1018 ms apart). The null sink plays a sample
+per 1/48000 s off a timer, so sample index / rate is real time; one
+offset, the median stamp error over the beep window, maps it onto
+the shared wall clock.
+
 The same analysis is first run on the source clip itself, which must
 show ~0 skew — this validates the measurement before it judges LiSP.
 
@@ -32,9 +42,11 @@ SKIPs cleanly without X / ffmpeg / ffprobe / xwininfo.
 Run: poetry run python tests/e2e/test_video_av_sync_e2e.py
 """
 
+import array
 import atexit
 import os
 import shutil
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -51,14 +63,14 @@ MEDIA_DIR = media_cache_dir("avsync")
 CAPTURE_VIDEO = CAPTURE_AUDIO = None
 FLASH_TIMES_S = (1, 2, 3, 4, 5)
 CLIP_SECONDS = 6
-# The pulse demuxer stamps packets as wall clock minus a latency
-# estimate that is wrong for its first ~1-2s (measured: beep intervals
-# 1418/954/1000/1000ms for a 1000ms source). Start both captures this
-# long before the cue so every beep lands after the stamps settle.
+# Start both captures this long before the cue, so each is running
+# (and the pulse demuxer past its wildest first ~1-2s of stamps) when
+# the first flash/beep plays.
 CAPTURE_WARMUP_S = 3.0
 CAPTURE_SECONDS = int(CAPTURE_WARMUP_S) + CLIP_SECONDS + 2
 TOL_MS = 66        # ~2 frames at 30fps; Phase-1 spike measured <=25ms
-BEEP_DB = -20.0    # astats peak above this = beep (silence is -inf)
+AUDIO_RATE = 48000
+BEEP_LEVEL = 3277  # |s16 sample| above this (-20 dBFS) = beep
 MIN_PAIRS = 3
 NULL_SINK = "lisp_test_avsync"
 
@@ -146,11 +158,59 @@ def flash_onsets(path):
     return _rising_edges(rows, (median + peak) / 2)
 
 
+def _audio_frames(path):
+    """(pts_s, nb_samples) per decoded audio frame, in order."""
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "a:0",
+         "-show_entries", "frame=pts_time,nb_samples", "-of", "csv=p=0",
+         path],
+        capture_output=True, text=True, timeout=120,
+    ).stdout
+    frames = []
+    for line in out.splitlines():
+        parts = line.split(",")
+        try:
+            frames.append((float(parts[0]), int(parts[1])))
+        except (ValueError, IndexError):
+            continue
+    return frames
+
+
+def _beep_sample_indices(path):
+    """Sample index of each beep's first loud sample (mono, AUDIO_RATE)."""
+    raw = subprocess.run(
+        ["ffmpeg", "-v", "error", "-i", path, "-ac", "1",
+         "-ar", str(AUDIO_RATE), "-f", "s16le", "pipe:1"],
+        capture_output=True, timeout=120,
+    ).stdout
+    samples = array.array("h")
+    samples.frombytes(raw[:len(raw) - len(raw) % 2])
+    onsets, last = [], None
+    for i, s in enumerate(samples):
+        if s > BEEP_LEVEL or s < -BEEP_LEVEL:
+            if last is None or i - last >= AUDIO_RATE // 2:
+                onsets.append(i)
+            last = i
+    return onsets
+
+
 def beep_onsets(path):
-    rows = _probe(
-        f"amovie={path},asetnsamples=n=48,astats=metadata=1:reset=1",
-        "lavfi.astats.Overall.Peak_level")
-    return _rising_edges(rows, BEEP_DB)
+    """Beep onsets in the capture's wall-clock time base, timed on the
+    sample clock (see the module docstring for why not the stamps)."""
+    indices = _beep_sample_indices(path)
+    frames = _audio_frames(path)
+    if not indices or not frames:
+        return []
+    # Stamp error of each frame: its pts minus its sample-clock time.
+    errors, start = [], 0
+    for pts, n in frames:
+        errors.append((start / AUDIO_RATE, pts - start / AUDIO_RATE))
+        start += n
+    first, last = indices[0] / AUDIO_RATE, indices[-1] / AUDIO_RATE
+    window = [e for t, e in errors if first <= t <= last] or \
+        [e for _t, e in errors]
+    offset = statistics.median(window)
+    return [offset + i / AUDIO_RATE for i in indices]
 
 
 def pair_skews_ms(flashes, beeps):
@@ -264,6 +324,13 @@ def run_tests(t):
     beeps = beep_onsets(CAPTURE_AUDIO)
     skews = pair_skews_ms(flashes, beeps)
     print(f"  captured beeps: {len(beeps)}")
+    # The intervals show WHICH side moved when a skew is off: a flash
+    # gap off 1000 means a late/early frame, a beep gap (sample clock)
+    # off 1000 means the audio really drifted (underrun or drop).
+    print(f"  flash intervals ms: "
+          f"{[round((b - a) * 1000) for a, b in zip(flashes, flashes[1:])]}")
+    print(f"  beep intervals ms: "
+          f"{[round((b - a) * 1000) for a, b in zip(beeps, beeps[1:])]}")
     print(f"  A/V skew ms (video − audio): {[round(s, 1) for s in skews]}")
     t.check("flash/beep pairs found", len(skews) >= MIN_PAIRS)
     t.check(f"A/V sync within {TOL_MS} ms",
