@@ -113,7 +113,7 @@ def is_bright_half(grey, bright):
 
 def run_tests(t):
     if not have_tools():
-        print("  SKIP: need X display + ffmpeg")
+        t.skip("need X display + ffmpeg")
         return
     make_clip()
     call("cue.add_video_from_uri", {"uri": CLIP})

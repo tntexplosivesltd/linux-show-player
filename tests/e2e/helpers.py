@@ -66,6 +66,11 @@ except ImportError:
         make_media, media_cache_dir, media_path,
     )
 
+try:
+    from tests.e2e.tracker import EXIT_SKIP, TestTracker  # noqa: F401
+except ImportError:
+    from tracker import EXIT_SKIP, TestTracker  # noqa: F401
+
 
 # ── Internal state ─────────────────────────────────────────────
 
@@ -402,34 +407,6 @@ def stop_all():
 
 # ── Test tracking ──────────────────────────────────────────────
 
-class TestTracker:
-    """Tracks pass/fail counts and error names."""
-
-    def __init__(self):
-        self.passed = 0
-        self.failed = 0
-        self.errors = []
-
-    def check(self, name, condition):
-        """Assert with pass/fail tracking and printing."""
-        if condition:
-            self.passed += 1
-            print(f"  PASS: {name}")
-        else:
-            self.failed += 1
-            self.errors.append(name)
-            print(f"  FAIL: {name}")
-
-    def summary(self):
-        """Print final summary and return exit code."""
-        print(f"\n{'=' * 40}")
-        print(f"  {self.passed} passed, {self.failed} failed")
-        if self.errors:
-            print(f"  Failures: {', '.join(self.errors)}")
-        print(f"{'=' * 40}")
-        return 1 if self.failed else 0
-
-
 # ── Audio generation ───────────────────────────────────────────
 
 def make_tone(filename, freq, duration_s, sample_rate=44100):
@@ -550,7 +527,8 @@ def run_suite(
 
     Parses --host/--port/--no-launch, generates test audio, starts
     (or attaches to) LiSP, calls test_fn(tracker), prints summary,
-    and exits with code 0 (all passed) or 1 (any failures).
+    and exits with code 0 (all passed), 1 (any failures) or
+    EXIT_SKIP (``t.skip()`` was called and nothing failed).
 
     ``log_level`` / ``log_file`` are forwarded to ``start_lisp``
     for tests that need to assert on log content.

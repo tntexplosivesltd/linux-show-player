@@ -208,7 +208,7 @@ def start_capture(handle, monitor):
 
 def run_tests(t):
     if not have_tools():
-        print("  SKIP: need X + ffmpeg + ffprobe + xwininfo")
+        t.skip("need X + ffmpeg + ffprobe + xwininfo")
         return
     make_clip()
 

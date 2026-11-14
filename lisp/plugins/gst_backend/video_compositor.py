@@ -20,17 +20,36 @@ import threading
 import time
 
 from lisp.core.signal import Signal
-from lisp.plugins.gst_backend.gi_repository import GLib, GstApp, Gst
+from lisp.plugins.gst_backend.gi_repository import (
+    GLib,
+    GstApp,
+    Gst,
+    GstVideo,
+)
 
 logger = logging.getLogger(__name__)
 
-# Default canvas, used until the output window's render area is known.
-# The live canvas follows that area — see canvas_size_for() /
+# Default canvas, used until the output screen is known. The live
+# canvas is that screen's resolution — see canvas_size_for() /
 # set_canvas_size().
 COMP_WIDTH = 1920
 COMP_HEIGHT = 1080
 COMP_FPS = 30
 MIN_CANVAS = 64
+# Longest canvas side. Stays within GL_MAX_TEXTURE_SIZE on current
+# desktop drivers (most report 16384 or more). Covers 8K
+# and edge-blended spans (triple / quad 1080p, dual 4K) 1:1, so a
+# blend is never upscaled and softened. Anything larger is composited
+# at this size and scaled up by the sink.
+MAX_CANVAS = 8192
+
+# After a canvas re-pin, the sinks are asked to redraw at these delays
+# (ms). A re-pin happens on a screen change, which also resizes the
+# sink's window; glimagesink letterboxes on each and can keep a stale
+# size if they land out of order. The later expose recomputes the
+# letterbox from the settled sizes. 250 ms covers the usual 200-300 ms
+# gap; 1000 ms catches a slow WM.
+CANVAS_EXPOSE_MS = (250, 1000)
 
 # Handoff linger. A stopped/ended cue's mixer pad is kept (the mixer
 # repeats its last frame) instead of being released at once, so a
@@ -150,22 +169,28 @@ def projection_pts(running_time, cue_base, proj_base, latency_offset):
 
 
 def canvas_size_for(width, height, dpr):
-    """Canvas size for an output render area, in physical pixels.
+    """Canvas size for the output screen, in physical pixels.
 
-    The canvas follows the projection window's render widget, so the
-    canvas→window scale is 1:1 and a cue's fit-to-canvas is its
-    fit-to-window: fullscreen on a projector that is the screen; in a
-    windowed (single-screen) setup it is the window, not the screen
-    (a screen-sized canvas letterboxed a 4:3 clip twice there).
+    The canvas is the projection window's SCREEN, not the window: it
+    must not change on a window resize, where the caps renegotiation
+    raced glimagesink's own resize handling and left the picture
+    letterboxed by a stale size (squeezed, or magnified and cropped).
+    Fullscreen on a projector the canvas→window scale is 1:1; windowed,
+    glimagesink letterboxes the canvas into the window (so a clip of
+    another aspect is boxed twice there — a preview, not the show).
     Rounded down to even dimensions for chroma-subsampled formats.
-    Below MIN_CANVAS (e.g. a never-shown widget reporting 100x30) the
-    default canvas is used until the real size arrives.
+    Below MIN_CANVAS the default canvas is used; above MAX_CANVAS it
+    is scaled down to fit, keeping the aspect ratio.
     """
-    width = int(width * dpr) & ~1
-    height = int(height * dpr) & ~1
+    width = int(round(width * dpr))
+    height = int(round(height * dpr))
     if width < MIN_CANVAS or height < MIN_CANVAS:
         return COMP_WIDTH, COMP_HEIGHT
-    return width, height
+    longest = max(width, height)
+    if longest > MAX_CANVAS:
+        width = width * MAX_CANVAS // longest
+        height = height * MAX_CANVAS // longest
+    return width & ~1, height & ~1
 
 
 def _canvas_caps(width, height, gl):
@@ -305,6 +330,32 @@ def plan_pipeline():
     return {"gl": False, "upload": None, "mixer": "compositor", "sink": sink}
 
 
+# Sinks that letterbox any canvas into their window themselves. Another
+# sink (the autovideosink fallback: ximagesink when there is no GL and
+# no Xv) draws the canvas 1:1, so its canvas must be the window's size.
+SCALING_SINKS = ("glimagesink", "xvimagesink")
+
+
+def _overlay_of(sink):
+    """The element that draws for `sink`: the GstVideoOverlay inside a
+    bin (glimagesink is a GstGLImageSinkBin, autovideosink wraps its
+    pick), else `sink` itself if it is one; None when nothing draws.
+    Exposing the inner element does not rely on a bin forwarding."""
+    if isinstance(sink, Gst.Bin):
+        inner = sink.get_by_interface(GstVideo.VideoOverlay.__gtype__)
+        if inner is not None:
+            return inner
+    if isinstance(sink, GstVideo.VideoOverlay):
+        return sink
+    return None
+
+
+def sink_scales(plan):
+    """Whether `plan`'s sink scales the canvas to its window. True with
+    no plan (an unavailable compositor draws nothing)."""
+    return plan is None or plan["sink"] in SCALING_SINKS
+
+
 class VideoCompositor:
     """Owns the single persistent projection pipeline.
 
@@ -427,6 +478,12 @@ class VideoCompositor:
     def canvas_size(self):
         return self._canvas
 
+    def sink_scales(self):
+        """Whether the projection sink letterboxes the canvas into its
+        window (see SCALING_SINKS). When not, the canvas must follow the
+        window's render area (GstBackend sets that up)."""
+        return sink_scales(self._plan)
+
     def latency(self):
         """The projection pipeline's min latency (ns), shared by every
         cue's pump. Cached so the pumps do not each walk the GL
@@ -480,6 +537,24 @@ class VideoCompositor:
         for reg in visible:
             if reg.caps is not None:
                 self._apply_fit(reg)
+        for ms in CANVAS_EXPOSE_MS:
+            self._schedule_once(ms, self._expose_sinks)
+
+    def _expose_sinks(self):
+        """Main loop. Ask the sinks to redraw, so each re-fits the
+        canvas to its window's current size (see CANVAS_EXPOSE_MS)."""
+        if not self.available or self.pipeline is None:
+            return
+        for sink in (self._proj_sink, self._mon_sink):
+            overlay = _overlay_of(sink)
+            if overlay is None:
+                logger.debug(
+                    "VideoCompositor: no GstVideoOverlay in %s to expose",
+                    sink.get_name() if isinstance(sink, Gst.Element)
+                    else sink,
+                )
+                continue
+            overlay.expose()
 
     def shutdown(self):
         """Stop the projection pipeline for good. Idempotent.

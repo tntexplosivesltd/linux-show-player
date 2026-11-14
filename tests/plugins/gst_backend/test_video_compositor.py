@@ -3,6 +3,8 @@
 import time
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from lisp.plugins.gst_backend import video_compositor as vc
 
 
@@ -55,6 +57,22 @@ class TestPlanPipeline:
         with patch.object(vc, "_have_factory", side_effect=fake):
             plan = vc.plan_pipeline()
         assert plan["sink"] == "autovideosink"
+
+    def test_scaling_sinks_scale(self):
+        # glimagesink and xvimagesink letterbox any canvas into their
+        # window, so the canvas can stay the screen's size.
+        for sink in ("glimagesink", "xvimagesink"):
+            assert vc.sink_scales({"sink": sink}) is True
+
+    def test_autovideosink_fallback_does_not_scale(self):
+        # Reached only with no GL and no Xv: autovideosink is then
+        # ximagesink, which draws the canvas 1:1 (a screen-sized canvas
+        # in a smaller window shows only its middle).
+        assert vc.sink_scales({"sink": "autovideosink"}) is False
+
+    def test_no_plan_counts_as_scaling(self):
+        # Unavailable compositor: nothing is drawn, keep the default.
+        assert vc.sink_scales(None) is True
 
     def test_no_plan_below_minimum_gstreamer(self):
         # appsrc's max-buffers/max-time/leaky-type (the per-cue queue
@@ -427,6 +445,48 @@ class TestCanvasSizeFor:
         assert vc.canvas_size_for(0, 0, 1.0) == (
             vc.COMP_WIDTH, vc.COMP_HEIGHT)
 
+    def test_fractional_dpr_matches_the_physical_mode(self):
+        # 2560x1440 at 150%: Qt reports 1707x960 logical. Truncating
+        # 1707 * 1.5 = 2560.5 is fine; 853 * 1.5 = 1279.5 must round
+        # to the real 1280, not truncate to 1278.
+        assert vc.canvas_size_for(1707, 960, 1.5) == (2560, 1440)
+        assert vc.canvas_size_for(853, 480, 1.5) == (1280, 720)
+
+    def test_fractional_dpr_125(self):
+        # 1920x1080 at 125%: 1536x864 logical.
+        assert vc.canvas_size_for(1536, 864, 1.25) == (1920, 1080)
+
+    def test_4k_is_not_capped(self):
+        assert vc.canvas_size_for(3840, 2160, 1.0) == (3840, 2160)
+        assert vc.canvas_size_for(1920, 1080, 2.0) == (3840, 2160)
+
+    def test_spanned_projectors_are_not_capped(self):
+        # Edge-blended spans (Mosaic / Xinerama): triple and quad
+        # 1080p, dual 4K. Capping these upscaled, and softened, the
+        # whole blend.
+        assert vc.canvas_size_for(5760, 1080, 1.0) == (5760, 1080)
+        assert vc.canvas_size_for(7680, 1080, 1.0) == (7680, 1080)
+        assert vc.canvas_size_for(7680, 2160, 1.0) == (7680, 2160)
+
+    def test_8k_is_not_capped(self):
+        assert vc.canvas_size_for(7680, 4320, 1.0) == (7680, 4320)
+
+    def test_above_max_is_scaled_down_keeping_aspect(self):
+        # Past the smallest GL_MAX_TEXTURE_SIZE of current desktop
+        # drivers: capped to MAX_CANVAS on the long side.
+        assert vc.canvas_size_for(15360, 8640, 1.0) == (
+            vc.MAX_CANVAS, vc.MAX_CANVAS * 9 // 16)
+
+    def test_portrait_above_max_caps_the_height(self):
+        w, h = vc.canvas_size_for(8640, 15360, 1.0)
+        assert h == vc.MAX_CANVAS
+        assert w == vc.MAX_CANVAS * 9 // 16
+
+    def test_capped_size_stays_even(self):
+        w, h = vc.canvas_size_for(10001, 3001, 1.0)
+        assert max(w, h) <= vc.MAX_CANVAS
+        assert w % 2 == 0 and h % 2 == 0
+
 
 class TestCanvasCaps:
     """Canvas caps name the exact memory type. ``(ANY)`` features break
@@ -632,6 +692,108 @@ class TestCanvasSizing:
         comp.shutdown()
         comp.set_canvas_size(1024, 768)  # must not raise
 
+    def test_set_canvas_size_schedules_sink_exposes(self):
+        # A re-pin lands while the sink's window is also resizing (a
+        # screen change): the sinks must be nudged to re-letterbox from
+        # the settled sizes, or a stale fit can stick.
+        comp = self._comp()
+        sched = _FakeScheduler(comp)
+        comp._proj_sink, comp._mon_sink = MagicMock(), MagicMock()
+        comp.set_canvas_size(1024, 768)
+        assert sorted(p[0] for p in sched.pending) == sorted(
+            vc.CANVAS_EXPOSE_MS)
+        comp._proj_sink.expose.assert_not_called()  # deferred
+        with patch.object(vc, "_overlay_of", side_effect=lambda s: s):
+            for ms in vc.CANVAS_EXPOSE_MS:
+                sched.fire(ms)
+        assert comp._proj_sink.expose.call_count == len(vc.CANVAS_EXPOSE_MS)
+        assert comp._mon_sink.expose.call_count == len(vc.CANVAS_EXPOSE_MS)
+
+    def test_unchanged_canvas_schedules_no_expose(self):
+        comp = self._comp(canvas_size=(1024, 768))
+        sched = _FakeScheduler(comp)
+        comp.set_canvas_size(1024, 768)
+        assert sched.pending == []
+
+    def test_expose_skips_sink_without_overlay(self, caplog):
+        # A sink with no overlay element: skipped, and said so.
+        comp = self._comp()
+        sched = _FakeScheduler(comp)
+        proj, mon = MagicMock(), MagicMock()
+        comp._proj_sink, comp._mon_sink = proj, mon
+        comp.set_canvas_size(1024, 768)
+        with patch.object(vc, "_overlay_of",
+                          side_effect=lambda s: s if s is mon else None), \
+                caplog.at_level("DEBUG", logger=vc.__name__):
+            for ms in vc.CANVAS_EXPOSE_MS:
+                sched.fire(ms)  # must not raise
+        assert mon.expose.called
+        assert not proj.expose.called
+        assert "no GstVideoOverlay" in caplog.text
+
+    def test_pending_expose_is_cancelled_by_shutdown(self):
+        comp = self._comp()
+        sched = _FakeScheduler(comp)
+        comp._proj_sink, comp._mon_sink = MagicMock(), MagicMock()
+        comp.set_canvas_size(1024, 768)
+        proj = comp._proj_sink
+        comp.shutdown()
+        assert sched.pending == []
+        proj.expose.assert_not_called()
+
+
+
+def _make(factory):
+    element = vc.Gst.ElementFactory.make(factory, None)
+    if element is None:
+        pytest.skip(f"{factory} not installed")
+    return element
+
+
+class TestOverlayOf:
+    """_expose_sinks() exposes the element that draws, found on REAL
+    elements (no display needed: nothing here leaves NULL)."""
+
+    def test_gl_sink_bin_resolves_to_its_inner_sink(self):
+        # glimagesink is GstGLImageSinkBin: expose the inner
+        # glimagesinkelement itself, not rely on the bin forwarding.
+        sink = _make("glimagesink")
+        overlay = vc._overlay_of(sink)
+        assert overlay is not None
+        assert overlay is not sink
+        assert isinstance(overlay, vc.GstVideo.VideoOverlay)
+        assert overlay.get_parent() is sink
+
+    def test_plain_overlay_sink_is_itself(self):
+        sink = _make("ximagesink")
+        assert vc._overlay_of(sink) is sink
+
+    def test_bin_wrapping_an_overlay_sink_finds_it(self):
+        # autovideosink's shape: a bin whose child draws.
+        inner = _make("ximagesink")
+        wrapper = vc.Gst.Bin.new(None)
+        wrapper.add(inner)
+        assert vc._overlay_of(wrapper) is inner
+
+    def test_sink_without_overlay_is_none(self):
+        wrapper = vc.Gst.Bin.new(None)
+        wrapper.add(_make("fakesink"))
+        assert vc._overlay_of(wrapper) is None
+        assert vc._overlay_of(_make("fakesink")) is None
+
+    def test_expose_on_a_real_pipeline_without_overlay_is_safe(
+            self, caplog):
+        plan = {"gl": False, "upload": None, "mixer": "compositor",
+                "sink": "fakesink"}
+        out, mon = _fake_windows()
+        with patch.object(vc, "plan_pipeline", return_value=plan):
+            comp = vc.VideoCompositor(out, mon)
+        try:
+            with caplog.at_level("DEBUG", logger=vc.__name__):
+                comp._expose_sinks()
+            assert "no GstVideoOverlay" in caplog.text
+        finally:
+            comp.shutdown()
 
 
 class _FakeScheduler:
@@ -1025,6 +1187,20 @@ class TestFailedBuild:
         comp, _ = self._comp()
         comp.set_canvas_size(1024, 768)  # must not raise
         assert comp.canvas_size() == (1024, 768)
+
+
+class TestSinkScales:
+    def test_compositor_reports_its_plans_sink(self):
+        plan = {"gl": False, "upload": None, "mixer": "compositor",
+                "sink": "fakesink"}
+        out, mon = _fake_windows()
+        with patch.object(vc, "plan_pipeline", return_value=plan):
+            comp = vc.VideoCompositor(out, mon)
+        try:
+            assert comp.available
+            assert comp.sink_scales() is False
+        finally:
+            comp.shutdown()
 
 
 class TestBuildRaises:

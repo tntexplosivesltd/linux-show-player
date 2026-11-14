@@ -184,7 +184,7 @@ def frame_diff(path_a, path_b):
 
 def run_tests(t):
     if not have_capture_tools():
-        print("  SKIP: ImageMagick (import/convert) not available")
+        t.skip("ImageMagick (import/convert) not available")
         return
 
     create_wedge_media()
