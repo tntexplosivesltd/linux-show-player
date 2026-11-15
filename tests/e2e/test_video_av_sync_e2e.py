@@ -19,7 +19,10 @@ MEDIAN pair skew (flash − beep) must be within TOL_MS. A real sync
 error shifts every pair alike; the CI container's screen capture
 alone can see any single flash 1-3 frames (17-50 ms) late under load
 (2026-11-15: 950 ms flash gap with the pump on time), and the pump's
-own late-frame check (below) covers individual late frames.
+own late-frame check (below) covers individual late frames. Every
+pair must also sit within TOL_MS of the median: capture jitter fits
+(<= 55 ms seen), but one gross event (an audio underrun, a late
+audio start) or a skew that drifts across the clip does not.
 
 Beeps are timed on the SAMPLE CLOCK, not on the pulse demuxer's
 per-packet stamps. Those stamps are wall clock minus a latency
@@ -370,6 +373,12 @@ def run_tests(t):
         print(f"  median skew ms: {statistics.median(skews):.1f}")
     t.check(f"A/V sync within {TOL_MS} ms (median pair)",
             bool(skews) and abs(statistics.median(skews)) <= TOL_MS)
+    spread = (max(abs(s - statistics.median(skews)) for s in skews)
+              if skews else None)
+    if spread is not None:
+        print(f"  largest pair deviation from median ms: {spread:.1f}")
+    t.check(f"every pair within {TOL_MS} ms of the median",
+            spread is not None and spread <= TOL_MS)
 
 
 if __name__ == "__main__":
