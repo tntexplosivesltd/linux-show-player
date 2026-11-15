@@ -71,6 +71,11 @@ class GroupCue(Cue):
         self._crossfade_armed = False
         # Track which children have signal handlers connected
         self._connected_children = set()
+        # Crossfade fade durations waiting to be put back, as
+        # {(cue_id, attr): restore}. `Signal` holds slots weakly, so
+        # this is what keeps each one-shot restore alive. Guarded by
+        # _lock.
+        self._pending_restores = {}
 
         # Signal to relay crossfade arming to the main thread.
         # Clock_33 is a QTimer — callbacks must be added from the
@@ -457,20 +462,18 @@ class GroupCue(Cue):
             # _on_playlist_child_stopped and kill the group.
             self._disconnect_child(child, parallel=False)
 
-            # Fade out current child — temporarily set the
-            # fade duration for the crossfade without permanently
-            # modifying the child's property (which gets serialized).
-            # Restore via a one-shot stopped handler so the
-            # worker thread has read the value before we reset.
-            orig_fadeout = child.fadeout_duration
+            # Fade out current child, temporarily using the
+            # crossfade as its fade duration. The worker thread
+            # reads it during the stop, so put it back only once
+            # the child has stopped (or ended some other way).
             if child.fadeout_duration <= 0:
-                child.fadeout_duration = self.crossfade
-
-                def _restore_fadeout(cue, _orig=orig_fadeout):
-                    cue.fadeout_duration = _orig
-                    cue.stopped.disconnect(_restore_fadeout)
-
-                child.stopped.connect(_restore_fadeout)
+                self._hold_fade(
+                    child,
+                    "fadeout_duration",
+                    self.crossfade,
+                    (child.stopped, child.interrupted, child.error,
+                     child.end),
+                )
             child.execute(CueAction.FadeOutStop)
 
             # Start next child with fade in
@@ -486,27 +489,84 @@ class GroupCue(Cue):
                         next_child, parallel=False
                     )
 
-                orig_fadein = next_child.fadein_duration
+                # Same for the fade-in. MediaCue reads the
+                # duration in an async fade task that can run
+                # after `started`, so restore on `fadein_start`
+                # (the duration has been read by then), not on
+                # `started`. A cue that never fades in is restored
+                # when it ends.
+                restore_fadein = None
                 if next_child.fadein_duration <= 0:
-                    next_child.fadein_duration = self.crossfade
-
-                    def _restore_fadein(
-                        cue, _orig=orig_fadein
-                    ):
-                        cue.fadein_duration = _orig
-                        cue.started.disconnect(
-                            _restore_fadein
-                        )
-
-                    next_child.started.connect(
-                        _restore_fadein
+                    restore_fadein = self._hold_fade(
+                        next_child,
+                        "fadein_duration",
+                        self.crossfade,
+                        (next_child.fadein_start,
+                         next_child.stopped,
+                         next_child.interrupted,
+                         next_child.error, next_child.end),
                     )
-                next_child.execute(CueAction.FadeInStart)
+                started = next_child.execute(CueAction.FadeInStart)
+                if started is False and restore_fadein is not None:
+                    # Refused (exclusive cue, disabled): it will
+                    # never start, so nothing else would restore.
+                    restore_fadein()
 
                 # Re-arm crossfade for the next transition
                 self._arm_crossfade_if_needed(
                     next_index, children
                 )
+
+    def _hold_fade(self, cue, attr, value, signals):
+        """Set ``cue.<attr>`` to ``value`` until one of ``signals``
+        fires, then put the original back.
+
+        Returns the restore callable. It runs at most once, whoever
+        calls it first (a signal on a worker thread, or
+        `_flush_pending_restores`), and it leaves the value alone if
+        someone changed it in the meantime. The registry holds it
+        strongly until it has run, since `Signal` only holds a weak
+        reference.
+        """
+        original = getattr(cue, attr)
+        key = (cue.id, attr)
+
+        def restore(*_args):
+            with self._lock:
+                if self._pending_restores.get(key) is not restore:
+                    return
+                del self._pending_restores[key]
+            for signal in signals:
+                signal.disconnect(restore)
+            if getattr(cue, attr) == value:
+                setattr(cue, attr, original)
+
+        # Register and connect before setting the value, so no signal
+        # can fire with the value set and no restore in place.
+        with self._lock:
+            self._pending_restores[key] = restore
+        for signal in signals:
+            signal.connect(restore)
+        setattr(cue, attr, value)
+        return restore
+
+    def _flush_pending_restores(self):
+        """Put back every crossfade fade duration still pending.
+
+        For when the group stops: a child that never stops or starts
+        would otherwise keep the crossfade value, and it would be
+        saved with the session.
+
+        Known limits: pausing keeps the held values (resume needs
+        them), so a save while paused mid-crossfade writes them. A
+        child still inside its own start when the group stops can
+        miss its fade-in; the group doesn't stop such a child
+        either (it isn't Running yet), which predates this.
+        """
+        with self._lock:
+            pending = list(self._pending_restores.values())
+        for restore in pending:
+            restore()
 
     def _stop_crossfade_monitor(self):
         with self._lock:
@@ -589,6 +649,7 @@ class GroupCue(Cue):
         """Playlist mode: child was stopped/interrupted, stop group."""
         self._stop_crossfade_monitor()
         self._disconnect_all_children()
+        self._flush_pending_restores()
 
         if self.state & CueState.Running:
             self._ended()
@@ -596,6 +657,7 @@ class GroupCue(Cue):
     def __stop__(self, fade=False):
         self._stop_crossfade_monitor()
         self._disconnect_all_children()
+        self._flush_pending_restores()
 
         for child in self._resolve_children():
             if child.state & CueState.IsRunning:
@@ -621,6 +683,7 @@ class GroupCue(Cue):
     def __interrupt__(self, fade=False):
         self._stop_crossfade_monitor()
         self._disconnect_all_children()
+        self._flush_pending_restores()
 
         for child in self._resolve_children():
             if child.state & CueState.IsRunning:
