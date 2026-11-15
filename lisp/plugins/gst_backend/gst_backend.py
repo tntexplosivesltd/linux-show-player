@@ -338,14 +338,20 @@ class GstBackend(Plugin, BaseBackend):
             cache_dir=self.app.conf.get("cache.position", ""),
         )
 
-        # Notify operator when waveform generation fails
+        # Notify operator when waveform generation fails. `Signal`
+        # holds slots weakly, so the waveform keeps the handler alive
+        # (a bare lambda would be freed on return and never fire).
+        app = self.app
         unquoted = uri.unquoted_uri
-        waveform.failed.connect(
-            lambda: self.app.notify.emit(
+
+        def notify_failed():
+            app.notify.emit(
                 f'Cannot generate waveform for "{unquoted}"',
                 NotificationLevel.Warning,
             )
-        )
+
+        waveform._notify_failed = notify_failed
+        waveform.failed.connect(notify_failed)
 
         return waveform
 
