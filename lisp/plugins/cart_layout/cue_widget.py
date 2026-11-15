@@ -101,9 +101,13 @@ class CueWidget(QWidget):
         # `_updateStyle` rebuild for a disabled cue allocates a new
         # `QIcon`, which (a) is wasted work, and (b) breaks identity
         # comparison against `IconTheme.get(...)` for any tool that
-        # reads `nameButton._icon`. Keyed by the source icon's id —
-        # `IconTheme` caches its returns, so the key is stable.
-        self._dimIconCache: dict = {}
+        # reads `nameButton._icon`. One slot, ``(source, dim)``: the
+        # hit test is `source is icon`, never `id(icon)`, since a freed
+        # source's id can be recycled (e.g. after an icon-theme switch
+        # clears `IconTheme._GlobalCache`). Holding the source also
+        # keeps it alive while cached. A cell shows one icon at a time,
+        # so one slot is enough and the cache can't grow.
+        self._dimIconCache = None
 
         self._dBMeterElement = None
         self._volumeElement = None
@@ -487,11 +491,11 @@ class CueWidget(QWidget):
         self.nameButton.setStyleSheet(stylesheet)
         icon = IconTheme.get(f"{self._cue.icon}-cart")
         if disabled:
-            cached = self._dimIconCache.get(id(icon))
-            if cached is None:
-                cached = _dim_icon(icon)
-                self._dimIconCache[id(icon)] = cached
-            icon = cached
+            cached = self._dimIconCache
+            if cached is None or cached[0] is not icon:
+                cached = (icon, _dim_icon(icon))
+                self._dimIconCache = cached
+            icon = cached[1]
         self.nameButton.setIcon(icon)
 
     def _onGroupIdChanged(self, _value=None):

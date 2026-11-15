@@ -797,6 +797,11 @@ def register_all(dispatcher, app, signal_manager):
           (`_dimIconCache`), so `nameButton._icon` is also stable
           for a given (cue.icon, effective_disabled) pair.
 
+        For a disabled cell, ``matches`` is a pixel comparison of
+        the cell's icon against a freshly rendered dim copy of the
+        current ``-cart`` icon, deliberately not read from the
+        widget's own cache; ``expected_id`` is then ``None``.
+
         These ids are only valid for equality comparisons within a
         single response or against another response from the same
         LiSP process. They are NOT stable across LiSP restarts, and
@@ -810,8 +815,9 @@ def register_all(dispatcher, app, signal_manager):
         Returns dict with:
           ``current_id`` — id of the QIcon currently set on the cell.
           ``expected_id`` — id of the QIcon the cell *should* be
-            showing for ``cue.icon`` (and disabled state, if any).
-          ``matches`` — ``current_id == expected_id``.
+            showing for ``cue.icon``; ``None`` for a disabled cell.
+          ``matches`` — enabled: ``current_id == expected_id``;
+            disabled: pixels equal a fresh dim of the current icon.
           ``icon_property`` — the cue's current ``icon`` property.
           ``effective_disabled`` — whether dim variants are in play;
             useful for narrowing down test assertions.
@@ -844,21 +850,34 @@ def register_all(dispatcher, app, signal_manager):
             base_icon = IconTheme.get(f"{target_cue.icon}-cart")
             disabled = bool(target_cue.effective_disabled)
             if disabled and base_icon is not None:
-                # Match the same dim-cache the widget consults, so
-                # the identity check is meaningful for disabled cues.
-                expected_icon = target_widget._dimIconCache.get(
-                    id(base_icon), base_icon
+                # Judge independently of the widget's dim cache:
+                # render a fresh dim copy of the current source and
+                # compare pixels. A fresh copy has a new identity, so
+                # there's no expected_id here.
+                from PyQt5.QtCore import QSize
+                from lisp.plugins.cart_layout.cue_widget import (
+                    _DIM_ICON_SIZE,
+                    _dim_icon,
+                )
+
+                size = QSize(_DIM_ICON_SIZE, _DIM_ICON_SIZE)
+                expected_id = None
+                matches = (
+                    current_icon is not None
+                    and current_icon.pixmap(size).toImage()
+                    == _dim_icon(base_icon).pixmap(size).toImage()
                 )
             else:
-                expected_icon = base_icon
+                expected_id = (
+                    id(base_icon) if base_icon is not None else None
+                )
+                matches = current_icon is base_icon
             return {
                 "current_id": id(current_icon)
                 if current_icon is not None
                 else None,
-                "expected_id": id(expected_icon)
-                if expected_icon is not None
-                else None,
-                "matches": current_icon is expected_icon,
+                "expected_id": expected_id,
+                "matches": matches,
                 "icon_property": target_cue.icon,
                 "effective_disabled": disabled,
             }
