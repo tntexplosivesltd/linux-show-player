@@ -265,8 +265,9 @@ class TestCrossfadePreservation:
     ):
         """Crossfade should set fadeout_duration before executing
         FadeOutStop so the worker thread reads the correct value.
-        The property is restored asynchronously via a one-shot
-        stopped signal handler (tested in E2E)."""
+        The property is restored from a one-shot stopped handler
+        (see
+        tests/plugins/action_cues/test_group_cue_crossfade_restore.py)."""
         c1 = _make_child(
             "c1", state=CueState.Running, duration=10000
         )
@@ -296,14 +297,16 @@ class TestCrossfadePreservation:
     ):
         """Crossfade should set fadein_duration before executing
         FadeInStart so the worker thread reads the correct value.
-        The property is restored asynchronously via a one-shot
-        started signal handler (tested in E2E)."""
+        The property is restored from a one-shot fadein_start
+        handler, once the fade has read it (see
+        tests/plugins/action_cues/test_group_cue_crossfade_restore.py)."""
         c1 = _make_child(
             "c1", state=CueState.Running, duration=10000
         )
         c1.current_time = MagicMock(return_value=9500)
         c2 = _make_child("c2")
         c2.fadein_duration = 0
+        c2.CueActions = (CueAction.Start, CueAction.FadeInStart)
         mock_app.cue_model.get = lambda cid: {
             "c1": c1, "c2": c2
         }.get(cid)
@@ -318,9 +321,9 @@ class TestCrossfadePreservation:
         group._check_crossfade()
 
         # fadein_duration is set to crossfade value for the
-        # execute call; restore happens via started signal
+        # execute call; restore happens once the fade has read it
         c2.execute.assert_called_once_with(CueAction.FadeInStart)
-        c2.started.connect.assert_called()
+        c2.fadein_start.connect.assert_called()
 
 
 class TestGroupIdProperty:

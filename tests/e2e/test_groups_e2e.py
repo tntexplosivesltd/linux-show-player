@@ -351,8 +351,8 @@ def test_6_crossfade(ids, group_id):
           wait_state(B, "Running", timeout=5))
 
     # 6b: After crossfade completes, fadein_duration should be
-    # restored to its original value (0) via the one-shot
-    # started signal handler — not permanently modified.
+    # restored to its original value (0) once the fade-in has read
+    # it — not permanently modified (H25: it gets saved).
     # The fade cannot finish before its 2.0s duration, so wait that
     # out first (a poll alone could read the pre-crossfade 0 and
     # false-pass), then poll for the restore so a slow runner can't
@@ -363,6 +363,13 @@ def test_6_crossfade(ids, group_id):
           cue_prop(B, "fadein_duration") == 0)
     check("6b: B still running after fade-in",
           cue_state(B) == "Running")
+    # The outgoing cue's temporary fadeout_duration comes back once
+    # it has faded out and stopped.
+    check("6b: A stopped after fade-out",
+          wait_state(A, "Stop", timeout=5))
+    _wait_prop(A, "fadeout_duration", 0, timeout=5)
+    check("6b: A fadeout_duration restored after crossfade",
+          cue_prop(A, "fadeout_duration") == 0)
 
     call("cue.seek", {"id": B, "position": 5500})
     check("6c: Crossfade started C",
@@ -374,6 +381,33 @@ def test_6_crossfade(ids, group_id):
           cue_prop(C, "fadein_duration") == 0)
     check("6c: C still running after fade-in",
           cue_state(C) == "Running")
+    check("6c: B stopped after fade-out",
+          wait_state(B, "Stop", timeout=5))
+    _wait_prop(B, "fadeout_duration", 0, timeout=5)
+    check("6c: B fadeout_duration restored after crossfade",
+          cue_prop(B, "fadeout_duration") == 0)
+
+    stop_all()
+
+    # 6d: Stopping the group mid-crossfade leaves both durations
+    # restored, not the crossfade value to be saved. Here the
+    # children's own stop signals restore them; the group's flush
+    # (for children that never emit one) is covered by the unit
+    # tests in tests/plugins/action_cues/.
+    call("cue.execute", {"id": group_id, "action": "Start"})
+    wait_state(A, "Running", timeout=5)
+    call("cue.seek", {"id": A, "position": 5500})
+    check("6d: Crossfade started B",
+          wait_state(B, "Running", timeout=5))
+    call("cue.execute", {"id": group_id, "action": "Stop"})
+    check("6d: Group stopped",
+          wait_state(group_id, "Stop", timeout=5))
+    _wait_prop(A, "fadeout_duration", 0, timeout=5)
+    _wait_prop(B, "fadein_duration", 0, timeout=5)
+    check("6d: A fadeout_duration back to 0 after group stop",
+          cue_prop(A, "fadeout_duration") == 0)
+    check("6d: B fadein_duration back to 0 after group stop",
+          cue_prop(B, "fadein_duration") == 0)
 
     stop_all()
     call("cue.set_property", {
