@@ -28,6 +28,7 @@ import sys
 import tempfile
 import time
 import wave
+from collections import namedtuple
 from contextlib import contextmanager
 
 # Allow importing the test harness client without installing
@@ -397,6 +398,111 @@ def signal_sub(signal_path):
         yield sub_id
     finally:
         unsubscribe(sub_id)
+
+
+def projection_counts():
+    """The projection sink's (rendered, dropped) frame counters and the
+    monotonic time they were read at, or None when there is no
+    projection or its sink reports no stats. Read before and after a
+    capture window: see projection_load().
+    """
+    try:
+        result = call("video.stats")
+    except Exception:
+        return None
+    proj = result.get("projection") if result.get("exists") else None
+    if not proj:
+        return None
+    return proj["rendered"], proj["dropped"], time.monotonic()
+
+
+# The projection mixer's output rate (VideoCompositor's COMP_FPS): the
+# rate at which frames reach its sink when the machine keeps up.
+PROJECTION_FPS = 30
+
+# A window with fewer frames than this is too short to judge load on.
+MIN_LOAD_FRAMES = 10
+
+ProjectionLoad = namedtuple("ProjectionLoad", "drop_rate arrival_fps")
+
+
+def projection_load(before, after):
+    """The projection's load over a window between two
+    projection_counts() readings: the share of frames its sink dropped
+    and the rate frames reached it at (arrived = rendered + dropped).
+
+    None when it cannot be judged: a reading is missing, a counter went
+    DOWN (the projection pipeline was rebuilt in the window, so its new
+    sink counts from 0 — itself a LiSP failure, judge it strictly), or
+    the window holds fewer than MIN_LOAD_FRAMES frames.
+    """
+    if before is None or after is None:
+        return None
+    rendered = after[0] - before[0]
+    dropped = after[1] - before[1]
+    elapsed = after[2] - before[2]
+    if rendered < 0 or dropped < 0 or elapsed <= 0:
+        return None
+    arrived = rendered + dropped
+    if arrived < MIN_LOAD_FRAMES:
+        return None
+    return ProjectionLoad(dropped / arrived, arrived / elapsed)
+
+
+# Overload = the machine can't render the projection in real time
+# (e.g. 4 cores of software GL decoding 1080p): the mixer produces
+# frames slower than PROJECTION_FPS AND they reach the sink so late it
+# drops them. Both must hold. A LiSP timing bug (frames mis-stamped)
+# also makes the sink drop, but its frames still arrive at full rate,
+# so it is never mistaken for overload.
+# Measured in the CI image (2026-11-15) over the standalone (~1 s),
+# parity (13 s) and flicker (7 s) windows: unthrottled 0.5-3.4%
+# dropped at 29.1-30.4 frames/s; pinned to 4 cores (the GitHub runner's
+# size) 11-91% dropped at 23.5-27.8 frames/s, and every pixel failure
+# there had >= 14% dropped. 0.9 x PROJECTION_FPS (27) was too tight: a
+# 23%-dropped window arriving at 27.2/s failed on an 83 ms gap. The
+# GitHub runner itself measured 12-24% dropped, ~28-29 frames/s.
+OVERLOAD_DROP_RATE = 0.10
+OVERLOAD_ARRIVAL_FPS = 0.95 * PROJECTION_FPS
+
+
+def is_overloaded(load):
+    """True if a projection_load() reading shows overload (see
+    OVERLOAD_*). None (no reading) is never overload."""
+    return (load is not None
+            and load.drop_rate > OVERLOAD_DROP_RATE
+            and load.arrival_fps < OVERLOAD_ARRIVAL_FPS)
+
+
+def describe_load(load):
+    """One line for the test log."""
+    if load is None:
+        return "projection load: not measured"
+    return (f"projection load: {load.drop_rate:.1%} dropped, "
+            f"{load.arrival_fps:.1f} frames/s arrived "
+            f"(overloaded={is_overloaded(load)})")
+
+
+def check_pixels(t, name, ok, load):
+    """Record a check judged from screen pixels.
+
+    A pass always counts. A failure counts too, unless the projection
+    was overloaded during the judged window (``load``, from
+    projection_load(); see is_overloaded()): then the check is
+    inconclusive and the run is marked skipped with the measurement.
+    Without a reading (None) the check is judged strictly.
+    Returns True if the check was judged (pass or fail).
+    """
+    if ok or not is_overloaded(load):
+        t.check(name, ok)
+        return True
+    reason = (f"{name}: inconclusive, the projection was overloaded "
+              f"({load.drop_rate:.0%} of frames dropped, "
+              f"{load.arrival_fps:.1f}/{PROJECTION_FPS} frames/s; not "
+              f"rendering in real time on this machine)")
+    print(f"  INCONCLUSIVE: {reason}")
+    t.skip(reason if t.skipped is None else f"{t.skipped}; {reason}")
+    return False
 
 
 def stop_all():

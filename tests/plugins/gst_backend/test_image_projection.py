@@ -88,6 +88,7 @@ class _Projection:
         comp.canvas_size.return_value = (vc.COMP_WIDTH, vc.COMP_HEIGHT)
         comp.latency.side_effect = lambda: vc.query_min_latency(
             self.pipeline)
+        comp.slot_latency.side_effect = comp.latency.side_effect
         comp.register.side_effect = self._register
 
         def fit(reg, caps):

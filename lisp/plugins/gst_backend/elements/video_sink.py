@@ -306,12 +306,25 @@ class VideoSink(GstMediaElement):
             if cue_latency_due(reg.latency_buffers):
                 reg.cue_latency = query_min_latency(self.pipeline)
             reg.latency_buffers += 1
+            proj_latency = compositor.latency()
             pts = projection_pts(
                 running_time,
                 self.pipeline.get_base_time(),
                 projection.get_base_time(),
-                reg.cue_latency - compositor.latency(),
+                reg.cue_latency - proj_latency,
             )
+            reg.timed_frames += 1
+            # Past its output slot (or due before the projection
+            # existed, dropped below): the mixer already composited that
+            # frame time. Counted, not dropped here (the mixer decides);
+            # the av_sync E2E asserts on these. The clock is read again:
+            # the cue latency query above can take a while.
+            if pts < 0 or (
+                compositor.clock().get_time() - projection.get_base_time()
+                > pts + compositor.slot_latency()
+            ):
+                reg.late_frames += 1
+                reg.last_late_rt = running_time
             if pts < 0:
                 # Due before the projection's running time 0: only
                 # possible just after the projection pipeline was

@@ -53,6 +53,14 @@ class FakeElement:
         return self._props[name]
 
 
+def fake_reg(frame_seen=False, caps=None, timed_frames=0, late_frames=0,
+             last_late_rt=None):
+    """A Registration's fields as video.stats reads them."""
+    return SimpleNamespace(
+        frame_seen=frame_seen, caps=caps, timed_frames=timed_frames,
+        late_frames=late_frames, last_late_rt=last_late_rt)
+
+
 def base_sink(rendered=100, dropped=2, rate=25.0):
     return FakeElement(stats=FakeStats(rendered, dropped, rate))
 
@@ -166,9 +174,9 @@ def test_cue_entries_carry_their_cue_id(stats):
     sink_a = SimpleNamespace(video_appsink=base_sink(5, 0, 25.0))
     sink_b = SimpleNamespace(video_appsink=None)
     orphan = SimpleNamespace(video_appsink=None)
-    reg_a = SimpleNamespace(frame_seen=True, caps=None)
-    reg_b = SimpleNamespace(frame_seen=False, caps=None)
-    reg_o = SimpleNamespace(frame_seen=False, caps=None)
+    reg_a = fake_reg(frame_seen=True, caps=None)
+    reg_b = fake_reg(frame_seen=False, caps=None)
+    reg_o = fake_reg(frame_seen=False, caps=None)
     cues.extend([
         SimpleNamespace(id="plain"),  # no media (e.g. an action cue)
         SimpleNamespace(id="cue-a", media=FakeMedia(sink_a)),
@@ -188,6 +196,26 @@ def test_cue_entries_carry_their_cue_id(stats):
     assert entries[0]["caps"] is None
 
 
+
+def test_cue_entries_carry_pump_timing(stats):
+    call, set_compositor, cues = stats
+    sink_a = SimpleNamespace(video_appsink=None)
+    sink_b = SimpleNamespace(video_appsink=None)
+    cues.extend([
+        SimpleNamespace(id="cue-a", media=FakeMedia(sink_a)),
+        SimpleNamespace(id="cue-b", media=FakeMedia(sink_b)),
+    ])
+    set_compositor(FakeCompositor(registrations=[
+        (sink_a, fake_reg(timed_frames=90, late_frames=3,
+                          last_late_rt=66_700_000)),
+        (sink_b, fake_reg(timed_frames=30)),
+    ]))
+    entries = call()["cues"]
+    assert entries[0]["pump"] == {
+        "timed_frames": 90, "late_frames": 3, "last_late_ms": 66.7}
+    assert entries[1]["pump"] == {
+        "timed_frames": 30, "late_frames": 0, "last_late_ms": None}
+
 def _cue_with_sink(cue_id):
     sink = SimpleNamespace(video_appsink=None)
     return SimpleNamespace(id=cue_id, media=FakeMedia(sink)), sink
@@ -201,7 +229,7 @@ def test_cue_model_is_walked_on_the_main_thread_once(stats):
     for n in range(3):
         cue, sink = _cue_with_sink(f"cue-{n}")
         cues.append(cue)
-        regs.append((sink, SimpleNamespace(frame_seen=False, caps=None)))
+        regs.append((sink, fake_reg(frame_seen=False, caps=None)))
     set_compositor(FakeCompositor(registrations=regs))
     entries = call()["cues"]
     assert [e["cue_id"] for e in entries] == ["cue-0", "cue-1", "cue-2"]
@@ -242,7 +270,7 @@ def test_cue_added_during_the_call_does_not_break_it(monkeypatch):
 
     monkeypatch.setattr(handlers, "invoke_on_main_thread", on_main_thread)
     monkeypatch.setattr(GstBackend, "_video_compositor", FakeCompositor(
-        registrations=[(sink, SimpleNamespace(frame_seen=True, caps=None))],
+        registrations=[(sink, fake_reg(frame_seen=True, caps=None))],
     ))
     resp = d.dispatch({"jsonrpc": "2.0", "id": 1, "method": "video.stats",
                        "params": {}})

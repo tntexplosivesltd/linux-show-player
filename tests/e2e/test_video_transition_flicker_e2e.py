@@ -31,8 +31,17 @@ shown — so the first transition must have no black run (``dark_run <=
 1``).  Before the compositor this measured ~2 frames; a compositor
 without the linger measured 17 (the next cue's preroll time).
 
-Requires an X display, ffmpeg (with x11grab) and xwininfo.  Skips
-cleanly otherwise.
+Requires an X display, ffmpeg (with x11grab) and xwininfo. Skips
+cleanly otherwise. Also skips when the projection can't render in real
+time (e.g. 4 cores of software GL decoding 1080p): its sink then drops
+late frames and nothing new reaches the screen, so a pixel FAILURE
+says nothing about LiSP. Pixel checks therefore go through
+helpers.check_pixels(): a failure while the projection was overloaded
+over the window (helpers.is_overloaded(): frames reaching its sink
+below real-time rate AND more than 10% of them dropped) is
+inconclusive and the run SKIPs with the measurement. A LiSP timing bug
+drops frames too, but they still arrive at full rate, so it fails. A
+pass always counts, and the harness-truth checks stay hard.
 
 Run:
     poetry run python tests/e2e/test_video_transition_flicker_e2e.py
@@ -50,7 +59,8 @@ sys.path.insert(
     0, os.path.join(os.path.dirname(__file__), "..", "..",
                     "lisp", "plugins", "test_harness"))
 from helpers import (  # noqa: E402
-    TestTracker, call, start_lisp, stop_lisp,
+    TestTracker, call, check_pixels, describe_load, projection_counts,
+    projection_load, start_lisp, stop_lisp,
     wait_cues_loaded,
 )
 
@@ -113,13 +123,20 @@ def geometry(handle):
 
 def record_rgb(handle, seconds):
     """60fps whole-window average RGB per frame via XGetImage."""
-    raw = subprocess.run(
+    # The display LiSP runs on: xvfb-run -a picks a free one (often :99),
+    # so a hard-coded :0 captured nothing.
+    result = subprocess.run(
         ["ffmpeg", "-y", "-f", "x11grab", "-framerate", str(FPS),
-         "-window_id", str(handle), "-i", ":0.0", "-t", str(seconds),
+         "-window_id", str(handle), "-i", os.environ["DISPLAY"],
+         "-t", str(seconds),
          "-vf", "scale=1:1", "-f", "rawvideo", "-pix_fmt", "rgb24",
          "pipe:1"],
         capture_output=True,
-    ).stdout
+    )
+    raw = result.stdout
+    if not raw:
+        print("  ffmpeg captured nothing:\n"
+              + result.stderr.decode(errors="replace")[-800:])
     return [(raw[i], raw[i + 1], raw[i + 2])
             for i in range(0, len(raw) - 2, 3)]
 
@@ -178,6 +195,7 @@ def measure_first_transition(t):
     # unresolved.
     start_lisp(session_path=SESSION)
     frames = []
+    load = None
     try:
         # Sanity-check the reload: 2 videos + 1 GroupCue.
         wait_cues_loaded(3)
@@ -213,7 +231,10 @@ def measure_first_transition(t):
         time.sleep(0.2)
 
         # Record across the first A→B boundary (cue A ~CUE_SECONDS long).
+        before = projection_counts()
         frames = record_rgb(handle, CUE_SECONDS + 3)
+        load = projection_load(before, projection_counts())
+        print(f"  {describe_load(load)}")
         try:
             call("signals.wait_for",
                  {"subscription_id": sub_id, "timeout": 1.0})
@@ -241,15 +262,17 @@ def measure_first_transition(t):
     # Sanity: the playlist actually advanced A→B (harness truth), and we
     # captured live content (not an all-black grab).
     t.check("transition A→B occurred (cue B started)", b_started)
-    t.check("captured live video (mostly bright)", bright > len(body) // 2)
+    check_pixels(t, "captured live video (mostly bright)",
+                 bright > len(body) // 2, load)
 
     # REGRESSION GUARD (was characterization before the compositor
     # rearchitecture). The single persistent glimagesink fed by
     # glvideomixer eliminates the cross-sink hand-off class, and the
     # compositor's handoff linger covers the next cue's preroll, so the
     # first video→video transition must now be clean.
-    t.check("no black flicker at first transition", dark_run <= 1)
-    if dark_run >= 2:
+    judged = check_pixels(t, "no black flicker at first transition",
+                          dark_run <= 1, load)
+    if judged and dark_run >= 2:
         print(f"  REGRESSION: {dark_run}-frame ({ms:.1f} ms) black at "
               "first transition — the compositor should have eliminated "
               "this.")

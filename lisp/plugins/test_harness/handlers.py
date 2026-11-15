@@ -1002,7 +1002,9 @@ def register_all(dispatcher, app, signal_manager):
         """Projection performance counters: the projection sink's
         GstBaseSink stats (rendered / dropped / average-rate) and, per
         registered cue, its id, whether its first frame was pushed,
-        its caps and its appsink's stats."""
+        its caps, its appsink's stats and its pump timing (timed
+        frames, how many reached the projection after their output
+        slot, and the cue time of the last such frame)."""
         from lisp.plugins.gst_backend.gst_backend import GstBackend
 
         compositor = GstBackend.video_compositor()
@@ -1049,6 +1051,13 @@ def register_all(dispatcher, app, signal_manager):
                 "frame_seen": reg.frame_seen,
                 "caps": reg.caps.to_string() if reg.caps else None,
                 "appsink": sink_stats(sink.video_appsink),
+                "pump": {
+                    "timed_frames": reg.timed_frames,
+                    "late_frames": reg.late_frames,
+                    "last_late_ms": (
+                        None if reg.last_late_rt is None
+                        else round(reg.last_late_rt / 1_000_000, 1)),
+                },
             })
         return {
             "exists": True,

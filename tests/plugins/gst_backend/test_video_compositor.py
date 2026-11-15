@@ -2033,6 +2033,45 @@ class TestLatencyCache:
         comp.shutdown()
         assert comp.latency() == 0
 
+    def test_slot_latency_excludes_sink_processing_deadline(self):
+        # Measured (GStreamer 1.24, glimagesink): L_proj 81.7ms =
+        # 66.7ms up to the sink + its 15ms processing deadline. The
+        # mixer composites pts at pts + 66.7ms, not pts + L_proj.
+        comp = self._comp()
+        comp._sink_deadline = 15
+        with patch(self._QL, return_value=86):
+            assert comp.slot_latency() == 71
+
+    def test_slot_latency_never_negative(self):
+        comp = self._comp()
+        comp._sink_deadline = 100
+        with patch(self._QL, return_value=86):
+            assert comp.slot_latency() == 0
+
+
+class TestProcessingDeadline:
+    def test_reads_a_base_sink(self):
+        sink = vc.Gst.ElementFactory.make("fakesink", None)
+        sink.set_property("processing-deadline", 15 * vc.Gst.MSECOND)
+        assert vc.sink_processing_deadline(sink) == 15 * vc.Gst.MSECOND
+
+    def test_reads_a_bins_sink_child(self):
+        # glimagesink is a GstGLImageSinkBin: the GstBaseSink is its
+        # "sink" child.
+        child = vc.Gst.ElementFactory.make("fakesink", None)
+        child.set_property("processing-deadline", 15 * vc.Gst.MSECOND)
+        bin_ = MagicMock()
+        bin_.find_property.side_effect = (
+            lambda name: object() if name == "sink" else None)
+        bin_.get_property.return_value = child
+        assert vc.sink_processing_deadline(bin_) == 15 * vc.Gst.MSECOND
+
+    def test_zero_when_unknown(self):
+        bin_ = MagicMock()
+        bin_.find_property.return_value = None
+        assert vc.sink_processing_deadline(bin_) == 0
+        assert vc.sink_processing_deadline(None) == 0
+
 
 _SOFTWARE_PLAN = {"gl": False, "upload": None, "mixer": "compositor",
                   "sink": "fakesink"}
