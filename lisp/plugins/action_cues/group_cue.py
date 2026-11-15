@@ -76,6 +76,13 @@ class GroupCue(Cue):
         # this is what keeps each one-shot restore alive. Guarded by
         # _lock.
         self._pending_restores = {}
+        # Restores are triggered on worker threads; the property write
+        # itself is queued to the main thread, because property_changed
+        # listeners (e.g. the inspector) expect the main thread.
+        self._request_restore = Signal()
+        self._request_restore.connect(
+            self._apply_restore, Connection.QtQueued
+        )
 
         # Signal to relay crossfade arming to the main thread.
         # Clock_33 is a QTimer — callbacks must be added from the
@@ -463,16 +470,17 @@ class GroupCue(Cue):
             self._disconnect_child(child, parallel=False)
 
             # Fade out current child, temporarily using the
-            # crossfade as its fade duration. The worker thread
-            # reads it during the stop, so put it back only once
-            # the child has stopped (or ended some other way).
+            # crossfade as its fade duration. The stop worker
+            # reads it before the fade starts, so put it back on
+            # fadeout_start, or once the child has stopped or
+            # ended some other way.
             if child.fadeout_duration <= 0:
                 self._hold_fade(
                     child,
                     "fadeout_duration",
                     self.crossfade,
-                    (child.stopped, child.interrupted, child.error,
-                     child.end),
+                    (child.fadeout_start, child.stopped,
+                     child.interrupted, child.error, child.end),
                 )
             child.execute(CueAction.FadeOutStop)
 
@@ -489,19 +497,19 @@ class GroupCue(Cue):
                         next_child, parallel=False
                     )
 
-                # Same for the fade-in. MediaCue reads the
-                # duration in an async fade task that can run
-                # after `started`, so restore on `fadein_start`
-                # (the duration has been read by then), not on
-                # `started`. A cue that never fades in is restored
-                # when it ends.
+                # Same for the fade-in, but only for a child that
+                # can take FadeInStart (others ignore it, so a
+                # hold would never be released by a start).
                 restore_fadein = None
-                if next_child.fadein_duration <= 0:
+                if (
+                    CueAction.FadeInStart in next_child.CueActions
+                    and next_child.fadein_duration <= 0
+                ):
                     restore_fadein = self._hold_fade(
                         next_child,
                         "fadein_duration",
                         self.crossfade,
-                        (next_child.fadein_start,
+                        (self._fadein_read_signal(next_child),
                          next_child.stopped,
                          next_child.interrupted,
                          next_child.error, next_child.end),
@@ -523,7 +531,8 @@ class GroupCue(Cue):
 
         Returns the restore callable. It runs at most once, whoever
         calls it first (a signal on a worker thread, or
-        `_flush_pending_restores`), and it leaves the value alone if
+        `_flush_pending_restores`), and queues the write to the main
+        thread (`_apply_restore`), which leaves the value alone if
         someone changed it in the meantime. The registry holds it
         strongly until it has run, since `Signal` only holds a weak
         reference.
@@ -538,8 +547,7 @@ class GroupCue(Cue):
                 del self._pending_restores[key]
             for signal in signals:
                 signal.disconnect(restore)
-            if getattr(cue, attr) == value:
-                setattr(cue, attr, original)
+            self._request_restore.emit(cue, attr, value, original)
 
         # Register and connect before setting the value, so no signal
         # can fire with the value set and no restore in place.
@@ -549,6 +557,27 @@ class GroupCue(Cue):
             signal.connect(restore)
         setattr(cue, attr, value)
         return restore
+
+    @staticmethod
+    def _apply_restore(cue, attr, value, original):
+        """Main thread: put ``original`` back, unless the value was
+        changed by someone else since the hold."""
+        if getattr(cue, attr) == value:
+            setattr(cue, attr, original)
+
+    @staticmethod
+    def _fadein_read_signal(cue):
+        """The signal after which ``cue`` has read its fade-in duration.
+
+        A MediaCue that can fade reads it in an async fade task that
+        can run after `started`, and announces it with `fadein_start`.
+        Any other cue never emits `fadein_start`; it reads the
+        duration (if at all) inside its start, before `started`.
+        """
+        can_fade = getattr(cue, "_can_fade", None)
+        if callable(can_fade) and can_fade():
+            return cue.fadein_start
+        return cue.started
 
     def _flush_pending_restores(self):
         """Put back every crossfade fade duration still pending.

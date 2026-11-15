@@ -389,8 +389,11 @@ def test_6_crossfade(ids, group_id):
 
     stop_all()
 
-    # 6d: Stopping the group mid-crossfade must still put both
-    # durations back, not leave the crossfade value to be saved.
+    # 6d: Stopping the group mid-crossfade leaves both durations
+    # restored, not the crossfade value to be saved. Here the
+    # children's own stop signals restore them; the group's flush
+    # (for children that never emit one) is covered by the unit
+    # tests in tests/plugins/action_cues/.
     call("cue.execute", {"id": group_id, "action": "Start"})
     wait_state(A, "Running", timeout=5)
     call("cue.seek", {"id": A, "position": 5500})
@@ -401,9 +404,9 @@ def test_6_crossfade(ids, group_id):
           wait_state(group_id, "Stop", timeout=5))
     _wait_prop(A, "fadeout_duration", 0, timeout=5)
     _wait_prop(B, "fadein_duration", 0, timeout=5)
-    check("6d: A fadeout_duration restored after group stop",
+    check("6d: A fadeout_duration back to 0 after group stop",
           cue_prop(A, "fadeout_duration") == 0)
-    check("6d: B fadein_duration restored after group stop",
+    check("6d: B fadein_duration back to 0 after group stop",
           cue_prop(B, "fadein_duration") == 0)
 
     stop_all()

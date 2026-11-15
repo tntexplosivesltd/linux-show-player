@@ -306,6 +306,7 @@ class TestCrossfadePreservation:
         c1.current_time = MagicMock(return_value=9500)
         c2 = _make_child("c2")
         c2.fadein_duration = 0
+        c2.CueActions = (CueAction.Start, CueAction.FadeInStart)
         mock_app.cue_model.get = lambda cid: {
             "c1": c1, "c2": c2
         }.get(cid)
