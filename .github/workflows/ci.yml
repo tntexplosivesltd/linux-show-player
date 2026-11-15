@@ -119,6 +119,11 @@ jobs:
         with:
           # code = any changed path that is NOT markdown and NOT under
           # docs/. A docs/markdown-only change yields code == 'false'.
+          # `every`: a file counts only if it matches ALL the patterns
+          # below. The default (`some`) lets '**' alone match every
+          # file, so the '!' exclusions never applied and docs-only PRs
+          # ran the E2E job anyway (seen on PR #21).
+          predicate-quantifier: 'every'
           filters: |
             code:
               - '**'
