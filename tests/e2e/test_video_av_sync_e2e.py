@@ -14,8 +14,12 @@ keeps those stamps, so the two files share a time base without any
 start-up skew. (One process with both inputs does NOT work: x11grab
 paces itself by sleeping in the shared read loop, which starves the
 pulse input — dropped video frames and bunched audio timestamps.)
-Each flash onset is paired with the nearest beep onset and
-|flash − beep| must be within TOL_MS.
+Each flash onset is paired with the nearest beep onset, and the
+MEDIAN pair skew (flash − beep) must be within TOL_MS. A real sync
+error shifts every pair alike; the CI container's screen capture
+alone can see any single flash 1-3 frames (17-50 ms) late under load
+(2026-11-15: 950 ms flash gap with the pump on time), and the pump's
+own late-frame check (below) covers individual late frames.
 
 Beeps are timed on the SAMPLE CLOCK, not on the pulse demuxer's
 per-packet stamps. Those stamps are wall clock minus a latency
@@ -362,8 +366,10 @@ def run_tests(t):
           f"{[round((b - a) * 1000) for a, b in zip(beeps, beeps[1:])]}")
     print(f"  A/V skew ms (video − audio): {[round(s, 1) for s in skews]}")
     t.check("flash/beep pairs found", len(skews) >= MIN_PAIRS)
-    t.check(f"A/V sync within {TOL_MS} ms",
-            bool(skews) and max(abs(s) for s in skews) <= TOL_MS)
+    if skews:
+        print(f"  median skew ms: {statistics.median(skews):.1f}")
+    t.check(f"A/V sync within {TOL_MS} ms (median pair)",
+            bool(skews) and abs(statistics.median(skews)) <= TOL_MS)
 
 
 if __name__ == "__main__":
