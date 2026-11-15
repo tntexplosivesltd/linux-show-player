@@ -332,6 +332,10 @@ class TestVideoSinkPump:
         comp = MagicMock()
         comp.pipeline.get_base_time.return_value = 10000 * Gst.MSECOND
         comp.latency.return_value = 86 * Gst.MSECOND
+        # Up to the projection sink: L_proj minus its 15ms processing
+        # deadline. A frame stamped pts must reach the mixer by
+        # pts + 71ms.
+        comp.slot_latency.return_value = 71 * Gst.MSECOND
         # Projection "now" = 3.4s: the 3414ms sample is 14ms ahead.
         comp.clock.return_value.get_time.return_value = (
             13400 * Gst.MSECOND)
@@ -407,7 +411,8 @@ class TestVideoSinkPump:
         assert "pump failed" not in caplog.text
 
     def test_on_time_frame_is_counted_not_late(self):
-        # pts 3414ms + L_proj 86ms = its slot at 3500ms; now is 3400ms.
+        # pts 3414ms + slot latency 71ms = its slot at 3485ms; now is
+        # 3400ms.
         sink, comp, reg, buf, _, appsink = self._setup()
         self._run(sink, appsink, n=2)
         assert reg.timed_frames == 2
@@ -415,7 +420,7 @@ class TestVideoSinkPump:
         assert reg.last_late_rt is None
 
     def test_frame_past_its_slot_is_counted_late(self):
-        # now 3600ms > slot 3500ms: the mixer has already composited
+        # now 3600ms > slot 3485ms: the mixer has already composited
         # that output frame, so this one is shown late (or not at all).
         sink, comp, reg, buf, _, appsink = self._setup()
         comp.clock.return_value.get_time.return_value = (
@@ -425,15 +430,39 @@ class TestVideoSinkPump:
         assert reg.late_frames == 1
         assert reg.last_late_rt == 2000 * Gst.MSECOND
 
+    def test_slot_is_the_mixers_not_the_sinks(self):
+        # now 3490ms: past the mixer's slot (3485ms) but before
+        # pts + L_proj (3500ms), which includes the sink's processing
+        # deadline downstream of the mixer. Late.
+        sink, comp, reg, buf, _, appsink = self._setup()
+        comp.clock.return_value.get_time.return_value = (
+            13490 * Gst.MSECOND)
+        self._run(sink, appsink)
+        assert reg.late_frames == 1
+
+    def test_lateness_uses_the_clock_after_the_latency_queries(self):
+        # The cue latency query runs between the first clock read and
+        # the late test; a frame that turned late meanwhile counts.
+        sink, comp, reg, buf, _, appsink = self._setup()
+        comp.clock.return_value.get_time.side_effect = [
+            13400 * Gst.MSECOND, 13600 * Gst.MSECOND]
+        self._run(sink, appsink)
+        assert reg.late_frames == 1
+
     def test_frame_due_before_projection_start_is_counted_late(self):
+        # pts = 20ms + 0 + (0 - 86ms) = -66ms: dropped (a buffer PTS
+        # cannot be negative), so never shown. Late even though
+        # pts + slot latency (5ms) is not yet past now (3ms).
         sink, comp, reg, buf, sample, appsink = self._setup()
         comp.pipeline.get_base_time.return_value = 11500 * Gst.MSECOND
         comp.clock.return_value.get_time.return_value = (
-            11510 * Gst.MSECOND)
-        sample.get_segment.return_value.to_running_time.return_value = 0
-        self._run(sink, appsink)  # pts < 0: dropped
+            11503 * Gst.MSECOND)
+        sample.get_segment.return_value.to_running_time.return_value = (
+            20 * Gst.MSECOND)
+        self._run(sink, appsink)
+        reg.appsrc.push_buffer.assert_not_called()
         assert (reg.timed_frames, reg.late_frames) == (1, 1)
-        assert reg.last_late_rt == 0
+        assert reg.last_late_rt == 20 * Gst.MSECOND
 
     def test_preroll_frame_is_not_timed(self):
         sink, comp, reg, buf, _, appsink = self._setup()
@@ -758,6 +787,7 @@ class TestPumpRealTiming:
         comp.pipeline = proj
         comp.clock.return_value = clock
         comp.latency.side_effect = lambda: vc.query_min_latency(proj)
+        comp.slot_latency.side_effect = comp.latency.side_effect
         comp.register.return_value = reg
 
         def fit(r, caps):
@@ -877,6 +907,7 @@ class TestVideoEnded:
         comp.pipeline.get_base_time.return_value = 0
         comp.clock.return_value = clock
         comp.latency.return_value = 0
+        comp.slot_latency.return_value = 0
         reg = vc.Registration()
         reg.appsrc = MagicMock()
         comp.register.return_value = reg

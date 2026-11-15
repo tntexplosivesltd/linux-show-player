@@ -153,6 +153,22 @@ def query_min_latency(pipeline):
     return min_latency
 
 
+def sink_processing_deadline(sink):
+    """The projection sink's processing-deadline (ns): the part of the
+    projection's min latency reserved downstream of the mixer. Reads
+    the GstBaseSink itself or, for a bin (glimagesink is a
+    GstGLImageSinkBin), its "sink" child; 0 when neither has one."""
+    if sink is None:
+        return 0
+    if sink.find_property("processing-deadline") is None:
+        if sink.find_property("sink") is None:
+            return 0
+        sink = sink.get_property("sink")
+        if sink is None or sink.find_property("processing-deadline") is None:
+            return 0
+    return sink.get_property("processing-deadline")
+
+
 def projection_pts(running_time, cue_base, proj_base, latency_offset):
     """Map a cue buffer's running-time onto the projection pipeline.
 
@@ -246,7 +262,8 @@ class Registration:
         self.push_warned = False  # a failed push was logged
         # Pump timing (read by the harness's video.stats): timed frames
         # mapped, how many reached the projection after their output
-        # slot (now > pts + L_proj), and the cue running time (ns) of
+        # slot (now > pts + slot_latency(), or pts < 0), and the cue
+        # running time (ns) of
         # the last such frame — None while every frame was on time.
         self.timed_frames = 0
         self.late_frames = 0
@@ -445,6 +462,10 @@ class VideoCompositor:
         # None = re-query on the next latency() call.
         self._latency = None
         self._latency_at = 0
+        # The projection sink's processing-deadline, read at build:
+        # latency() minus this is when the mixer composites a frame
+        # time (see slot_latency()).
+        self._sink_deadline = 0
         # Emitted on the main loop. failed: a runtime error killed the
         # projection pipeline and a rebuild is scheduled. restored: a
         # rebuild succeeded; registrations were dropped with the old
@@ -511,6 +532,14 @@ class VideoCompositor:
             self._latency = latency
             self._latency_at = now
         return latency
+
+    def slot_latency(self):
+        """Latency (ns) up to the projection sink's input: the mixer
+        composites output time T at T + this, so a cue frame stamped T
+        must reach it by then. latency() also counts the sink's
+        processing deadline, which lies downstream of the mixer
+        (measured, GStreamer 1.24 glimagesink: 81.7 = 66.7 + 15ms)."""
+        return max(0, self.latency() - self._sink_deadline)
 
     def _invalidate_latency(self):
         # Lock-free on purpose: a single attribute store is atomic, and
@@ -927,6 +956,7 @@ class VideoCompositor:
             # Before any set_property on them.
             logger.warning("VideoCompositor: element creation failed")
             return False
+        self._sink_deadline = sink_processing_deadline(self._proj_sink)
 
         bg.set_property("pattern", 2)  # black
         bg.set_property("is-live", True)
