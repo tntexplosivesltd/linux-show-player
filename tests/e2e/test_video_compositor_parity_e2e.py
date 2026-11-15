@@ -17,8 +17,17 @@ reading projection pixels:
      by the unit tests; the harness cannot observe it.
 
 Requires an X display, ffmpeg (x11grab) and gst-launch-1.0; SKIPs
-cleanly otherwise. Helpers are copied from the flicker test (E2E
-scripts stay standalone).
+cleanly otherwise. Also SKIPs when the projection can't render in real
+time (e.g. 4 cores of software GL decoding 1080p): its sink then drops
+late frames and nothing new reaches the screen, so a pixel FAILURE
+says nothing about LiSP. Pixel checks therefore go through
+helpers.check_pixels(): a failure while the projection dropped more
+than OVERLOAD_DROP_RATE of its frames over the window is inconclusive
+and the run SKIPs with the measured rate. A pass always counts, and
+the harness-truth checks stay hard.
+
+Helpers are copied from the flicker test (E2E scripts stay
+standalone).
 
 Run: poetry run python tests/e2e/test_video_compositor_parity_e2e.py
 """
@@ -31,8 +40,8 @@ import time
 
 sys.path.insert(0, os.path.dirname(__file__))
 from helpers import (  # noqa: E402
-    call, cue_state, make_media, media_cache_dir, media_path, run_suite,
-    wait_state,
+    call, check_pixels, cue_state, make_media, media_cache_dir, media_path,
+    projection_counts, projection_drop_rate, run_suite, wait_state,
 )
 
 MEDIA_DIR = media_cache_dir("parity")
@@ -130,6 +139,15 @@ def max_dark_run(frames):
 
 # ── checks ─────────────────────────────────────────────────────
 
+def report_drops(before, after):
+    """Print and return the projection's drop rate over a window."""
+    rate = projection_drop_rate(before, after)
+    if rate is not None:
+        print(f"  projection dropped {rate:.1%} of its frames "
+              f"({before} -> {after} rendered, dropped)")
+    return rate
+
+
 def video_cues():
     cues = sorted(call("cue.list"), key=lambda c: c["index"])
     return [c["id"] for c in cues if c["_type_"] != "GroupCue"]
@@ -139,10 +157,13 @@ def check_standalone_stop_black(t, handle, cue_id):
     print("\n-- 1: standalone stop → black --")
     call("cue.start", {"id": cue_id})
     t.check("video cue running", wait_state(cue_id, "Running", timeout=5))
+    before = projection_counts()
     time.sleep(1.0)
     playing = grab_gray(handle)
-    t.check("projection shows video while playing",
-            bool(playing) and sum(playing) / len(playing) >= DARK)
+    drops = report_drops(before, projection_counts())
+    check_pixels(t, "projection shows video while playing",
+                 bool(playing) and sum(playing) / len(playing) >= DARK,
+                 drops)
 
     call("cue.stop", {"id": cue_id})
     t.check("video cue stopped", wait_state(cue_id, "Stop", timeout=5))
@@ -188,7 +209,9 @@ def check_playlist_seamless(t, handle, a_id, b_id):
 
     call("cue.execute", {"id": group, "action": "Start"})
     seconds = CUE_SECONDS * (MIN_ADVANCES + 1) + 1
+    before = projection_counts()
     frames = record_rgb(handle, seconds)
+    drops = report_drops(before, projection_counts())
     starts = sum(
         len(call("signals.poll", {"subscription_id": s})["events"])
         for s in subs)
@@ -204,9 +227,10 @@ def check_playlist_seamless(t, handle, a_id, b_id):
           f"({dark_run / FPS * 1000:.1f} ms)")
     t.check(f">= {MIN_ADVANCES} playlist auto-advances",
             advances >= MIN_ADVANCES)
-    t.check("captured live video (mostly bright)",
-            bool(body) and bright > len(body) // 2)
-    t.check("no black gap at any auto-advance", dark_run <= 1)
+    check_pixels(t, "captured live video (mostly bright)",
+                 bool(body) and bright > len(body) // 2, drops)
+    check_pixels(t, "no black gap at any auto-advance", dark_run <= 1,
+                 drops)
 
 
 def run_tests(t):

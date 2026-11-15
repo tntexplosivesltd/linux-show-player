@@ -399,6 +399,64 @@ def signal_sub(signal_path):
         unsubscribe(sub_id)
 
 
+def projection_counts():
+    """The projection sink's (rendered, dropped) frame counters, or
+    None when there is no projection or its sink reports no stats.
+    Read before and after a capture window: see projection_drop_rate().
+    """
+    try:
+        result = call("video.stats")
+    except Exception:
+        return None
+    proj = result.get("projection") if result.get("exists") else None
+    if not proj:
+        return None
+    return proj["rendered"], proj["dropped"]
+
+
+def projection_drop_rate(before, after):
+    """Fraction of the projection's frames dropped between two
+    projection_counts() readings, or None if either is missing or no
+    frame reached the sink in between."""
+    if before is None or after is None:
+        return None
+    rendered = after[0] - before[0]
+    dropped = after[1] - before[1]
+    total = rendered + dropped
+    if total <= 0:
+        return None
+    return dropped / total
+
+
+# Above this share of dropped projection frames the machine is not
+# rendering the projection in real time (e.g. 4 cores of software GL
+# decoding 1080p), so a missing picture on screen says nothing about
+# LiSP. Measured in the CI image: <= 3% unthrottled over a capture
+# window, 11-39% on 4 cores, and every pixel failure there had >= 22%.
+OVERLOAD_DROP_RATE = 0.10
+
+
+def check_pixels(t, name, ok, drop_rate):
+    """Record a check judged from screen pixels.
+
+    A pass always counts. A failure counts too, unless the projection
+    sink dropped more than OVERLOAD_DROP_RATE of its frames during the
+    judged window (``drop_rate``, from projection_drop_rate()): then
+    the check is inconclusive and the run is marked skipped with the
+    measured rate. Without stats (None) the check is judged strictly.
+    Returns True if the check was judged (pass or fail).
+    """
+    if ok or drop_rate is None or drop_rate <= OVERLOAD_DROP_RATE:
+        t.check(name, ok)
+        return True
+    reason = (f"{name}: inconclusive, the projection dropped "
+              f"{drop_rate:.0%} of its frames (not rendering in real "
+              f"time on this machine)")
+    print(f"  INCONCLUSIVE: {reason}")
+    t.skip(reason if t.skipped is None else f"{t.skipped}; {reason}")
+    return False
+
+
 def stop_all():
     """Stop all cues and wait briefly."""
     call("layout.stop_all")

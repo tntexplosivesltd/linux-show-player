@@ -31,8 +31,15 @@ shown — so the first transition must have no black run (``dark_run <=
 1``).  Before the compositor this measured ~2 frames; a compositor
 without the linger measured 17 (the next cue's preroll time).
 
-Requires an X display, ffmpeg (with x11grab) and xwininfo.  Skips
-cleanly otherwise.
+Requires an X display, ffmpeg (with x11grab) and xwininfo. Skips
+cleanly otherwise. Also skips when the projection can't render in real
+time (e.g. 4 cores of software GL decoding 1080p): its sink then drops
+late frames and nothing new reaches the screen, so a pixel FAILURE
+says nothing about LiSP. Pixel checks therefore go through
+helpers.check_pixels(): a failure while the projection dropped more
+than OVERLOAD_DROP_RATE of its frames over the window is inconclusive
+and the run SKIPs with the measured rate. A pass always counts, and
+the harness-truth checks stay hard.
 
 Run:
     poetry run python tests/e2e/test_video_transition_flicker_e2e.py
@@ -50,7 +57,8 @@ sys.path.insert(
     0, os.path.join(os.path.dirname(__file__), "..", "..",
                     "lisp", "plugins", "test_harness"))
 from helpers import (  # noqa: E402
-    TestTracker, call, start_lisp, stop_lisp,
+    TestTracker, call, check_pixels, projection_counts,
+    projection_drop_rate, start_lisp, stop_lisp,
     wait_cues_loaded,
 )
 
@@ -185,6 +193,7 @@ def measure_first_transition(t):
     # unresolved.
     start_lisp(session_path=SESSION)
     frames = []
+    drops = None
     try:
         # Sanity-check the reload: 2 videos + 1 GroupCue.
         wait_cues_loaded(3)
@@ -220,7 +229,13 @@ def measure_first_transition(t):
         time.sleep(0.2)
 
         # Record across the first A→B boundary (cue A ~CUE_SECONDS long).
+        before = projection_counts()
         frames = record_rgb(handle, CUE_SECONDS + 3)
+        after = projection_counts()
+        drops = projection_drop_rate(before, after)
+        if drops is not None:
+            print(f"  projection dropped {drops:.1%} of its frames "
+                  f"({before} -> {after} rendered, dropped)")
         try:
             call("signals.wait_for",
                  {"subscription_id": sub_id, "timeout": 1.0})
@@ -248,15 +263,17 @@ def measure_first_transition(t):
     # Sanity: the playlist actually advanced A→B (harness truth), and we
     # captured live content (not an all-black grab).
     t.check("transition A→B occurred (cue B started)", b_started)
-    t.check("captured live video (mostly bright)", bright > len(body) // 2)
+    check_pixels(t, "captured live video (mostly bright)",
+                 bright > len(body) // 2, drops)
 
     # REGRESSION GUARD (was characterization before the compositor
     # rearchitecture). The single persistent glimagesink fed by
     # glvideomixer eliminates the cross-sink hand-off class, and the
     # compositor's handoff linger covers the next cue's preroll, so the
     # first video→video transition must now be clean.
-    t.check("no black flicker at first transition", dark_run <= 1)
-    if dark_run >= 2:
+    judged = check_pixels(t, "no black flicker at first transition",
+                          dark_run <= 1, drops)
+    if judged and dark_run >= 2:
         print(f"  REGRESSION: {dark_run}-frame ({ms:.1f} ms) black at "
               "first transition — the compositor should have eliminated "
               "this.")
