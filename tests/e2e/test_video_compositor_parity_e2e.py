@@ -140,6 +140,24 @@ def max_dark_run(frames):
     return best
 
 
+def dark_run_start(frames):
+    """Index of the first frame of the longest dark run (None if no
+    frame is dark). Diagnostic only: tells a black start (the first
+    picture late) from a gap later on in the CI log."""
+    run = best = 0
+    start = best_start = None
+    for i, f in enumerate(frames):
+        if luma(f) < DARK:
+            if run == 0:
+                start = i
+            run += 1
+            if run > best:
+                best, best_start = run, start
+        else:
+            run = 0
+    return best_start
+
+
 # ── checks ─────────────────────────────────────────────────────
 
 def measure_load(before):
@@ -226,6 +244,11 @@ def check_playlist_seamless(t, handle, a_id, b_id):
     print(f"  advances={advances} bright={bright}/{len(body)} "
           f"max_dark_run={dark_run} frames "
           f"({dark_run / FPS * 1000:.1f} ms)")
+    start = dark_run_start(body)
+    if start is not None:
+        print(f"  longest dark run starts "
+              f"{(SETTLE_FRAMES + start) / FPS * 1000:.0f} ms into the "
+              f"capture (judged from {SETTLE_FRAMES / FPS * 1000:.0f} ms)")
     t.check(f">= {MIN_ADVANCES} playlist auto-advances",
             advances >= MIN_ADVANCES)
     check_pixels(t, "captured live video (mostly bright)",
