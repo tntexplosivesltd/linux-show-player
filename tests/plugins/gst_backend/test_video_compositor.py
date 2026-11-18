@@ -2073,6 +2073,69 @@ class TestProcessingDeadline:
         assert vc.sink_processing_deadline(None) == 0
 
 
+class TestDrawLateFrames:
+    """A late frame is drawn, not dropped: under overload the sink
+    would otherwise drop nearly every frame and show black."""
+
+    @staticmethod
+    def _video_sink():
+        # fakevideosink drops late frames like glimagesink (default
+        # max-lateness 5 ms); fakesink already defaults to -1.
+        import pytest
+
+        sink = vc.Gst.ElementFactory.make("fakevideosink", None)
+        if sink is None:
+            pytest.skip("no fakevideosink")
+        assert sink.get_property("max-lateness") == 5 * vc.Gst.MSECOND
+        return sink
+
+    def test_sets_a_base_sink(self):
+        sink = self._video_sink()
+        assert vc.draw_late_frames(sink) is True
+        assert sink.get_property("max-lateness") == -1
+
+    def test_sets_a_bins_sink_child(self):
+        child = self._video_sink()
+        bin_ = MagicMock()
+        bin_.find_property.side_effect = (
+            lambda name: object() if name == "sink" else None)
+        bin_.get_property.return_value = child
+        assert vc.draw_late_frames(bin_) is True
+        assert child.get_property("max-lateness") == -1
+
+    def test_false_when_unknown(self):
+        bin_ = MagicMock()
+        bin_.find_property.return_value = None
+        assert vc.draw_late_frames(bin_) is False
+        assert vc.draw_late_frames(None) is False
+
+    def test_leaves_qos_alone(self):
+        # QoS is what makes the mixer skip frames to catch up; drawing
+        # late frames without it would let the lag grow.
+        sink = self._video_sink()
+        sink.set_property("qos", True)
+        vc.draw_late_frames(sink)
+        assert sink.get_property("qos") is True
+
+    def test_build_and_rebuild_set_the_projection_sink(self):
+        self._video_sink()
+        plan = {"gl": False, "upload": None, "mixer": "compositor",
+                "sink": "fakevideosink"}
+        out, mon = _fake_windows()
+        with patch.object(vc, "plan_pipeline", return_value=plan):
+            comp = vc.VideoCompositor(out, mon, canvas_size=(64, 48))
+            try:
+                assert comp.available is True
+                first = comp._proj_sink
+                assert first.get_property("max-lateness") == -1
+                comp._teardown()
+                assert comp._build(wait=False) is True
+                assert comp._proj_sink is not first
+                assert comp._proj_sink.get_property("max-lateness") == -1
+            finally:
+                comp.shutdown()
+
+
 _SOFTWARE_PLAN = {"gl": False, "upload": None, "mixer": "compositor",
                   "sink": "fakesink"}
 _GL_PLAN = {"gl": True, "upload": "glupload ! glcolorconvert",

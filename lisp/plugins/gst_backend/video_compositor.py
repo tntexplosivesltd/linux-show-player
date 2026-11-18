@@ -169,6 +169,33 @@ def sink_processing_deadline(sink):
     return sink.get_property("processing-deadline")
 
 
+def draw_late_frames(sink):
+    """Make the projection sink draw a late frame instead of dropping
+    it (max-lateness -1). Returns whether it could.
+
+    A sink drops any frame more than max-lateness (glimagesink: 5 ms)
+    past its render time. When the machine cannot composite in real
+    time every frame is late, so the sink drops nearly all of them and
+    the projection goes black for seconds at a cue's start (measured
+    on 4 cores, software GL: 12-93% dropped, black runs to 983 ms).
+    Drawn late, the picture stutters instead. QoS stays on, so the
+    sink still reports lateness upstream and the mixer skips output
+    frames to catch up: the lag stays bounded (A/V skew within 20 ms
+    in the same runs). On a machine that keeps up nothing is late, so
+    nothing changes. Sets the GstBaseSink itself or, for a bin, its
+    "sink" child (as sink_processing_deadline() reads it)."""
+    if sink is None:
+        return False
+    if sink.find_property("max-lateness") is None:
+        if sink.find_property("sink") is None:
+            return False
+        sink = sink.get_property("sink")
+        if sink is None or sink.find_property("max-lateness") is None:
+            return False
+    sink.set_property("max-lateness", -1)
+    return True
+
+
 def projection_pts(running_time, cue_base, proj_base, latency_offset):
     """Map a cue buffer's running-time onto the projection pipeline.
 
@@ -957,6 +984,7 @@ class VideoCompositor:
             logger.warning("VideoCompositor: element creation failed")
             return False
         self._sink_deadline = sink_processing_deadline(self._proj_sink)
+        draw_late_frames(self._proj_sink)
 
         bg.set_property("pattern", 2)  # black
         bg.set_property("is-live", True)
