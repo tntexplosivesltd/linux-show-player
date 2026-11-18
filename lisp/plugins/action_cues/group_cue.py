@@ -76,6 +76,12 @@ class GroupCue(Cue):
         # this is what keeps each one-shot restore alive. Guarded by
         # _lock.
         self._pending_restores = {}
+        # Restores released but not yet applied on the main thread, as
+        # {(cue_id, attr): (held_value, original)}. Until applied, the
+        # child still carries the held value; `_start_child` reads
+        # through it so a quick re-GO doesn't use the crossfade
+        # duration as the child's own fade-in. Guarded by _lock.
+        self._restoring = {}
         # Restores are triggered on worker threads; the property write
         # itself is queued to the main thread, because property_changed
         # listeners (e.g. the inspector) expect the main thread.
@@ -340,8 +346,7 @@ class GroupCue(Cue):
         self._start_child(child)
         self._arm_crossfade_if_needed(index, children)
 
-    @staticmethod
-    def _start_child(child):
+    def _start_child(self, child):
         """Start (or resume, if paused) a child with its OWN fade-in.
 
         The group's own `fade` flag is deliberately not consulted: it
@@ -355,10 +360,26 @@ class GroupCue(Cue):
         else:
             plain, faded = CueAction.Start, CueAction.FadeInStart
 
-        if child.fadein_duration > 0 and faded in child.CueActions:
+        if self._own_fadein(child) > 0 and faded in child.CueActions:
             child.execute(faded)
         else:
             child.execute(plain)
+
+    def _own_fadein(self, child):
+        """The child's fade-in, minus any crossfade hold that has been
+        released but whose restore hasn't run yet on the main thread
+        (e.g. GO pressed right after stopping the group mid-crossfade).
+
+        Only seen through while the value is still the held one, so an
+        edit made after the hold wins. The child itself isn't written
+        here: `_apply_restore` does that, on the main thread.
+        """
+        value = child.fadein_duration
+        with self._lock:
+            held = self._restoring.get((child.id, "fadein_duration"))
+        if held is not None and value == held[0]:
+            return held[1]
+        return value
 
     def _arm_crossfade_if_needed(self, index, children):
         """Arm the crossfade monitor if there is a next child."""
@@ -548,6 +569,7 @@ class GroupCue(Cue):
                 if self._pending_restores.get(key) is not restore:
                     return
                 del self._pending_restores[key]
+                self._restoring[key] = (value, original)
             for signal in signals:
                 signal.disconnect(restore)
             self._request_restore.emit(cue, attr, value, original)
@@ -561,12 +583,15 @@ class GroupCue(Cue):
         setattr(cue, attr, value)
         return restore
 
-    @staticmethod
-    def _apply_restore(cue, attr, value, original):
+    def _apply_restore(self, cue, attr, value, original):
         """Main thread: put ``original`` back, unless the value was
         changed by someone else since the hold."""
         if getattr(cue, attr) == value:
             setattr(cue, attr, original)
+        with self._lock:
+            key = (cue.id, attr)
+            if self._restoring.get(key) == (value, original):
+                del self._restoring[key]
 
     @staticmethod
     def _fadein_read_signal(cue):

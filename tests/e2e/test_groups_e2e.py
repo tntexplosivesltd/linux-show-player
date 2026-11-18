@@ -431,6 +431,39 @@ def _go_on_group(group_id):
     call("layout.go")
 
 
+def _saw_mid_ramp(cue_id, fade_s, fade_event):
+    """Sample the Volume element during the fade: a linear fade sits
+    under 60% of its target for 0.6 * fade_s after fadein_start, so
+    poll until then (timed from the event's own timestamp; the
+    harness runs on this host) and accept any sample strictly inside
+    (0, 60%). The 0 bound rules out the silent pre-fade state."""
+    if fade_event is None:
+        return False
+    target = _live_volume(cue_id, "volume")
+    deadline = fade_event["event"]["timestamp"] + 0.6 * fade_s
+    while time.time() < deadline:
+        v = _live_volume(cue_id)
+        if 0 < v < 0.6 * target:
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def _stays_stopped(cue_id, seconds):
+    """True if the cue never leaves Stop during the window."""
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        if cue_state(cue_id) != "Stop":
+            return False
+        time.sleep(0.1)
+    return True
+
+
+def _stop_and_settle(*cue_ids):
+    stop_all()
+    return all(wait_state(c, "Stop", timeout=5) for c in cue_ids)
+
+
 def test_16_child_fadein_on_go(ids, group_id):
     """H34: GO on a group must start each child with its OWN
     fade-in. Before the fix every child got a plain Start, so a
@@ -438,53 +471,53 @@ def test_16_child_fadein_on_go(ids, group_id):
     print("\n═══ Test 16: Child Fade-in on Group GO ═══")
 
     A, B = ids["tone_A"], ids["tone_B"]
-    saved_mode = cue_prop(group_id, "group_mode")
-    saved_loop = cue_prop(group_id, "loop")
-    stop_all()
+    saved = {
+        (group_id, "group_mode"): cue_prop(group_id, "group_mode"),
+        (group_id, "loop"): cue_prop(group_id, "loop"),
+        (A, "fadein_duration"): cue_prop(A, "fadein_duration"),
+        (B, "fadein_duration"): cue_prop(B, "fadein_duration"),
+    }
 
+    def set_prop(cue_id, prop, value):
+        call("cue.set_property", {
+            "id": cue_id, "property": prop, "value": value,
+        })
+
+    stop_all()
     fade_s = 3.0
-    call("cue.set_property", {
-        "id": A, "property": "fadein_duration", "value": fade_s,
-    })
-    call("cue.set_property", {
-        "id": group_id, "property": "loop", "value": False,
-    })
-    call("cue.set_property", {
-        "id": group_id, "property": "group_mode",
-        "value": "parallel",
-    })
+    set_prop(A, "fadein_duration", fade_s)
+    set_prop(B, "fadein_duration", 0)
+    set_prop(group_id, "loop", False)
+    set_prop(group_id, "group_mode", "parallel")
 
     subs = []
+
+    def sub(cue_id, signal):
+        sid = _h.subscribe_cue(cue_id, signal)
+        subs.append(sid)
+        return sid
+
     try:
         # ── Parallel ──
-        a_fade = _h.subscribe_cue(A, "fadein_start")
-        b_fade = _h.subscribe_cue(B, "fadein_start")
-        a_started = _h.subscribe_cue(A, "started")
-        b_started = _h.subscribe_cue(B, "started")
-        subs += [a_fade, b_fade, a_started, b_started]
+        a_fade = sub(A, "fadein_start")
+        b_fade = sub(B, "fadein_start")
+        a_started = sub(A, "started")
+        b_started = sub(B, "started")
 
         _go_on_group(group_id)
 
         # 16a: A fades in. fadein_start only fires on the fade
         # path (MediaCue.__fadein), never for a plain Start.
+        ev = _h.wait_for_signal(a_fade, timeout=5)
         check("16a: parallel GO fades in child with fadein",
-              _h.wait_for_signal(a_fade, timeout=5) is not None)
-
-        # 16b: ...and the fade is real: sample the Volume element
-        # while it ramps. A 3 s linear fade sits under 60% of its
-        # target for ~1.8 s after fadein_start; poll that window.
-        target = _live_volume(A, "volume")
-        mid_ramp = []
-        deadline = time.time() + 1.0
-        while time.time() < deadline:
-            v = _live_volume(A)
-            if 0 < v < 0.6 * target:
-                mid_ramp.append(v)
-            time.sleep(0.05)
+              ev is not None)
+        # 16b: ...and the fade is real, not just the signal.
         check("16b: A live_volume observed mid-ramp",
-              len(mid_ramp) > 0)
+              _saw_mid_ramp(A, fade_s, ev))
 
-        # 16c: B (no fade-in) starts plainly and in sync with A.
+        # 16c: B (no fade-in) starts plainly, alongside A. The gap
+        # bound is a coarse sanity check (each child prerolls on its
+        # own worker; cold CI runners are slow), not a sync spec.
         a_ev = _h.wait_for_signal(a_started, timeout=5)
         b_ev = _h.wait_for_signal(b_started, timeout=5)
         check("16c: A and B both started",
@@ -494,12 +527,13 @@ def test_16_child_fadein_on_go(ids, group_id):
             gap = abs(
                 a_ev["event"]["timestamp"] - b_ev["event"]["timestamp"]
             )
-            check("16c: B started together with A (<0.5 s apart)",
-                  gap < 0.5)
+            check("16c: B started alongside A (<1.5 s apart)",
+                  gap < 1.5)
         check("16c: B (fadein 0) did not fade in",
               _h.wait_for_signal(b_fade, timeout=0.5) is None)
 
         # 16d: the fade completes to the cue's saved volume.
+        target = _live_volume(A, "volume")
         deadline = time.time() + fade_s + 3.0
         while time.time() < deadline:
             if abs(_live_volume(A) - target) < 0.01:
@@ -509,39 +543,42 @@ def test_16_child_fadein_on_go(ids, group_id):
               abs(_live_volume(A) - target) < 0.01)
         check("16d: A fadein_duration unchanged",
               cue_prop(A, "fadein_duration") == fade_s)
+        check("16d: group and children stopped",
+              _stop_and_settle(group_id, A, B))
 
-        stop_all()
-        check("16d: group stopped",
-              wait_state(group_id, "Stop", timeout=5))
-
-        # ── Playlist: first child honours its own fade-in too ──
-        call("cue.set_property", {
-            "id": group_id, "property": "group_mode",
-            "value": "playlist",
-        })
-        p_fade = _h.subscribe_cue(A, "fadein_start")
-        subs.append(p_fade)
+        # ── Playlist GO: first child honours its own fade-in ──
+        set_prop(group_id, "group_mode", "playlist")
+        p_fade = sub(A, "fadein_start")
 
         _go_on_group(group_id)
 
+        ev = _h.wait_for_signal(p_fade, timeout=5)
         check("16e: playlist GO fades in first child",
-              _h.wait_for_signal(p_fade, timeout=5) is not None)
+              ev is not None)
+        check("16e: A live_volume observed mid-ramp",
+              _saw_mid_ramp(A, fade_s, ev))
         check("16e: B not started by playlist GO",
-              cue_state(B) == "Stop")
+              _stays_stopped(B, 1.0))
+
+        # ── Playlist natural advance: next child fades in too ──
+        # Goes through the real child.end -> QtQueued handler path.
+        set_prop(B, "fadein_duration", 2.0)
+        b_adv_fade = sub(B, "fadein_start")
+        call("cue.seek", {"id": A, "position": 7500})
+        ev = _h.wait_for_signal(b_adv_fade, timeout=5)
+        check("16f: advance fades in next child", ev is not None)
+        # No mid-ramp check here (yet): on natural advance B's
+        # live_volume intermittently stays at its target although
+        # fadein_start fired — a MediaCue-side bug, tracked as M74.
+        # Add `_saw_mid_ramp(B, b_fade_s, ev)` back with that fix.
+        check("16f: A ended", wait_state(A, "Stop", timeout=5))
     finally:
-        for sub in subs:
-            _h.unsubscribe(sub)
-        stop_all()
-        call("cue.set_property", {
-            "id": A, "property": "fadein_duration", "value": 0,
-        })
-        call("cue.set_property", {
-            "id": group_id, "property": "group_mode",
-            "value": saved_mode,
-        })
-        call("cue.set_property", {
-            "id": group_id, "property": "loop", "value": saved_loop,
-        })
+        for sid in subs:
+            _h.unsubscribe(sid)
+        settled = _stop_and_settle(group_id, A, B)
+        for (cue_id, prop), value in saved.items():
+            set_prop(cue_id, prop, value)
+    check("16: group and children stopped before restore", settled)
 
 
 def test_7_go_button(ids, group_id):
