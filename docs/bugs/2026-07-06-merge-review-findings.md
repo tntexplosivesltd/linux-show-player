@@ -10,10 +10,10 @@ Generated 2026-07-06 from a 3-agent QA / security / code-review panel run over a
 | Severity | To-fix (still present, deduped) |
 |---|---:|
 | Critical | 1 |
-| High | 33 |
-| Medium | 71 |
+| High | 34 |
+| Medium | 72 |
 | Low | 106 |
-| **Total** | **211** |
+| **Total** | **213** |
 
 _Also: 8 finding(s) already fixed on master, 1 not-applicable — see appendix._
 
@@ -23,7 +23,7 @@ _Also: 8 finding(s) already fixed on master, 1 not-applicable — see appendix._
   GroupCue playback (`__start__`, `_resolve_children`, `_resolve_playable_children` in lisp/plugins/action_cues/group_cue.py) iterates the GroupCue's own `children` Property (an explicit list of child ids) and looks each id up in cue_model — it does NOT scan the model for cues whose `group_id` equals the group's id. `Un…  
   _Fix:_ When promoting children to a grandparent, also splice the grandparent GroupCue's `children` list: replace the dissolved/removed group's id with the promoted child ids (preserving relative order), in both `UngroupCuesCommand.do()`/`undo()` and `CueModel.pop()`'s safety-net loop (guard with `isinstance(parent, GroupCue)` since a plain '' top-level parent has no children list to touch). Add tests th…
 
-## High (33)
+## High (34)
 
 - [ ] **H1** · `lisp/ui/settings/cue_pages/cue_general.py:548` · _162ec1d9 (qa)_ — **cue_number inclusion gated on QWidget.isVisible(), which is False whenever the General tab isn't the active tab**  
   getSettings() only adds `cue_number` when `self.cueNumberGroup.isVisible()` is True, instead of using the codebase's established `isGroupEnabled()`/checkable-group pattern used for every other field. QWidget.isVisible() reflects on-screen visibility, not the checkable-enabled state used elsewhere. I verified empirical…  
@@ -124,8 +124,11 @@ _Also: 8 finding(s) already fixed on master, 1 not-applicable — see appendix._
 - [ ] **H33** · `lisp/cues/pre_arm_manager.py:598` · _f5f9f3f5 (qa)_ — **Re-seek uses cue.start_time, which does not exist on real Cue objects**  
   on_start_time_changed() calls `cue.media.reseek(cue.start_time)`. `start_time` is a Property defined only on `Media` (lisp/backend/media.py:52) — it is never defined on `Cue`/`MediaCue` (confirmed: `grep -rn 'start_time = Property'` only matches backend/media.py). The wiring code two methods above (`_wire_cue_signals`…  
   _Fix:_ Change to `cue.media.reseek(cue.media.start_time)`. Add a regression unit test using a cue built with `spec=` (or a real `MediaCue`+mock media) that does NOT expose `start_time` directly, so the test fails the way production code does; the current test (`test_start_time_change_reseeks_when_armed`) uses a bare `MagicMock()` cue where `cue.start_time = 2000` silently succeeds and masks the bug.
+- [x] **H34** · `lisp/plugins/action_cues/group_cue.py:344` · _found 2026-11-18 (Shore Dance 2026 show build)_ — **GO on a group never fades children in: every child gets a plain Start, ignoring its own `fadein_duration`** — fixed: `GroupCue._start_child` starts/resumes each child with `FadeInStart`/`FadeInResume` when the child has a fade-in and supports the action, else plain `Start`/`Resume`; used by both the parallel and playlist paths (GO, natural advance, loop). The group's own `fade` flag is no longer threaded through. Unit tests in `tests/cues/test_group_cue.py` (`TestParallelChildFadeIn`, `TestPlaylistChildFadeIn`); E2E `test_groups_e2e.py` §16 drives the real GO button and samples the child's `Volume.live_volume` mid-ramp (fails 3 checks without the fix).  
+  `_start_parallel` / `_play_child_at` only sent a child `FadeInStart`/`FadeInResume` when the group's `fade` argument was true. That argument is the group's OWN fade-in: GO runs the group's `default_start_action` (`Start` → `fade=False`), `GroupCue.CueActions` has no `FadeInStart`, and even `Cue.execute(FadeInStart)` passes `fade=self.fadein_duration > 0` — the group's fade-in, always 0. So no path ever faded a child in: a grouped backdrop image with a 1 s fade-in cut in at full alpha (probe `~/lisp-e2e-ci/probes/group_fadein_probe.py`: `live_alpha` 1.00 from the first sample). Playlist children are included now that H25's crossfade restores no longer leave a stale `fadein_duration` behind; the crossfade path already honoured a child's own fade-in.  
+  _Fix:_ Decide per child from the child's own `fadein_duration` and `CueActions`, never from the group's `fade` flag.
 
-## Medium (71)
+## Medium (72)
 
 - [ ] **M1** · `lisp/plugins/test_harness/handlers.py:438` · _00bc9852 (qa)_ — **Unvalidated generic setattr with no unit test coverage**  
   handle_layout_set_property does `setattr(app.layout, name, value)` with no allowlist and no check that `name` actually names a known ProxyProperty (e.g. `volume_indicators_visible`). If a test passes a mistyped or non-existent property name, Python silently creates a new instance attribute instead of raising, and the…  
@@ -340,6 +343,9 @@ _Also: 8 finding(s) already fixed on master, 1 not-applicable — see appendix._
 - [ ] **M71** · `lisp/plugins/gst_backend/gst_media.py:208` · _f5f9f3f5 (code)_ — **prearm/disarm/reseek mutate the GStreamer pipeline without the __init_lock serialization used elsewhere**  
   disarm() calls set_state(NULL) and reseek()/prearm() call __seek()/set_state on the pipeline, all reachable from main-thread signal handlers, while play()/stop() run on worker threads (Cue.start is @async_function). None of these new methods take __init_lock, which docs/threading.md establishes as the guard against co…  
   _Fix:_ Serialize prearm/disarm/reseek against play/stop on the same GstMedia (reuse __init_lock or a dedicated pipeline lock), or guarantee all pipeline state transitions for a given media occur on a single thread. At minimum, re-check state under the lock immediately before each set_state/seek.
+- [ ] **M73** · `lisp/plugins/action_cues/group_cue.py:689` · _found 2026-11-18 (H34 follow-up)_ — **Stopping or pausing a group ignores the children's own `fadeout_duration`**  
+  Mirror image of H34 on the stop side: `__stop__` / `__pause__` / `__interrupt__` send a child `FadeOutStop`/`FadeOutPause`/`FadeOutInterrupt` only when the group's `fade` is true, which again is the group's own fade-out (a GroupCue has none; the operator's stop runs `default_stop_action` = `Stop`). A child with its own fade-out is therefore always cut, never faded, when its group is stopped. Not needed by the Shore Dance shows (backdrops are faded out with direct StopCues), so left out of the H34 fix.  
+  _Fix:_ Same shape as `_start_child`: pick the fade-out action per child from its own `fadeout_duration` and `CueActions`. Decide explicitly whether Stop All / panic (`Interrupt`) should stay instant, and keep the playlist crossfade's held `fadeout_duration` (`_hold_fade`) from being flushed before a child's fade-out has read it.
 
 ## Low (106)
 

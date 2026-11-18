@@ -416,6 +416,134 @@ def test_6_crossfade(ids, group_id):
     })
 
 
+def _live_volume(cue_id, prop="live_volume"):
+    return call("cue.get_element_property", {
+        "id": cue_id, "element": "Volume", "property": prop,
+    })["value"]
+
+
+def _go_on_group(group_id):
+    """Press GO with the group as standby — the operator's path,
+    which runs the group's Default action (not FadeInStart)."""
+    call("layout.set_standby_index", {"index": 0})
+    check("16: group is the standby cue",
+          cue_at(0)["id"] == group_id)
+    call("layout.go")
+
+
+def test_16_child_fadein_on_go(ids, group_id):
+    """H34: GO on a group must start each child with its OWN
+    fade-in. Before the fix every child got a plain Start, so a
+    grouped backdrop with a 1 s fade-in cut in instead."""
+    print("\n═══ Test 16: Child Fade-in on Group GO ═══")
+
+    A, B = ids["tone_A"], ids["tone_B"]
+    saved_mode = cue_prop(group_id, "group_mode")
+    saved_loop = cue_prop(group_id, "loop")
+    stop_all()
+
+    fade_s = 3.0
+    call("cue.set_property", {
+        "id": A, "property": "fadein_duration", "value": fade_s,
+    })
+    call("cue.set_property", {
+        "id": group_id, "property": "loop", "value": False,
+    })
+    call("cue.set_property", {
+        "id": group_id, "property": "group_mode",
+        "value": "parallel",
+    })
+
+    subs = []
+    try:
+        # ── Parallel ──
+        a_fade = _h.subscribe_cue(A, "fadein_start")
+        b_fade = _h.subscribe_cue(B, "fadein_start")
+        a_started = _h.subscribe_cue(A, "started")
+        b_started = _h.subscribe_cue(B, "started")
+        subs += [a_fade, b_fade, a_started, b_started]
+
+        _go_on_group(group_id)
+
+        # 16a: A fades in. fadein_start only fires on the fade
+        # path (MediaCue.__fadein), never for a plain Start.
+        check("16a: parallel GO fades in child with fadein",
+              _h.wait_for_signal(a_fade, timeout=5) is not None)
+
+        # 16b: ...and the fade is real: sample the Volume element
+        # while it ramps. A 3 s linear fade sits under 60% of its
+        # target for ~1.8 s after fadein_start; poll that window.
+        target = _live_volume(A, "volume")
+        mid_ramp = []
+        deadline = time.time() + 1.0
+        while time.time() < deadline:
+            v = _live_volume(A)
+            if 0 < v < 0.6 * target:
+                mid_ramp.append(v)
+            time.sleep(0.05)
+        check("16b: A live_volume observed mid-ramp",
+              len(mid_ramp) > 0)
+
+        # 16c: B (no fade-in) starts plainly and in sync with A.
+        a_ev = _h.wait_for_signal(a_started, timeout=5)
+        b_ev = _h.wait_for_signal(b_started, timeout=5)
+        check("16c: A and B both started",
+              a_ev is not None and b_ev is not None)
+        if a_ev and b_ev:
+            # wait_for_signal returns the RPC result: {"event": ...}
+            gap = abs(
+                a_ev["event"]["timestamp"] - b_ev["event"]["timestamp"]
+            )
+            check("16c: B started together with A (<0.5 s apart)",
+                  gap < 0.5)
+        check("16c: B (fadein 0) did not fade in",
+              _h.wait_for_signal(b_fade, timeout=0.5) is None)
+
+        # 16d: the fade completes to the cue's saved volume.
+        deadline = time.time() + fade_s + 3.0
+        while time.time() < deadline:
+            if abs(_live_volume(A) - target) < 0.01:
+                break
+            time.sleep(0.1)
+        check("16d: A reached full volume after its fade",
+              abs(_live_volume(A) - target) < 0.01)
+        check("16d: A fadein_duration unchanged",
+              cue_prop(A, "fadein_duration") == fade_s)
+
+        stop_all()
+        check("16d: group stopped",
+              wait_state(group_id, "Stop", timeout=5))
+
+        # ── Playlist: first child honours its own fade-in too ──
+        call("cue.set_property", {
+            "id": group_id, "property": "group_mode",
+            "value": "playlist",
+        })
+        p_fade = _h.subscribe_cue(A, "fadein_start")
+        subs.append(p_fade)
+
+        _go_on_group(group_id)
+
+        check("16e: playlist GO fades in first child",
+              _h.wait_for_signal(p_fade, timeout=5) is not None)
+        check("16e: B not started by playlist GO",
+              cue_state(B) == "Stop")
+    finally:
+        for sub in subs:
+            _h.unsubscribe(sub)
+        stop_all()
+        call("cue.set_property", {
+            "id": A, "property": "fadein_duration", "value": 0,
+        })
+        call("cue.set_property", {
+            "id": group_id, "property": "group_mode",
+            "value": saved_mode,
+        })
+        call("cue.set_property", {
+            "id": group_id, "property": "loop", "value": saved_loop,
+        })
+
+
 def test_7_go_button(ids, group_id):
     print("\n═══ Test 7: GO Button Behavior ═══")
 
@@ -1039,6 +1167,7 @@ def main():
         test_4_playlist_mode(ids, group_id)
         test_5_playlist_loop(ids, group_id)
         test_6_crossfade(ids, group_id)
+        test_16_child_fadein_on_go(ids, group_id)
         test_7_go_button(ids, group_id)
         test_8_exclusive(ids, group_id)
         group_id = test_9_save_load(ids, group_id)

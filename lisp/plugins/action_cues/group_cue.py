@@ -280,11 +280,11 @@ class GroupCue(Cue):
             return False
 
         if self.group_mode == "parallel":
-            return self._start_parallel(children, fade)
+            return self._start_parallel(children)
         else:
-            return self._start_playlist(children, fade)
+            return self._start_playlist(children)
 
-    def _start_parallel(self, children, fade):
+    def _start_parallel(self, children):
         """Start all children simultaneously."""
         with self._lock:
             self._connected_children = set()
@@ -293,19 +293,11 @@ class GroupCue(Cue):
                 self._connect_child(child, parallel=True)
 
         for child in children:
-            if child.state & CueState.IsPaused:
-                if fade and child.fadein_duration > 0:
-                    child.execute(CueAction.FadeInResume)
-                else:
-                    child.execute(CueAction.Resume)
-            elif fade and child.fadein_duration > 0:
-                child.execute(CueAction.FadeInStart)
-            else:
-                child.execute(CueAction.Start)
+            self._start_child(child)
 
         return True
 
-    def _start_playlist(self, children, fade):
+    def _start_playlist(self, children):
         """Start first child in the playlist."""
         with self._lock:
             # If the current child is paused, resume from that
@@ -321,10 +313,10 @@ class GroupCue(Cue):
             self._connected_children = set()
             self._crossfade_armed = False
 
-        self._play_child_at(idx, children, fade)
+        self._play_child_at(idx, children)
         return True
 
-    def _play_child_at(self, index, children=None, fade=False):
+    def _play_child_at(self, index, children=None):
         """Start the child at the given playlist index."""
         if children is None:
             children = self._resolve_playable_children()
@@ -345,17 +337,28 @@ class GroupCue(Cue):
             self._playlist_index = index
             self._connect_child(child, parallel=False)
 
-        if child.state & CueState.IsPaused:
-            if fade and child.fadein_duration > 0:
-                child.execute(CueAction.FadeInResume)
-            else:
-                child.execute(CueAction.Resume)
-        elif fade and child.fadein_duration > 0:
-            child.execute(CueAction.FadeInStart)
-        else:
-            child.execute(CueAction.Start)
-
+        self._start_child(child)
         self._arm_crossfade_if_needed(index, children)
+
+    @staticmethod
+    def _start_child(child):
+        """Start (or resume, if paused) a child with its OWN fade-in.
+
+        The group's own `fade` flag is deliberately not consulted: it
+        is the group's fade-in, which a GroupCue never has, so gating
+        on it meant no child ever faded in (H34). A child that can't
+        take the fade action gets the plain one, since `Cue.execute`
+        silently ignores actions outside `CueActions`.
+        """
+        if child.state & CueState.IsPaused:
+            plain, faded = CueAction.Resume, CueAction.FadeInResume
+        else:
+            plain, faded = CueAction.Start, CueAction.FadeInStart
+
+        if child.fadein_duration > 0 and faded in child.CueActions:
+            child.execute(faded)
+        else:
+            child.execute(plain)
 
     def _arm_crossfade_if_needed(self, index, children):
         """Arm the crossfade monitor if there is a next child."""
