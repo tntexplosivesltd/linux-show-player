@@ -182,8 +182,14 @@ def draw_late_frames(sink):
     sink still reports lateness upstream and the mixer skips output
     frames to catch up: the lag stays bounded (A/V skew within 20 ms
     in the same runs). On a machine that keeps up nothing is late, so
-    nothing changes. Sets the GstBaseSink itself or, for a bin, its
-    "sink" child (as sink_processing_deadline() reads it)."""
+    nothing changes.
+
+    Sets the sink's own max-lateness: xvimagesink and ximagesink are
+    base sinks, and glimagesink (a GstGLImageSinkBin) exposes it and
+    forwards it to its inner sink. Falls back to a bin's "sink" child
+    when the bin does not expose it. autovideosink has neither (it
+    picks its child only at READY), so it keeps dropping late frames
+    and this returns False."""
     if sink is None:
         return False
     if sink.find_property("max-lateness") is None:
@@ -984,7 +990,12 @@ class VideoCompositor:
             logger.warning("VideoCompositor: element creation failed")
             return False
         self._sink_deadline = sink_processing_deadline(self._proj_sink)
-        draw_late_frames(self._proj_sink)
+        if not draw_late_frames(self._proj_sink):
+            logger.debug(
+                "VideoCompositor: %s cannot draw late frames; an "
+                "overloaded projection may show black",
+                plan["sink"],
+            )
 
         bg.set_property("pattern", 2)  # black
         bg.set_property("is-live", True)

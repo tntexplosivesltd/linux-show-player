@@ -2109,13 +2109,37 @@ class TestDrawLateFrames:
         assert vc.draw_late_frames(bin_) is False
         assert vc.draw_late_frames(None) is False
 
-    def test_leaves_qos_alone(self):
-        # QoS is what makes the mixer skip frames to catch up; drawing
-        # late frames without it would let the lag grow.
-        sink = self._video_sink()
-        sink.set_property("qos", True)
-        vc.draw_late_frames(sink)
+    def test_real_glimagesink_and_its_inner_sink(self):
+        # The production sink. A GstGLImageSinkBin exposes max-lateness
+        # and forwards it to its inner sink; it stays in NULL here, so
+        # no display is needed. QoS must stay on (its default): it is
+        # what makes the mixer skip frames to catch up.
+        import pytest
+
+        sink = vc.Gst.ElementFactory.make("glimagesink", None)
+        if sink is None:
+            pytest.skip("no glimagesink")
+        assert sink.get_property("max-lateness") == 5 * vc.Gst.MSECOND
+        assert vc.draw_late_frames(sink) is True
+        assert sink.get_property("max-lateness") == -1
+        inner = sink.get_property("sink")
+        assert inner.get_property("max-lateness") == -1
         assert sink.get_property("qos") is True
+
+    def test_build_logs_a_sink_that_cannot_draw_late(self, caplog):
+        plan = {"gl": False, "upload": None, "mixer": "compositor",
+                "sink": "fakesink"}
+        out, mon = _fake_windows()
+        with patch.object(vc, "plan_pipeline", return_value=plan), \
+                patch.object(vc, "draw_late_frames", return_value=False), \
+                caplog.at_level("DEBUG", logger=vc.__name__):
+            comp = vc.VideoCompositor(out, mon, canvas_size=(64, 48))
+            try:
+                assert comp.available is True
+            finally:
+                comp.shutdown()
+        assert any("cannot draw late frames" in r.getMessage()
+                   for r in caplog.records)
 
     def test_build_and_rebuild_set_the_projection_sink(self):
         self._video_sink()
