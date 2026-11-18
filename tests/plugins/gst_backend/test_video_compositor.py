@@ -2079,14 +2079,11 @@ class TestDrawLateFrames:
 
     @staticmethod
     def _video_sink():
-        # fakevideosink drops late frames like glimagesink (default
-        # max-lateness 5 ms); fakesink already defaults to -1.
-        import pytest
-
-        sink = vc.Gst.ElementFactory.make("fakevideosink", None)
-        if sink is None:
-            pytest.skip("no fakevideosink")
-        assert sink.get_property("max-lateness") == 5 * vc.Gst.MSECOND
+        # A core-plugin sink set to drop late frames like glimagesink
+        # (default max-lateness 5 ms). fakesink defaults to -1, and
+        # fakevideosink (plugins-bad) is not installed in CI.
+        sink = vc.Gst.ElementFactory.make("fakesink", None)
+        sink.set_property("max-lateness", 5 * vc.Gst.MSECOND)
         return sink
 
     def test_sets_a_base_sink(self):
@@ -2142,19 +2139,30 @@ class TestDrawLateFrames:
                    for r in caplog.records)
 
     def test_build_and_rebuild_set_the_projection_sink(self):
-        self._video_sink()
+        # Spy rather than read the property: the software plan's sink
+        # (fakesink) already defaults to -1.
         plan = {"gl": False, "upload": None, "mixer": "compositor",
-                "sink": "fakevideosink"}
+                "sink": "fakesink"}
         out, mon = _fake_windows()
-        with patch.object(vc, "plan_pipeline", return_value=plan):
+        real = vc.draw_late_frames
+        set_on = []
+
+        def spy(sink):
+            set_on.append(sink)
+            return real(sink)
+
+        with patch.object(vc, "plan_pipeline", return_value=plan), \
+                patch.object(vc, "draw_late_frames", side_effect=spy):
             comp = vc.VideoCompositor(out, mon, canvas_size=(64, 48))
             try:
                 assert comp.available is True
                 first = comp._proj_sink
+                assert set_on == [first]
                 assert first.get_property("max-lateness") == -1
                 comp._teardown()
                 assert comp._build(wait=False) is True
                 assert comp._proj_sink is not first
+                assert set_on == [first, comp._proj_sink]
                 assert comp._proj_sink.get_property("max-lateness") == -1
             finally:
                 comp.shutdown()
