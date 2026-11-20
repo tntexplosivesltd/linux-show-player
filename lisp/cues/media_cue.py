@@ -67,6 +67,9 @@ class MediaCue(Cue):
         self.__fader_group = FaderGroup()
         self.__volume = None
         self.__video_alpha = None
+        # True while a fade-in start's media.play() runs: elements the
+        # pipeline (re)builds meanwhile must start silent too.
+        self.__silent_start = False
 
         self.__elements_changed()
 
@@ -88,16 +91,33 @@ class MediaCue(Cue):
 
         self.__fader_group = FaderGroup(faders)
 
+        if self.__silent_start:
+            self.__silence()
+
+    def __silence(self):
+        if self.__volume is not None:
+            self.__volume.live_volume = 0
+        if self.__video_alpha is not None:
+            self.__video_alpha.live_alpha = 0
+
     def __start__(self, fade=False):
-        if fade and self.fadein_duration > 0 and self._can_fade():
-            if self.__volume is not None:
-                self.__volume.live_volume = 0
-            if self.__video_alpha is not None:
-                self.__video_alpha.live_alpha = 0
+        fade_in = fade and self.fadein_duration > 0 and self._can_fade()
 
-        self.media.play()
+        # A disarmed media (pipeline NULL) rebuilds its elements inside
+        # play(): the new ones come up at the saved level, and the fade
+        # would read base == target and do nothing (M74).
+        # __elements_changed silences them while this flag is set; it
+        # is raised first so a rebuild on the pre-arm thread can't
+        # land between it and the silencing below.
+        self.__silent_start = fade_in
+        if fade_in:
+            self.__silence()
+        try:
+            self.media.play()
+        finally:
+            self.__silent_start = False
 
-        if fade and self.fadein_duration > 0 and self._can_fade():
+        if fade_in:
             self._on_start_fade()
 
         return True
