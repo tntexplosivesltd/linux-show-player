@@ -94,7 +94,7 @@ class TestPlaylistSkipsDisabled:
             c.execute = MagicMock()
 
         group._start_playlist(
-            group._resolve_playable_children(), fade=False,
+            group._resolve_playable_children(),
         )
 
         children[0].execute.assert_not_called()
@@ -174,7 +174,7 @@ class TestParallelSkipsDisabled:
             c.execute = MagicMock()
 
         group._start_parallel(
-            group._resolve_playable_children(), fade=False,
+            group._resolve_playable_children(),
         )
 
         children[0].execute.assert_not_called()

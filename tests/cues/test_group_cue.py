@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -28,6 +28,10 @@ def _make_child(cue_id, state=CueState.Stop, duration=10000):
     child.current_time = MagicMock(return_value=0)
     child.fadein_duration = 0
     child.fadeout_duration = 0
+    # Explicit: a mock child supports no fade actions unless a
+    # test says so (MagicMock's `in` would also say False, but
+    # silently).
+    child.CueActions = ()
     child.group_id = ""
     child.exclusive = False
     # Disable state — must be explicit False, otherwise MagicMock
@@ -257,6 +261,220 @@ class TestResumeFromPause:
         assert group._playlist_index == 1
         c2.execute.assert_called_once_with(CueAction.Resume)
         c1.execute.assert_not_called()
+
+
+_FADE_CAPABLE = (
+    CueAction.Start,
+    CueAction.FadeInStart,
+    CueAction.Resume,
+    CueAction.FadeInResume,
+)
+
+
+class TestParallelChildFadeIn:
+    """H34: GO on a parallel group must honour each child's own
+    fade-in. The group's `fade` flag is the GROUP's fade-in
+    (always 0 — GroupCue has no fade settings), so gating child
+    fades on it meant no child ever faded in."""
+
+    def _group_with(self, group, mock_app, *children):
+        mock_app.cue_model.get = {c.id: c for c in children}.get
+        group.children = [c.id for c in children]
+        group.group_mode = "parallel"
+
+    def test_child_with_fadein_gets_fadein_start(
+        self, group, mock_app
+    ):
+        image = _make_child("image")
+        image.fadein_duration = 1.0
+        image.CueActions = _FADE_CAPABLE
+        music = _make_child("music")
+        music.CueActions = _FADE_CAPABLE
+        self._group_with(group, mock_app, image, music)
+
+        group.__start__(fade=False)
+
+        image.execute.assert_called_once_with(CueAction.FadeInStart)
+        # No fade-in → plain Start, so it stays in sync.
+        music.execute.assert_called_once_with(CueAction.Start)
+
+    def test_paused_child_with_fadein_gets_fadein_resume(
+        self, group, mock_app
+    ):
+        image = _make_child("image", state=CueState.Pause)
+        image.fadein_duration = 1.0
+        image.CueActions = _FADE_CAPABLE
+        music = _make_child("music", state=CueState.Pause)
+        music.CueActions = _FADE_CAPABLE
+        self._group_with(group, mock_app, image, music)
+
+        group.__start__(fade=False)
+
+        image.execute.assert_called_once_with(CueAction.FadeInResume)
+        music.execute.assert_called_once_with(CueAction.Resume)
+
+    def test_child_without_fade_actions_falls_back_to_start(
+        self, group, mock_app
+    ):
+        """A child type that doesn't support FadeInStart (e.g. a
+        nested GroupCue or an action cue) would silently ignore it
+        in Cue.execute — it must still get a plain Start."""
+        nested = _make_child("nested")
+        nested.fadein_duration = 2.0
+        nested.CueActions = (CueAction.Start, CueAction.Resume)
+        paused = _make_child("paused", state=CueState.Pause)
+        paused.fadein_duration = 2.0
+        paused.CueActions = (CueAction.Start, CueAction.Resume)
+        self._group_with(group, mock_app, nested, paused)
+
+        group.__start__(fade=False)
+
+        nested.execute.assert_called_once_with(CueAction.Start)
+        paused.execute.assert_called_once_with(CueAction.Resume)
+
+    def test_real_group_cue_child_gets_plain_start(
+        self, group, mock_app
+    ):
+        """Pin the fallback against the real GroupCue.CueActions,
+        not a hand-written tuple."""
+        inner = GroupCue(mock_app)
+        inner.fadein_duration = 2.0
+        inner.execute = MagicMock()
+        self._group_with(group, mock_app, inner)
+
+        group.__start__(fade=False)
+
+        inner.execute.assert_called_once_with(CueAction.Start)
+
+
+class TestPlaylistChildFadeIn:
+    """H34, playlist side: a child's own fade-in applies however
+    it is started — GO, natural advance or loop — matching the
+    crossfade path, which already sends FadeInStart."""
+
+    def _playlist(self, group, mock_app, *children):
+        mock_app.cue_model.get = {c.id: c for c in children}.get
+        group.children = [c.id for c in children]
+        group.group_mode = "playlist"
+
+    def test_go_fades_in_first_child(self, group, mock_app):
+        c1 = _make_child("c1")
+        c1.fadein_duration = 1.0
+        c1.CueActions = _FADE_CAPABLE
+        c2 = _make_child("c2")
+        self._playlist(group, mock_app, c1, c2)
+
+        group.__start__(fade=False)
+
+        c1.execute.assert_called_once_with(CueAction.FadeInStart)
+        c2.execute.assert_not_called()
+
+    def test_go_resumes_paused_child_with_fadein(
+        self, group, mock_app
+    ):
+        c1 = _make_child("c1")
+        c2 = _make_child("c2", state=CueState.Pause)
+        c2.fadein_duration = 1.0
+        c2.CueActions = _FADE_CAPABLE
+        self._playlist(group, mock_app, c1, c2)
+        group._playlist_index = 1
+
+        group.__start__(fade=False)
+
+        c2.execute.assert_called_once_with(CueAction.FadeInResume)
+
+    def test_natural_advance_fades_in_next_child(
+        self, group, mock_app
+    ):
+        c1 = _make_child("c1")
+        c1.CueActions = _FADE_CAPABLE
+        c2 = _make_child("c2")
+        c2.fadein_duration = 1.0
+        c2.CueActions = _FADE_CAPABLE
+        self._playlist(group, mock_app, c1, c2)
+        group.__start__(fade=False)
+        c1.execute.assert_called_once_with(CueAction.Start)
+
+        group._state = CueState.Running
+        group._on_playlist_child_ended(c1)
+
+        c2.execute.assert_called_once_with(CueAction.FadeInStart)
+
+    def test_child_without_fade_actions_gets_plain_start(
+        self, group, mock_app
+    ):
+        c1 = _make_child("c1")
+        c1.fadein_duration = 1.0
+        c1.CueActions = (CueAction.Start,)
+        self._playlist(group, mock_app, c1)
+
+        group.__start__(fade=False)
+
+        c1.execute.assert_called_once_with(CueAction.Start)
+
+    def test_loop_wrap_fades_in_first_child(self, group, mock_app):
+        c1 = _make_child("c1")
+        c1.fadein_duration = 1.0
+        c1.CueActions = _FADE_CAPABLE
+        c2 = _make_child("c2")
+        c2.CueActions = _FADE_CAPABLE
+        self._playlist(group, mock_app, c1, c2)
+        group.loop = True
+        group.__start__(fade=False)
+        group._state = CueState.Running
+        group._on_playlist_child_ended(c1)
+        c2.execute.assert_called_once_with(CueAction.Start)
+
+        # Last child ends -> wraps to c1, which fades in again.
+        group._on_playlist_child_ended(c2)
+
+        assert c1.execute.call_args_list == [
+            call(CueAction.FadeInStart),
+            call(CueAction.FadeInStart),
+        ]
+
+    def test_go_ignores_crossfade_hold_awaiting_restore(
+        self, group, mock_app, qtbot
+    ):
+        """A crossfade hold whose restore has been released but not
+        yet applied (it is queued to the main thread) must not make
+        the next GO fade the child in over the crossfade time."""
+        c1 = _make_child("c1")
+        c1.CueActions = _FADE_CAPABLE
+        self._playlist(group, mock_app, c1)
+
+        # Hold c1's fade-in at the crossfade value, as _check_crossfade
+        # does, then release it the way a group stop does. The
+        # restore write is QtQueued: no events processed yet, so the
+        # held value is still there when GO runs.
+        group._hold_fade(c1, "fadein_duration", 2.0, (c1.started,))
+        group._flush_pending_restores()
+        assert c1.fadein_duration == 2.0
+
+        group.__start__(fade=False)
+
+        c1.execute.assert_called_once_with(CueAction.Start)
+
+        # Once the main thread runs the queued restore, it's 0 again
+        # and the bookkeeping is gone.
+        qtbot.waitUntil(lambda: c1.fadein_duration == 0, timeout=1000)
+        assert not group._restoring
+
+    def test_go_still_fades_child_whose_own_fadein_is_unheld(
+        self, group, mock_app, qtbot
+    ):
+        """The guard only masks the held value: a child whose value
+        was changed after the hold keeps its own fade-in."""
+        c1 = _make_child("c1")
+        c1.CueActions = _FADE_CAPABLE
+        self._playlist(group, mock_app, c1)
+        group._hold_fade(c1, "fadein_duration", 2.0, (c1.started,))
+        group._flush_pending_restores()
+        c1.fadein_duration = 1.5  # user edit before the restore ran
+
+        group.__start__(fade=False)
+
+        c1.execute.assert_called_once_with(CueAction.FadeInStart)
 
 
 class TestCrossfadePreservation:
@@ -797,7 +1015,6 @@ class TestNestedGroupRuntime:
         group._play_child_at(
             len(shuffled_order),
             group._resolve_children(),
-            fade=False,
         )
 
         assert group.children == shuffled_order
