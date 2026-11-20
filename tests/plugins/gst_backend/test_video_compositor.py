@@ -901,6 +901,149 @@ class TestHandoffLinger:
             sched.fire(vc.HANDOFF_RELEASE_MS)
         detach.assert_called_once_with(reg_a)
 
+    @staticmethod
+    def _output(comp):
+        """The mixer produced an output buffer (its src probe)."""
+        info = MagicMock()
+        assert comp._on_mixer_output(None, info) == vc.Gst.PadProbeReturn.OK
+
+    @staticmethod
+    def _agg_pad(composited):
+        """A mixer pad as both real mixers expose it: an aggregator pad
+        that holds a buffer once its input is composited."""
+        pad = MagicMock(spec=vc.GstVideo.VideoAggregatorPad)
+        pad.has_current_buffer.return_value = composited
+        return pad
+
+    def _register_agg(self, comp, sink, composited=False):
+        reg = self._register(comp, sink)
+        reg.mix_pad = self._agg_pad(composited)
+        return reg
+
+    def test_handoff_waits_until_the_successor_is_composited(self):
+        # Gap traced at 3 cores: the mixer's output passed the
+        # successor's first pts while that frame was still uploading,
+        # so the live mixer output it without the successor, and the
+        # wall clock was further off still. However many outputs or ms
+        # go by, A stays until B's pad holds a buffer.
+        comp, sched = self._comp()
+        a, b = object(), object()
+        reg_a = self._register(comp, a)
+        with patch.object(comp, "_detach") as detach:
+            comp.unregister(a)
+            reg_b = self._register_agg(comp, b)
+            comp.frame_ready(reg_b)
+            sched.fire(vc.LINGER_MS)
+            sched.fire(vc.HANDOFF_RELEASE_MS)  # no wall-clock release
+            for _ in range(30):
+                self._output(comp)
+            sched.fire(0)
+            detach.assert_not_called()
+            reg_b.mix_pad.has_current_buffer.return_value = True
+            self._output(comp)
+            sched.fire(0)
+        detach.assert_called_once_with(reg_a)
+
+    def test_composited_successor_releases_at_the_next_output(self):
+        # The src probe decides, so a pad is never read off the
+        # aggregator thread: even a composited successor waits for one
+        # output.
+        comp, sched = self._comp()
+        a, b = object(), object()
+        reg_a = self._register(comp, a)
+        with patch.object(comp, "_detach") as detach:
+            comp.unregister(a)
+            reg_b = self._register_agg(comp, b, composited=True)
+            comp.frame_ready(reg_b)
+            sched.fire(0)
+            detach.assert_not_called()
+            reg_b.mix_pad.has_current_buffer.assert_not_called()
+            self._output(comp)
+            sched.fire(0)
+        detach.assert_called_once_with(reg_a)
+
+    def test_successor_showing_at_linger_waits_for_its_frame(self):
+        # B's frame_ready came before A was stopped (no handoff then):
+        # A's linger timeout hands off once B is composited.
+        comp, sched = self._comp()
+        a, b = object(), object()
+        reg_a = self._register(comp, a)
+        with patch.object(comp, "_detach") as detach:
+            reg_b = self._register_agg(comp, b)
+            comp.frame_ready(reg_b)
+            comp.unregister(a)
+            sched.fire(vc.LINGER_MS)
+            self._output(comp)
+            sched.fire(0)
+            detach.assert_not_called()
+            reg_b.mix_pad.has_current_buffer.return_value = True
+            self._output(comp)
+            sched.fire(0)
+        detach.assert_called_once_with(reg_a)
+
+    def test_successors_showing_at_linger_must_all_be_composited(self):
+        comp, sched = self._comp()
+        a, b, c = object(), object(), object()
+        reg_a = self._register(comp, a)
+        with patch.object(comp, "_detach") as detach:
+            reg_b = self._register_agg(comp, b, composited=True)
+            reg_c = self._register_agg(comp, c)
+            comp.frame_ready(reg_b)
+            comp.frame_ready(reg_c)
+            comp.unregister(a)
+            sched.fire(vc.LINGER_MS)
+            self._output(comp)
+            sched.fire(0)
+            detach.assert_not_called()  # C not composited yet
+            reg_c.mix_pad.has_current_buffer.return_value = True
+            self._output(comp)
+            sched.fire(0)
+        detach.assert_called_once_with(reg_a)
+
+    def test_released_successor_does_not_hold_the_handoff(self):
+        # The successor was itself stopped and released before it was
+        # composited: there is nothing left to wait for.
+        comp, sched = self._comp()
+        a, b = object(), object()
+        reg_a = self._register(comp, a)
+        with patch.object(comp, "_detach") as detach:
+            comp.unregister(a)
+            reg_b = self._register_agg(comp, b)
+            comp.frame_ready(reg_b)
+            comp.unregister(b)
+            comp._release(reg_b)
+            detach.reset_mock()
+            self._output(comp)
+            sched.fire(0)
+        detach.assert_called_once_with(reg_a)
+
+    def test_successor_without_an_aggregator_pad_uses_the_wall_clock(
+            self):
+        # Neither real mixer gives such a pad; if one ever does, the
+        # handoff cannot be observed and falls back to the timer.
+        comp, sched = self._comp()
+        a, b = object(), object()
+        reg_a = self._register(comp, a)
+        with patch.object(comp, "_detach") as detach:
+            comp.unregister(a)
+            reg_b = self._register(comp, b)
+            reg_b.mix_pad = MagicMock(spec=vc.Gst.Pad)
+            comp.frame_ready(reg_b)
+            assert comp._handoffs == []
+            sched.fire(vc.HANDOFF_RELEASE_MS)
+        detach.assert_called_once_with(reg_a)
+
+    def test_teardown_drops_pending_handoffs(self):
+        comp, sched = self._comp()
+        a, b = object(), object()
+        self._register(comp, a)
+        comp.unregister(a)
+        reg_b = self._register_agg(comp, b)
+        comp.frame_ready(reg_b)
+        assert comp._handoffs
+        comp._teardown()
+        assert comp._handoffs == []
+
     def test_successor_already_showing_releases_at_linger(self):
         comp, sched = self._comp()
         a, b = object(), object()
@@ -2206,7 +2349,7 @@ class TestRealMixerLifecycle:
             pytest.skip(f"{plan['mixer']} projection unavailable here")
         return comp, _FakeScheduler(comp)
 
-    def _push(self, comp, reg, frames=3):
+    def _push(self, comp, reg, frames=3, ready=True):
         Gst = vc.Gst
         caps = Gst.Caps.from_string(
             f"video/x-raw,format=I420,width={self.W},height={self.H},"
@@ -2219,7 +2362,8 @@ class TestRealMixerLifecycle:
             buf.pts = (comp.clock().get_time()
                        - comp.pipeline.get_base_time())
             assert reg.appsrc.push_buffer(buf) == Gst.FlowReturn.OK
-        comp.frame_ready(reg)
+        if ready:
+            comp.frame_ready(reg)
 
     def _wait_canvas(self, comp, width, height):
         """The projection sink renders frames of the new canvas size:
@@ -2285,6 +2429,57 @@ class TestRealMixerLifecycle:
 
     def test_software_mixer_playlist_churn_and_live_resize(self):
         self._run(_SOFTWARE_PLAN)
+
+    @staticmethod
+    def _wait(cond, seconds, what):
+        deadline = time.monotonic() + seconds
+        while not cond():
+            assert time.monotonic() < deadline, f"timed out: {what}"
+            time.sleep(0.01)
+
+    def _real_handoff_waits_for_the_successors_frame(self, plan):
+        # The src probe installed by _build reads the successor's real
+        # mixer pad: outputs go by without its frame and the handoff
+        # holds; once the frame is composited, the pad says so and the
+        # handoff is released.
+        comp, sched = self._comp(plan)
+        try:
+            outputs = [0]
+
+            def count(_pad, _info):
+                outputs[0] += 1
+                return vc.Gst.PadProbeReturn.OK
+
+            comp.mixer.get_static_pad("src").add_probe(
+                vc.Gst.PadProbeType.BUFFER, count)
+            self._wait(lambda: outputs[0] > 0, 5, "mixer running")
+            a = object()
+            reg_a = comp.register(a)
+            self._push(comp, reg_a)
+            reg_b = comp.register(object())
+            pad = reg_b.mix_pad
+            assert isinstance(pad, vc.GstVideo.VideoAggregatorPad)
+            comp.unregister(a)
+            comp.frame_ready(reg_b)  # as the pump does, frame not in yet
+            assert len(comp._handoffs) == 1
+            seen = outputs[0]
+            self._wait(lambda: outputs[0] >= seen + 5, 5, "5 outputs")
+            assert len(comp._handoffs) == 1  # no frame from B: A held
+            assert not pad.has_current_buffer()
+            self._push(comp, reg_b, ready=False)
+            self._wait(lambda: not comp._handoffs, 5, "B composited")
+            assert pad.has_current_buffer()
+            with patch.object(comp, "_detach") as detach:
+                sched.fire(0)
+            detach.assert_called_once_with(reg_a)
+        finally:
+            comp.shutdown()
+
+    def test_real_software_mixer_handoff_waits_for_the_frame(self):
+        self._real_handoff_waits_for_the_successors_frame(_SOFTWARE_PLAN)
+
+    def test_real_gl_mixer_handoff_waits_for_the_frame(self):
+        self._real_handoff_waits_for_the_successors_frame(_GL_PLAN)
 
     def test_gl_mixer_playlist_churn_and_live_resize(self):
         self._run(_GL_PLAN)

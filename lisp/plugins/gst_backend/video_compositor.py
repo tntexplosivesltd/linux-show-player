@@ -59,8 +59,10 @@ CANVAS_EXPOSE_MS = (250, 1000)
 # surface); the shared canvas must do it explicitly.
 # - No successor within LINGER_MS → release (standalone stop → black,
 #   matching the old deferred clear).
-# - Successor's first frame pushed → release HANDOFF_RELEASE_MS later
-#   (> the pump's 100ms lead, so it is on screen first).
+# - Successor's first frame pushed → release once the mixer has
+#   composited it, whatever the load (see _handoff).
+#   HANDOFF_RELEASE_MS (> the pump's 100ms lead) is the fallback when
+#   that cannot be observed.
 # - Successor's video ends before any frame (no video stream) → release
 #   at once, see video_ended().
 # - LINGER_CAP_MS is the backstop if a successor never shows a frame
@@ -167,6 +169,21 @@ def sink_processing_deadline(sink):
         if sink is None or sink.find_property("processing-deadline") is None:
             return 0
     return sink.get_property("processing-deadline")
+
+
+def _can_show(reg):
+    """Whether _shown() can tell that `reg`'s frame is composited: its
+    mixer pad is a VideoAggregatorPad, as glvideomixerelement and
+    compositor pads both are. Anything else hands off on the wall
+    clock (HANDOFF_RELEASE_MS)."""
+    return isinstance(reg.mix_pad, GstVideo.VideoAggregatorPad)
+
+
+def _shown(reg):
+    """Mixer src probe only: is `reg`'s frame in this output? Its pad
+    holds a buffer exactly when the input was composited; read on the
+    aggregator thread, between outputs, so it is settled."""
+    return reg.mix_pad.has_current_buffer()
 
 
 def draw_late_frames(sink):
@@ -467,6 +484,10 @@ class VideoCompositor:
         self._registrations = {}
         # Unregistered but still on screen (handoff linger).
         self._lingering = []
+        # Handoffs waiting on the mixer: (successor regs, lingering
+        # regs to release once every successor is composited; see
+        # _handoff).
+        self._handoffs = []
         # Sinks blamed for a repeat shared failure (see _fail): no
         # branch until the projection is stable again (see register).
         self._quarantined = set()
@@ -656,6 +677,7 @@ class VideoCompositor:
             self._mon_sink = None
             self._registrations.clear()
             self._lingering.clear()
+            self._handoffs.clear()
             timers = list(self._timers)
             self._timers.clear()
         for timer in timers:
@@ -725,9 +747,51 @@ class VideoCompositor:
             reg.frame_seen = True
             lingering = list(self._lingering)
         if lingering:
-            self._schedule_once(
-                HANDOFF_RELEASE_MS, self._release, *lingering
-            )
+            self._handoff([reg], lingering)
+
+    def _handoff(self, successors, regs):
+        """Release lingering `regs` once every successor's first frame
+        is composited, judged at each mixer output (_on_mixer_output).
+
+        Not a wall-clock delay: under load the mixer runs hundreds of
+        ms behind real time (it draws late frames, see
+        draw_late_frames), so a fixed delay released the predecessor
+        before the output got there, and the canvas showed only the
+        black background until it did (measured: 130-600 ms). Nor the
+        output's pts reaching the successor's first frame: the live
+        mixer outputs past a frame that is still uploading, without
+        it, and drops it when it does arrive (measured: 500-580 ms of
+        black at 3 cores). A successor whose pad cannot say (not a
+        VideoAggregatorPad) falls back to HANDOFF_RELEASE_MS;
+        LINGER_CAP_MS stays the backstop."""
+        if any(not _can_show(r) for r in successors):
+            self._schedule_once(HANDOFF_RELEASE_MS, self._release, *regs)
+            return
+        with self._lock:
+            self._handoffs.append((list(successors), list(regs)))
+
+    def _on_mixer_output(self, _pad, info):
+        """Mixer src pad probe (aggregator thread, so its pads' buffers
+        are settled for this output): release every handoff whose
+        successors are all in this output."""
+        due = []
+        with self._lock:
+            if self._handoffs:
+                attached = set(map(id, self._registrations.values()))
+                attached.update(map(id, self._lingering))
+                keep = []
+                for successors, regs in self._handoffs:
+                    if all(
+                        id(r) not in attached or _shown(r)
+                        for r in successors
+                    ):
+                        due.append(regs)
+                    else:
+                        keep.append((successors, regs))
+                self._handoffs = keep
+        for regs in due:
+            self._schedule_once(0, self._release, *regs)
+        return Gst.PadProbeReturn.OK
 
     def video_ended(self, reg):
         """Pump hook (streaming thread): `reg`'s video branch hit EOS.
@@ -804,8 +868,9 @@ class VideoCompositor:
         if not active:
             self._release(reg)
         elif all(r.frame_seen for r in active):
-            # Successor already showing (its frame_ready came first).
-            self._schedule_once(HANDOFF_RELEASE_MS, self._release, reg)
+            # Successor already showing (its frame_ready came first):
+            # hand off once every successor's frame is composited.
+            self._handoff(active, [reg])
         # else: the successor's frame_ready() releases us (cap: backstop)
         return False
 
@@ -1056,6 +1121,10 @@ class VideoCompositor:
             and mon_q.link(self._mon_sink)
         ):
             return False
+        # Each output releases the handoffs it composited (_handoff).
+        self.mixer.get_static_pad("src").add_probe(
+            Gst.PadProbeType.BUFFER, self._on_mixer_output
+        )
 
         # The Wayland seam: the ONE place a Wayland port adapts. Today
         # this handles prepare-window-handle (X11 VideoOverlay); a
