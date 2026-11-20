@@ -11,9 +11,9 @@ Generated 2026-07-06 from a 3-agent QA / security / code-review panel run over a
 |---|---:|
 | Critical | 1 |
 | High | 34 |
-| Medium | 73 |
+| Medium | 74 |
 | Low | 106 |
-| **Total** | **214** |
+| **Total** | **215** |
 
 _Also: 8 finding(s) already fixed on master, 1 not-applicable — see appendix._
 
@@ -128,7 +128,7 @@ _Also: 8 finding(s) already fixed on master, 1 not-applicable — see appendix._
   `_start_parallel` / `_play_child_at` only sent a child `FadeInStart`/`FadeInResume` when the group's `fade` argument was true. That argument is the group's OWN fade-in: GO runs the group's `default_start_action` (`Start` → `fade=False`), `GroupCue.CueActions` has no `FadeInStart`, and even `Cue.execute(FadeInStart)` passes `fade=self.fadein_duration > 0` — the group's fade-in, always 0. So no path ever faded a child in: a grouped backdrop image with a 1 s fade-in cut in at full alpha (probe `~/lisp-e2e-ci/probes/group_fadein_probe.py`: `live_alpha` 1.00 from the first sample). Playlist children are included now that H25's crossfade restores no longer leave a stale `fadein_duration` behind; the crossfade path already honoured a child's own fade-in.  
   _Fix:_ Decide per child from the child's own `fadein_duration` and `CueActions`, never from the group's `fade` flag.
 
-## Medium (73)
+## Medium (74)
 
 - [ ] **M1** · `lisp/plugins/test_harness/handlers.py:438` · _00bc9852 (qa)_ — **Unvalidated generic setattr with no unit test coverage**  
   handle_layout_set_property does `setattr(app.layout, name, value)` with no allowlist and no check that `name` actually names a known ProxyProperty (e.g. `volume_indicators_visible`). If a test passes a mistyped or non-existent property name, Python silently creates a new instance attribute instead of raising, and the…  
@@ -349,6 +349,9 @@ _Also: 8 finding(s) already fixed on master, 1 not-applicable — see appendix._
 
 - [x] **M74** · `lisp/plugins/gst_backend/gst_properties.py:157` · _found 2026-11-18 (H34 review, E2E `test_groups_e2e.py` §16e/§16f)_ — **Fade-in could play silent or skip its fade: `fadein_start` fires but `live_volume` stays at 0 (CI, every run) or at its target (host, playlist advance)**  
   Two independent causes. (1) `GstPropertyController.set()` anchors the fade's control points on the next buffer through the identity sync element and gave up after 1 s; right after `play()` the sink can stall longer (CI PulseAudio: PLAYING, position 0, no buffers for 1–1.8 s), so the points were never set and the cue stayed at the `live_volume` 0 `MediaCue.__start__` had written — silent for its whole run. (2) A disarmed media (pipeline NULL after pre-arm teardown) rebuilds its elements inside `play()`: the new `Volume` came up at the saved level, `GstFader._fade` read base == target and skipped the fade. (The earlier "ruled out" probe fired cues directly and missed the rebuild race.) — fixed (PR #26): on a sync timeout the points anchor at the current position while playing (first buffer if the query fails; nothing, and the superseded fade's points cleared, when not playing); a controller generation makes a completed fade pin its target only while it still owns the controller (a fade ending after `Volume.stop()` or after another fade took over leaves their level alone); the fader waits, bounded by `MAX_STREAM_LAG`, for the ramp to finish in stream time, except across a loop seam, backward seek or pause; `MediaCue.__start__` silences elements rebuilt during a fade-in start's `play()`. Unit tests `tests/plugins/gst_backend/test_gst_fade_sync.py`, `tests/cues/test_media_cue_fadein_rebuild.py`; E2E §16e/§16f mid-ramp checks restored and keyed on playback position (Docker, GStreamer 1.24: 4/4 first-try passes).  
+- [ ] **M75** · `lisp/plugins/gst_backend/video_compositor.py` · _found 2026-11-21 (PR #24, 3-core Docker repro)_ — **Under heavy load the first video cue's first picture appears late: the projection stays black for up to ~1.5 s after GO**  
+  Not a gap between cues (PR #24 fixed those: late frames are drawn, and a playlist's old cue is released only once the new cue's frame is composited). With the projection rendering below real time (software GL in Docker pinned to 3 cores, 8–15 frames/s, about GitHub's runner speed), the first frame of the first cue reaches the screen 0.5–0.67 s after GO; on 2 cores (3–5 frames/s) about 1.5 s, with the mixer running up to 1.8 s behind real time. The pixel E2Es judge from 0.5 s into the capture, so `test_video_compositor_parity_e2e.py` ("no black gap at any auto-advance") failed 3/3 on 3 cores with its longest dark run starting at the 500 ms edge (33, 33, 167 ms; the tests print `longest dark run starts …`), and `test_video_transition_flicker_e2e.py` 1/3 (350 ms). CI may fail on it until fixed. Where the time goes (preroll, decode, the pump's first push, GL upload, mixer latency) is not yet traced.  
+  _Fix:_ Trace a cold GO under `--cpuset-cpus=0-2` (`~/lisp-e2e-ci/gaps/` tools: per-stage timestamps from GO to the first projection-sink buffer) and cut the dominant stage. Do not widen the tests' 0.5 s settle window unless the delay is proven to be outside LiSP.
 
 ## Low (106)
 
