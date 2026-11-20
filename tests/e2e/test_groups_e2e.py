@@ -431,20 +431,33 @@ def _go_on_group(group_id):
     call("layout.go")
 
 
+def _position_ms(cue_id):
+    return call("cue.state", {"id": cue_id})["current_time"]
+
+
 def _saw_mid_ramp(cue_id, fade_s, fade_event):
     """Sample the Volume element during the fade: a linear fade sits
-    under 60% of its target for 0.6 * fade_s after fadein_start, so
-    poll until then (timed from the event's own timestamp; the
-    harness runs on this host) and accept any sample strictly inside
-    (0, 60%). The 0 bound rules out the silent pre-fade state."""
+    under 60% of its target for its first 0.6 * fade_s of playback,
+    so poll until the cue has played that far and accept any sample
+    strictly inside (0, 60%). The 0 bound rules out the silent
+    pre-fade state.
+
+    The window follows the cue's playback position, not the wall
+    clock: the ramp is anchored in stream time, and a sink that
+    stalls after play() (over a second on CI's PulseAudio, M74)
+    starts both the audio and the ramp late. A wall-clock bound keeps
+    a stream that never moves from hanging the test."""
     if fade_event is None:
         return False
     target = _live_volume(cue_id, "volume")
-    deadline = fade_event["event"]["timestamp"] + 0.6 * fade_s
+    window_ms = 0.6 * fade_s * 1000
+    deadline = fade_event["event"]["timestamp"] + 0.6 * fade_s + 5.0
     while time.time() < deadline:
         v = _live_volume(cue_id)
         if 0 < v < 0.6 * target:
             return True
+        if _position_ms(cue_id) >= window_ms:
+            return False
         time.sleep(0.05)
     return False
 
@@ -567,10 +580,8 @@ def test_16_child_fadein_on_go(ids, group_id):
         call("cue.seek", {"id": A, "position": 7500})
         ev = _h.wait_for_signal(b_adv_fade, timeout=5)
         check("16f: advance fades in next child", ev is not None)
-        # No mid-ramp check here (yet): on natural advance B's
-        # live_volume intermittently stays at its target although
-        # fadein_start fired — a MediaCue-side bug, tracked as M74.
-        # Add `_saw_mid_ramp(B, b_fade_s, ev)` back with that fix.
+        check("16f: B live_volume observed mid-ramp",
+              _saw_mid_ramp(B, 2.0, ev))
         check("16f: A ended", wait_state(A, "Stop", timeout=5))
     finally:
         for sid in subs:
