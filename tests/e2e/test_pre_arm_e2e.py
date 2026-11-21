@@ -393,6 +393,11 @@ def _edit_media(cue_id, media):
     time.sleep(0.5)
 
 
+def _still_armed(cue_id):
+    """The edit was applied to the armed pipeline: GO stays warm."""
+    return pre_arm_status()["media_state"].get(cue_id) == "Armed"
+
+
 def _first_position(cue_id, timeout=3.0):
     """The first non-zero playback position after GO, in ms."""
     deadline = time.monotonic() + timeout
@@ -423,6 +428,8 @@ def test_t24_edits_to_armed_standby_reach_go(t, ids):
     # T24a: start time
     t.check("T24a: tone_C armed as standby", _arm_as_standby(ids, "tone_C", 2))
     _edit_media(ids["tone_C"], {"start_time": 3000})
+    t.check("T24a: still armed after the edit (no cold GO)",
+            _still_armed(ids["tone_C"]))
     call("layout.go", {})
     pos = _first_position(ids["tone_C"])
     t.check(f"T24a: plays from the new start time (first {pos} ms)",
@@ -432,6 +439,8 @@ def test_t24_edits_to_armed_standby_reach_go(t, ids):
     # T24b: stop time (the 8 s tone would otherwise play out)
     t.check("T24b: tone_D armed as standby", _arm_as_standby(ids, "tone_D", 3))
     _edit_media(ids["tone_D"], {"stop_time": 1000})
+    t.check("T24b: still armed after the edit (no cold GO)",
+            _still_armed(ids["tone_D"]))
     t.check("T24b: ends at the new stop time",
             _ends_within(ids["tone_D"], 3.0))
     stop_all()
@@ -444,6 +453,8 @@ def test_t24_edits_to_armed_standby_reach_go(t, ids):
         ids["tone_B"],
         {"elements": {"UriInput": {"uri": f"file://{short}"}}},
     )
+    t.check("T24c: re-armed with the new file before GO",
+            _still_armed(ids["tone_B"]))
     t.check("T24c: plays the new file (ends with the 2 s tone)",
             _ends_within(ids["tone_B"], 4.0))
     stop_all()

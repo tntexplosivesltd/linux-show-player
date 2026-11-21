@@ -573,12 +573,17 @@ class PreArmManager:
     @_safe
     def on_cue_stopped(self, cue) -> None:
         """Called when a cue stops/ends/is interrupted/errors. If marked
-        preload, re-arm immediately (after an mtime check). Otherwise
-        no-op.
+        preload, re-arm immediately (after an mtime check). A cue still
+        listed (e.g. the Auto standby, fired by MIDI or OSC, which does
+        not move standby) is re-armed with its reasons. Otherwise no-op.
         """
-        if getattr(cue, "preload", False) and self._eligible(cue):
+        if not self._eligible(cue):
+            return
+        if getattr(cue, "preload", False):
             self.maybe_rearm_for_mtime(cue)
             self._try_arm(cue, ArmReason.Preload)
+        elif cue.id in self._armed:
+            self._try_arm(cue, self._armed[cue.id])
 
     # --- T11: Edit invalidation ---------------------------------------
 

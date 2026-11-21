@@ -136,8 +136,11 @@ Hot paths that fire on the main thread:
 * `cue_executed` — drops the cue from the armed set without disarming
   the pipeline (it's about to play)
 * `on_uri_changed`, `on_preload_changed` — edit invalidation (start
-  time, stop time and loop edits on an armed cue are re-seeked by
-  `GstMedia` itself, on the thread that made the edit)
+  time, stop time, loop and file edits on an armed cue are applied by
+  `GstMedia` itself, on the thread that made the edit, under its
+  `__arm_lock`; `play()` and `prearm()` take the same lock on the cue
+  worker. Lock order: `__init_lock` then `__arm_lock`, never the
+  reverse — `play()`/`prearm()` build the pipeline before taking it)
 
 Hot paths that fire off the main thread:
 

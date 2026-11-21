@@ -1163,3 +1163,43 @@ def test_failed_rearm_drops_the_stale_entry(manager):
     manager.on_cue_stopped(cue)
 
     assert "c1" not in manager._armed
+
+
+def test_auto_standby_played_outside_go_rearms_when_it_stops(manager):
+    """The standby fired by MIDI/OSC: standby doesn't move, and the cue
+    isn't preload, so only its stop can re-arm it."""
+    from lisp.backend.media import MediaState
+
+    cue = _make_cue("c1")
+    manager._try_arm(cue, ArmReason.Auto)
+    cue.media.state = MediaState.Ready
+    cue.media.prearm.reset_mock()
+
+    manager.on_cue_stopped(cue)
+
+    cue.media.prearm.assert_called_once()
+    assert manager._armed["c1"] == ArmReason.Auto
+
+
+def test_unlisted_non_preload_cue_is_not_armed_on_stop(manager):
+    cue = _make_cue("c1")
+
+    manager.on_cue_stopped(cue)
+
+    cue.media.prearm.assert_not_called()
+    assert "c1" not in manager._armed
+
+
+@pytest.mark.parametrize("state_name", ["Playing", "Paused"])
+def test_listed_cue_still_playing_is_not_prearmed(manager, state_name):
+    from lisp.backend.media import MediaState
+
+    cue = _make_cue("c1", preload=True)
+    manager._try_arm(cue, ArmReason.Preload)
+    cue.media.state = MediaState[state_name]
+    cue.media.prearm.reset_mock()
+
+    manager.standby_changed(cue)
+
+    cue.media.prearm.assert_not_called()
+    assert manager._armed["c1"] == ArmReason.Preload | ArmReason.Auto

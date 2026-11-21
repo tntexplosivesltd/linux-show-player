@@ -323,3 +323,110 @@ def test_edits_while_not_armed_do_not_seek(gst_media, monkeypatch):
     gst_media.loop = 1
 
     assert seeks == []
+
+
+def _played_to(media, seconds):
+    """Play for `seconds` of wall time; return the position reached."""
+    import time
+
+    media.play()
+    time.sleep(seconds)
+    position = media.current_time()
+    media.stop()
+    return position
+
+
+def test_stop_time_edit_while_armed_stops_playback_there(gst_media):
+    gst_media.prearm()
+    gst_media.stop_time = 300
+
+    assert _played_to(gst_media, 0.7) <= 400
+
+
+def test_clearing_the_stop_time_while_armed_plays_past_it(gst_media):
+    """A seek with SeekType.NONE keeps the segment's old stop, so
+    clearing a stop time must set the stop explicitly."""
+    gst_media.stop_time = 300
+    gst_media.prearm()
+    gst_media.stop_time = 0
+
+    assert _played_to(gst_media, 0.7) >= 500
+
+
+def test_a_failed_reseek_is_retried_at_play(gst_media, monkeypatch):
+    gst_media.prearm()
+    pipeline = gst_media._GstMedia__pipeline
+    real_seek = pipeline.seek
+    monkeypatch.setattr(pipeline, "seek", lambda *a: False)
+    gst_media.start_time = 500  # this re-seek fails
+    monkeypatch.setattr(pipeline, "seek", real_seek)
+
+    gst_media.play()
+
+    assert gst_media.current_time() >= 450
+    gst_media.stop()
+
+
+def test_file_and_start_edits_together_while_armed(gst_media, long_wav):
+    from lisp.plugins.gst_backend.gi_repository import Gst
+
+    gst_media.prearm()
+    gst_media.elements[0].uri = f"file://{long_wav}"
+    gst_media.start_time = 1500  # past the end of the old 1 s file
+
+    gst_media.play()
+
+    pipeline = gst_media._GstMedia__pipeline
+    ok, duration = pipeline.query_duration(Gst.Format.TIME)
+    assert ok and duration // Gst.MSECOND > 1500
+    assert gst_media.current_time() >= 1450
+    gst_media.stop()
+
+
+def test_file_edit_while_armed_rearms_at_once(gst_media, long_wav):
+    """The new file is prerolled when it is set, so the cue stays armed
+    and GO keeps the latency saving."""
+    from lisp.plugins.gst_backend.gi_repository import Gst
+
+    gst_media.prearm()
+    gst_media.elements[0].uri = f"file://{long_wav}"
+
+    assert gst_media.state == MediaState.Armed
+    pipeline = gst_media._GstMedia__pipeline
+    ok, duration = pipeline.query_duration(Gst.Format.TIME)
+    assert ok and duration // Gst.MSECOND > 1500
+
+
+def test_edit_and_edit_back_while_armed_keeps_the_pipeline(
+    gst_media, short_wav, long_wav, monkeypatch
+):
+    gst_media.prearm()
+    gst_media.start_time = 300
+    gst_media.start_time = 0
+    seeks = _record_seeks(gst_media, monkeypatch)
+
+    gst_media.play()
+
+    assert seeks == []
+    assert gst_media.current_time() < 200
+    gst_media.stop()
+
+
+def test_session_relative_uri_change_is_not_a_new_file(
+    gst_media, monkeypatch
+):
+    """The uri property reads back relative to the session folder, so
+    it changes when the session is saved elsewhere; the file does not.
+    """
+    from lisp.core.session_uri import SessionURI
+
+    gst_media.prearm()
+    monkeypatch.setattr(
+        SessionURI, "relative_path", property(lambda self: "moved/x.wav")
+    )
+    seeks = _record_seeks(gst_media, monkeypatch)
+
+    gst_media.play()
+
+    assert seeks == [], "a session move was taken for a new file"
+    gst_media.stop()
