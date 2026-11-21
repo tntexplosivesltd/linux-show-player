@@ -644,31 +644,66 @@ def test_8_exclusive(ids, group_id):
     })
 
     # 8b: Exclusive media cue does NOT block a group start
-    # (groups are non-media; exclusive only blocks other media cues).
-    # Children of the group still get blocked individually because
-    # they are media cues.
+    # (groups are non-media; exclusive only blocks other media cues),
+    # but every child is a media cue and is refused. H31/M64: with
+    # nothing playing the group must end at once -- `end` fires, so
+    # auto-follow runs -- instead of hanging in Running forever.
     A, B, C = ids["tone_A"], ids["tone_B"], ids["tone_C"]
+    saved_mode = cue_prop(group_id, "group_mode")
     call("cue.set_property", {
         "id": D, "property": "exclusive", "value": True,
     })
-    call("cue.execute", {"id": D, "action": "Start"})
-    time.sleep(0.3)
-    call("cue.execute", {"id": group_id, "action": "Start"})
-    time.sleep(0.3)
-    check("8b: Group not blocked by exclusive media D",
-          cue_state(group_id) == "Running")
-    check("8b: D still running", cue_state(D) == "Running")
-    check("8b: Child A still blocked by exclusive D",
-          cue_state(A) == "Stop")
-    check("8b: Child B still blocked by exclusive D",
-          cue_state(B) == "Stop")
-    check("8b: Child C still blocked by exclusive D",
-          cue_state(C) == "Stop")
+    try:
+        for mode in ("parallel", "playlist"):
+            call("cue.set_property", {
+                "id": group_id, "property": "group_mode",
+                "value": mode,
+            })
+            call("cue.execute", {"id": D, "action": "Start"})
+            check(f"8b {mode}: D running",
+                  wait_state(D, "Running", timeout=5))
+            with _h.cue_signal(group_id, "end") as group_end:
+                call("cue.execute", {"id": group_id, "action": "Start"})
+                ended = _h.wait_for_signal(group_end, timeout=5)
+            check(f"8b {mode}: group end fires when all children "
+                  f"are refused", ended is not None)
+            check(f"8b {mode}: group not left Running",
+                  wait_state(group_id, "Stop", timeout=5))
+            check(f"8b {mode}: D still running",
+                  cue_state(D) == "Running")
+            for name, cid in (("A", A), ("B", B), ("C", C)):
+                check(f"8b {mode}: child {name} blocked by exclusive D",
+                      cue_state(cid) == "Stop")
+            stop_all()
 
-    stop_all()
-    call("cue.set_property", {
-        "id": D, "property": "exclusive", "value": False,
-    })
+        # 8c: Playlist advance into refused children. A plays, then
+        # an exclusive D starts (A isn't exclusive, so D may); when
+        # A ends, B and C are refused, so the group must end rather
+        # than wait for a child that never started.
+        call("cue.execute", {"id": group_id, "action": "Start"})
+        check("8c: A running", wait_state(A, "Running", timeout=5))
+        call("cue.execute", {"id": D, "action": "Start"})
+        check("8c: exclusive D running",
+              wait_state(D, "Running", timeout=5))
+        with _h.cue_signal(group_id, "end") as group_end:
+            call("cue.seek", {"id": A, "position": 7500})
+            ended = _h.wait_for_signal(group_end, timeout=5)
+        check("8c: group end fires when the rest are refused",
+              ended is not None)
+        check("8c: group not left Running",
+              wait_state(group_id, "Stop", timeout=5))
+        check("8c: A ended", wait_state(A, "Stop", timeout=5))
+        check("8c: B refused", cue_state(B) == "Stop")
+        check("8c: C refused", cue_state(C) == "Stop")
+    finally:
+        stop_all()
+        call("cue.set_property", {
+            "id": D, "property": "exclusive", "value": False,
+        })
+        call("cue.set_property", {
+            "id": group_id, "property": "group_mode",
+            "value": saved_mode,
+        })
 
 
 def test_9_save_load(ids, group_id):

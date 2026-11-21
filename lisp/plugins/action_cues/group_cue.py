@@ -291,7 +291,14 @@ class GroupCue(Cue):
             return self._start_playlist(children)
 
     def _start_parallel(self, children):
-        """Start all children simultaneously."""
+        """Start all children simultaneously.
+
+        A child refused the start (exclusive cue, video exclusivity,
+        disabled) will never end, so it is not waited for. Returns
+        False when nothing is left to wait for -- every child was
+        refused -- so `Cue.start` ends the group straight away and its
+        `end` (auto-follow) still fires.
+        """
         with self._lock:
             self._connected_children = set()
 
@@ -299,9 +306,11 @@ class GroupCue(Cue):
                 self._connect_child(child, parallel=True)
 
         for child in children:
-            self._start_child(child)
+            if not self._start_child(child):
+                self._disconnect_child(child, parallel=True)
 
-        return True
+        with self._lock:
+            return bool(self._connected_children)
 
     def _start_playlist(self, children):
         """Start first child in the playlist."""
@@ -319,32 +328,53 @@ class GroupCue(Cue):
             self._connected_children = set()
             self._crossfade_armed = False
 
-        self._play_child_at(idx, children)
-        return True
+        return self._play_child_at(idx, children)
 
     def _play_child_at(self, index, children=None):
-        """Start the child at the given playlist index."""
+        """Start the child at the given playlist index.
+
+        A child refused the start (exclusive cue, video exclusivity,
+        disabled) is skipped like a disabled one: the next child is
+        tried, wrapping round when looping, each child at most once.
+
+        :return: True if a child started. False when none could (no
+            children, past the end without loop, or all refused): the
+            caller ends the group, since this runs both inside
+            `__start__` (where `Cue.start` does it) and on a natural
+            advance.
+        """
         if children is None:
             children = self._resolve_playable_children()
 
-        if not children:
-            self._ended()
-            return
+        count = len(children)
+        if index >= count:
+            if not (self.loop and count):
+                return False
+            index = 0
 
-        if index >= len(children):
-            if self.loop:
-                index = 0
-            else:
-                self._ended()
-                return
+        for i in self._playlist_walk(index, count):
+            child = children[i]
+            with self._lock:
+                self._playlist_index = i
+                self._connect_child(child, parallel=False)
 
-        child = children[index]
-        with self._lock:
-            self._playlist_index = index
-            self._connect_child(child, parallel=False)
+            if self._start_child(child):
+                self._arm_crossfade_if_needed(i, children)
+                return True
+            self._disconnect_child(child, parallel=False)
 
-        self._start_child(child)
-        self._arm_crossfade_if_needed(index, children)
+        return False
+
+    def _playlist_walk(self, first, count):
+        """Playlist indices from ``first`` on, wrapping round when
+        looping, each at most once."""
+        for step in range(count):
+            i = first + step
+            if i >= count:
+                if not self.loop:
+                    return
+                i -= count
+            yield i
 
     def _start_child(self, child):
         """Start (or resume, if paused) a child with its OWN fade-in.
@@ -354,6 +384,8 @@ class GroupCue(Cue):
         on it meant no child ever faded in (H34). A child that can't
         take the fade action gets the plain one, since `Cue.execute`
         silently ignores actions outside `CueActions`.
+
+        :return: False if the child refused the start (H31)
         """
         if child.state & CueState.IsPaused:
             plain, faded = CueAction.Resume, CueAction.FadeInResume
@@ -361,9 +393,12 @@ class GroupCue(Cue):
             plain, faded = CueAction.Start, CueAction.FadeInStart
 
         if self._own_fadein(child) > 0 and faded in child.CueActions:
-            child.execute(faded)
+            action = faded
         else:
-            child.execute(plain)
+            action = plain
+
+        # `Cue.execute` returns False only when it refuses the start.
+        return child.execute(action) is not False
 
     def _own_fadein(self, child):
         """The child's fade-in, minus any crossfade hold that has been
@@ -488,6 +523,14 @@ class GroupCue(Cue):
         if remaining_ms <= crossfade_ms:
             self._stop_crossfade_monitor()
 
+            # Bring the next child in first: only fade the current
+            # one out once another has really started. If none can
+            # (all refused), the current child plays to its end, and
+            # the natural advance retries or ends the group (H31).
+            next_index = self._crossfade_in_next(index, children)
+            if next_index is None:
+                return
+
             # Disconnect the current child BEFORE fading it out,
             # so its `stopped` signal won't trigger
             # _on_playlist_child_stopped and kill the group.
@@ -508,46 +551,53 @@ class GroupCue(Cue):
                 )
             child.execute(CueAction.FadeOutStop)
 
-            # Start next child with fade in
-            next_index = index + 1
-            if next_index >= len(children) and self.loop:
-                next_index = 0
+            # Re-arm crossfade for the next transition
+            self._arm_crossfade_if_needed(next_index, children)
 
-            if next_index < len(children):
-                next_child = children[next_index]
-                with self._lock:
-                    self._playlist_index = next_index
-                    self._connect_child(
-                        next_child, parallel=False
-                    )
+    def _crossfade_in_next(self, index, children):
+        """Start the first child after ``index`` that accepts a
+        fade-in start, skipping refused ones (wrapping when looping).
 
-                # Same for the fade-in, but only for a child that
-                # can take FadeInStart (others ignore it, so a
-                # hold would never be released by a start).
-                restore_fadein = None
-                if (
-                    CueAction.FadeInStart in next_child.CueActions
-                    and next_child.fadein_duration <= 0
-                ):
-                    restore_fadein = self._hold_fade(
-                        next_child,
-                        "fadein_duration",
-                        self.crossfade,
-                        (self._fadein_read_signal(next_child),
-                         next_child.stopped,
-                         next_child.interrupted,
-                         next_child.error, next_child.end),
-                    )
-                started = next_child.execute(CueAction.FadeInStart)
-                if started is False and restore_fadein is not None:
-                    # Refused (exclusive cue, disabled): it will
-                    # never start, so nothing else would restore.
-                    restore_fadein()
+        :return: its index, or None if no child started (the current
+            one, at ``index``, stays the playlist's current child)
+        """
+        for next_index in self._playlist_walk(index + 1, len(children)):
+            if next_index == index:
+                break
+            next_child = children[next_index]
+            with self._lock:
+                self._playlist_index = next_index
+                self._connect_child(next_child, parallel=False)
 
-                # Re-arm crossfade for the next transition
-                self._arm_crossfade_if_needed(
-                    next_index, children
+            # Same for the fade-in, but only for a child that
+            # can take FadeInStart (others ignore it, so a
+            # hold would never be released by a start).
+            restore_fadein = None
+            if (
+                CueAction.FadeInStart in next_child.CueActions
+                and next_child.fadein_duration <= 0
+            ):
+                restore_fadein = self._hold_fade(
+                    next_child,
+                    "fadein_duration",
+                    self.crossfade,
+                    (self._fadein_read_signal(next_child),
+                     next_child.stopped,
+                     next_child.interrupted,
+                     next_child.error, next_child.end),
                 )
+            if next_child.execute(CueAction.FadeInStart) is not False:
+                return next_index
+
+            # Refused (exclusive cue, disabled): it will never
+            # start, so nothing else would restore or end it.
+            if restore_fadein is not None:
+                restore_fadein()
+            self._disconnect_child(next_child, parallel=False)
+
+        with self._lock:
+            self._playlist_index = index
+        return None
 
     def _hold_fade(self, cue, attr, value, signals):
         """Set ``cue.<attr>`` to ``value`` until one of ``signals``
@@ -683,9 +733,7 @@ class GroupCue(Cue):
         playable = self._resolve_playable_children()
 
         if next_cue is None:
-            if self.loop and playable:
-                self._play_child_at(0, playable)
-            else:
+            if not (self.loop and self._play_child_at(0, playable)):
                 self._ended()
             return
 
@@ -700,7 +748,9 @@ class GroupCue(Cue):
             self._ended()
             return
 
-        self._play_child_at(next_idx, playable)
+        # Refused children are skipped; if none can start, end.
+        if not self._play_child_at(next_idx, playable):
+            self._ended()
 
     def _on_playlist_child_stopped(self, cue):
         """Playlist mode: child was stopped/interrupted, stop group."""
