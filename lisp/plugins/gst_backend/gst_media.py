@@ -139,7 +139,8 @@ class GstMedia(Media):
             # preroll/seek work — that latency was paid at prearm time.
             # This is the latency saving. An edit not applied yet is
             # caught up here; if that fails, play as an unarmed cue.
-            armed = self.__armed and self.__refresh_armed()
+            was_armed = self.__armed
+            armed = was_armed and self.__refresh_armed()
             # Clear the arm flag — once we go to PLAYING, the state
             # property must derive from the live pipeline (Playing),
             # not keep reporting Armed via the override.
@@ -148,6 +149,10 @@ class GstMedia(Media):
 
             if armed:
                 pass
+            elif was_armed and self.state == MediaState.Paused:
+                # Still PAUSED where the arm left it, not a pause: play
+                # from the start time, as an unarmed cue would.
+                self.__seek(self.start_time)
             elif self.state == MediaState.Paused:
                 self.__seek(self.current_time())
             else:  # Ready
@@ -421,8 +426,15 @@ class GstMedia(Media):
         if not self.__armed:
             return
         with self.__arm_lock:
-            if self.__armed:
-                self.__refresh_armed()
+            if not self.__armed:
+                return
+            self.__refresh_armed()
+            # A failed re-seek stays armed (play() retries it); a failed
+            # preroll set the pipeline to NULL and cleared the arm. The
+            # manager still lists the cue as armed until told.
+            lost = not self.__armed
+        if lost:
+            self.arm_lost.emit(self)
 
     def __refresh_armed(self):
         """Bring an armed pipeline in line with edits made since it was

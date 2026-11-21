@@ -20,7 +20,7 @@ import logging
 from enum import Flag, auto
 from pathlib import Path
 
-from lisp.core.signal import Signal
+from lisp.core.signal import Connection, Signal
 from lisp.ui.widgets.notification import NotificationLevel
 
 logger = logging.getLogger(__name__)
@@ -176,14 +176,21 @@ class PreArmManager:
         def _on_preload(value, c=cue):
             self.on_preload_changed(c, value)
 
-        handlers.extend([_on_uri, _on_preload])
+        def _on_arm_lost(_media, c=cue):
+            self.on_arm_lost(c)
+
+        handlers.extend([_on_uri, _on_preload, _on_arm_lost])
         self._cue_handlers[cue.id] = handlers
 
+        # Queued: the cue emits these holding its _st_lock, on a worker
+        # or GStreamer thread. Re-arming there would block the cue's
+        # next start() (a dropped GO) and race standby_changed over
+        # _armed, which only the main thread may change.
         for sig_name in ("stopped", "interrupted", "end", "error"):
             sig = getattr(cue, sig_name, None)
             if sig is not None:
                 try:
-                    sig.connect(self.on_cue_stopped)
+                    sig.connect(self.on_cue_stopped, Connection.QtQueued)
                 except AttributeError:
                     pass
 
@@ -207,6 +214,11 @@ class PreArmManager:
             try:
                 media.changed("pipe").connect(_on_uri)
             except (AttributeError, TypeError, ValueError):
+                pass
+            # An edit the armed media could not apply left it unarmed.
+            try:
+                media.arm_lost.connect(_on_arm_lost, Connection.QtQueued)
+            except AttributeError:
                 pass
 
     # --- Eligibility --------------------------------------------------
@@ -579,11 +591,35 @@ class PreArmManager:
         """
         if not self._eligible(cue):
             return
+        if self._running(cue):
+            return  # started again since; its next stop re-arms it
         if getattr(cue, "preload", False):
             self.maybe_rearm_for_mtime(cue)
             self._try_arm(cue, ArmReason.Preload)
         elif cue.id in self._armed:
             self._try_arm(cue, self._armed[cue.id])
+
+    @staticmethod
+    def _running(cue) -> bool:
+        from lisp.cues.cue import CueState
+
+        state = getattr(cue, "state", None)
+        return isinstance(state, int) and bool(state & CueState.IsRunning)
+
+    @_safe
+    def on_arm_lost(self, cue) -> None:
+        """The cue's media lost its arm by itself: an edit it could not
+        apply (a new file that will not preroll). Drop the entry; a
+        preload cue reports the failure, as a failed arm does.
+        """
+        if cue.id not in self._armed or not self._media_unarmed(cue):
+            return  # stale: re-armed (or disarmed) since
+        self._armed.pop(cue.id)
+        self._mtime_at_arm.pop(cue.id, None)
+        self.armed_set_changed.emit()
+        logger.warning("PreArmManager: %s lost its arm", cue.id)
+        self._record_failure(cue, "preload failed")
+        self._on_prearm_failed(cue)
 
     # --- T11: Edit invalidation ---------------------------------------
 

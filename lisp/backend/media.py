@@ -84,6 +84,9 @@ class Media(HasProperties):
         # Emitted after a successful pre-arm (self)
         self.disarmed = Signal()
         # Emitted after disarm (self)
+        self.arm_lost = Signal()
+        # Emitted when an armed media is no longer armed because of an
+        # edit it could not apply, not a disarm() (self)
 
     @property
     @abstractmethod

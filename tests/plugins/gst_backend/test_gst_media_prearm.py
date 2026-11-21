@@ -430,3 +430,140 @@ def test_session_relative_uri_change_is_not_a_new_file(
 
     assert seeks == [], "a session move was taken for a new file"
     gst_media.stop()
+
+
+def test_a_file_edit_that_will_not_preroll_says_the_arm_is_lost(
+    gst_media, short_wav
+):
+    """The manager lists the cue as armed; it must hear that the media
+    is not (a preload cue reports the failure)."""
+    gst_media.prearm()
+    lost = []
+
+    def _on_arm_lost(media):
+        lost.append(media)
+
+    gst_media.arm_lost.connect(_on_arm_lost)
+    gst_media.elements[0].uri = "file:///does/not/exist.wav"
+
+    assert lost == [gst_media]
+    assert gst_media.state != MediaState.Armed
+    gst_media.play()  # cold, and fails cleanly: no exception
+    gst_media.stop()
+
+
+def test_a_media_that_lost_its_arm_arms_again_once_fixed(
+    gst_media, short_wav
+):
+    gst_media.prearm()
+    gst_media.elements[0].uri = "file:///does/not/exist.wav"
+    gst_media.elements[0].uri = f"file://{short_wav}"
+
+    assert gst_media.prearm() is True
+    assert gst_media.state == MediaState.Armed
+
+
+def test_a_seek_edit_does_not_say_the_arm_is_lost(gst_media):
+    gst_media.prearm()
+    lost = []
+
+    def _on_arm_lost(media):
+        lost.append(media)
+
+    gst_media.arm_lost.connect(_on_arm_lost)
+    gst_media.start_time = 300
+
+    assert lost == []
+
+
+def test_a_reseek_failing_again_at_play_starts_from_start_time(
+    gst_media, monkeypatch
+):
+    """When play() cannot catch up, the pipeline is still PAUSED at the
+    old armed position; it must not be resumed from there."""
+    gst_media.prearm()
+    pipeline = gst_media._GstMedia__pipeline
+    real_seek = pipeline.seek
+    failures = [2]  # the edit's re-seek, then play()'s catch-up
+
+    def flaky_seek(*args):
+        if failures[0]:
+            failures[0] -= 1
+            return False
+        return real_seek(*args)
+
+    monkeypatch.setattr(pipeline, "seek", flaky_seek)
+    gst_media.start_time = 500
+
+    gst_media.play()
+
+    assert failures == [0]
+    assert gst_media.current_time() >= 450
+    gst_media.stop()
+
+
+def test_reseek_then_play_plays_from_start_time(gst_media):
+    gst_media.prearm()
+    gst_media.reseek(700)
+
+    gst_media.play()
+
+    assert gst_media.current_time() < 500
+    gst_media.stop()
+
+
+# --- __arm_lock: edits (main thread) against play()/prearm() (workers) --
+
+
+def _run_with_timeout(target, timeout=5.0):
+    import threading
+
+    errors = []
+
+    def _run():
+        try:
+            target()
+        except Exception as exc:  # reported below
+            errors.append(exc)
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+    return thread, errors
+
+
+def test_edits_racing_play_neither_deadlock_nor_raise(gst_media):
+    import threading
+    import time
+
+    gst_media.prearm()
+    done = threading.Event()
+
+    def _edit_until_done():
+        i = 0
+        while not done.is_set():
+            gst_media.start_time = (i % 5) * 100
+            i += 1
+
+    editor, edit_errors = _run_with_timeout(_edit_until_done)
+    time.sleep(0.05)
+    player, play_errors = _run_with_timeout(gst_media.play)
+    player.join(timeout=5)
+    done.set()
+    editor.join(timeout=5)
+
+    assert not player.is_alive() and not editor.is_alive(), "deadlock"
+    assert edit_errors == [] and play_errors == []
+    assert gst_media.state == MediaState.Playing
+    gst_media.stop()
+
+
+def test_prearm_racing_play_neither_deadlock_nor_raise(gst_media):
+    armer, arm_errors = _run_with_timeout(gst_media.prearm)
+    player, play_errors = _run_with_timeout(gst_media.play)
+    armer.join(timeout=5)
+    player.join(timeout=5)
+
+    assert not armer.is_alive() and not player.is_alive(), "deadlock"
+    assert arm_errors == [] and play_errors == []
+    assert gst_media.state == MediaState.Playing
+    gst_media.stop()
