@@ -67,6 +67,9 @@ class GstMedia(Media):
         self.__loop = 0  # current number of loops left to do
         self.__current_pipe = None  # A copy of the pipe property
         self.__armed = False  # True when pre-armed (pipeline in PAUSED)
+        # What the armed pipeline was prerolled and seeked for (see
+        # __armed_settings); play() skips the seek only while it holds.
+        self.__armed_for = None
         # Serialises pipeline (re)builds. Without it, two threads
         # racing into __init_pipeline (e.g. PreArmManager.prearm on
         # the standby cue and the parallel-group's start firing
@@ -87,6 +90,8 @@ class GstMedia(Media):
 
         self.changed("loop").connect(self.__on_loops_changed)
         self.changed("pipe").connect(self.__on_pipe_changed)
+        self.changed("start_time").connect(self.__on_seek_setting_changed)
+        self.changed("stop_time").connect(self.__on_seek_setting_changed)
 
     @Media.state.getter
     def state(self):
@@ -120,9 +125,14 @@ class GstMedia(Media):
                 element.play()
 
             if self.state == MediaState.Armed:
-                # Pre-armed: pipeline already in PAUSED and seeked to
-                # start_time. Skip the preroll/seek work — that latency
-                # was paid at prearm time. This is the latency saving.
+                # Pre-armed: pipeline already in PAUSED and seeked.
+                # Skip the preroll/seek work — that latency was paid at
+                # prearm time. This is the latency saving. Unless the
+                # cue was edited since in a way that is not applied
+                # yet: then catch up here (may drop to Ready, below).
+                self.__refresh_armed()
+
+            if self.state == MediaState.Armed:
                 pass
             elif self.state == MediaState.Paused:
                 self.__seek(self.current_time())
@@ -135,6 +145,7 @@ class GstMedia(Media):
             # property must derive from the live pipeline (Playing),
             # not keep reporting Armed via the override.
             self.__armed = False
+            self.__armed_for = None
             self.__pipeline.set_state(Gst.State.PLAYING)
             self.__pipeline.get_state(Gst.SECOND)
 
@@ -222,6 +233,7 @@ class GstMedia(Media):
 
         self.__armed = True
         self.__seek(self.start_time)
+        self.__armed_for = self.__armed_settings()
         self.armed.emit(self)
         return True
 
@@ -231,6 +243,7 @@ class GstMedia(Media):
             return
         self.__pipeline.set_state(Gst.State.NULL)
         self.__armed = False
+        self.__armed_for = None
         self.disarmed.emit(self)
 
     def reseek(self, position: int) -> None:
@@ -328,6 +341,44 @@ class GstMedia(Media):
 
     def __on_loops_changed(self, loops):
         self.__loop = loops
+        self.__on_seek_setting_changed(loops)
+
+    def __armed_settings(self):
+        """What an armed pipeline is prerolled and seeked for: the
+        start and stop times and the loop count (one seek: its range and
+        SEGMENT flag), and the source file."""
+        try:
+            uri = getattr(self.elements[0], "uri", None)
+        except IndexError:
+            uri = None
+        return self.start_time, self.stop_time, self.loop, uri
+
+    def __on_seek_setting_changed(self, _value):
+        # The standby cue is armed, and it is also the cue being edited.
+        # Re-seek now, so GO keeps the pre-arm latency saving. A file
+        # change waits for play() (__refresh_armed): it needs a preroll.
+        if self.__armed:
+            self.__refresh_armed(seek_only=True)
+
+    def __refresh_armed(self, seek_only=False):
+        """Bring an armed pipeline in line with edits made since it was
+        armed. A new file drops it to Ready: uridecodebin opens its uri
+        only on READY->PAUSED, so the armed one would play the old file.
+        """
+        current = self.__armed_settings()
+        armed_for = self.__armed_for
+        if armed_for is None or current == armed_for:
+            return
+        if current[3] != armed_for[3]:
+            if seek_only:
+                return
+            self.__armed = False
+            self.__armed_for = None
+            self.__pipeline.set_state(Gst.State.READY)
+            self.__pipeline.get_state(Gst.SECOND)
+        else:
+            self.__seek(self.start_time)
+            self.__armed_for = current
 
     def __on_pipe_changed(self, new_pipe):
         # Rebuild the pipeline only if something is changed
@@ -377,6 +428,7 @@ class GstMedia(Media):
         # state is invalid. Don't emit `disarmed` here; this is an
         # internal reset, not a user-visible disarm.
         self.__armed = False
+        self.__armed_for = None
 
         # Call the current media-finalizer, if any
         if self.__finalizer is not None:

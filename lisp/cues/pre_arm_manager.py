@@ -173,13 +173,10 @@ class PreArmManager:
         def _on_uri(_v, c=cue):
             self.on_uri_changed(c)
 
-        def _on_start(_v, c=cue):
-            self.on_start_time_changed(c)
-
         def _on_preload(value, c=cue):
             self.on_preload_changed(c, value)
 
-        handlers.extend([_on_uri, _on_start, _on_preload])
+        handlers.extend([_on_uri, _on_preload])
         self._cue_handlers[cue.id] = handlers
 
         for sig_name in ("stopped", "interrupted", "end", "error"):
@@ -196,15 +193,12 @@ class PreArmManager:
         except (AttributeError, TypeError, ValueError):
             pass
 
-        # start_time and pipe-rebuild signals live on cue.media
-        # (Media.start_time and GstMedia.pipe respectively — neither
-        # exists as a top-level cue property).
+        # The pipe-rebuild signal lives on cue.media (GstMedia.pipe is
+        # not a cue property). Start/stop time and loop edits are not
+        # routed here: the armed media re-seeks itself (GstMedia
+        # __refresh_armed), as only it knows what it was seeked for.
         media = getattr(cue, "media", None)
         if media is not None:
-            try:
-                media.changed("start_time").connect(_on_start)
-            except (AttributeError, TypeError, ValueError):
-                pass
             # URI / file changes drive a full pipe rebuild. Subscribing
             # through `pipe` is the robust proxy: any element swap
             # (including different URI in the same input element) will
@@ -584,22 +578,6 @@ class PreArmManager:
         reason = self._armed[cue.id]
         self._disarm(cue)
         self._try_arm(cue, reason)
-
-    @_safe
-    def on_start_time_changed(self, cue) -> None:
-        """Armed cue's start_time changed — re-seek (no teardown).
-
-        Spec: GstMedia.reseek() is cheap relative to a full pre-arm
-        cycle.
-        """
-        if cue.id not in self._armed:
-            return
-        try:
-            cue.media.reseek(cue.start_time)
-        except Exception as exc:
-            logger.warning(
-                "PreArmManager: reseek failed for %s: %s", cue.id, exc
-            )
 
     @_safe
     def on_preload_changed(self, cue, new_value: bool) -> None:

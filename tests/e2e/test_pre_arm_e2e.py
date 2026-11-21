@@ -49,6 +49,8 @@ from tests.e2e.helpers import (  # noqa: E402
     setup_with_tones,
     make_tone,
     signal_sub,
+    subscribe_cue,
+    unsubscribe,
     wait_for_signal,
     AUDIO_DIR,
 )
@@ -360,6 +362,76 @@ def test_t22b_auto_arm_failure_is_silent(t):
 # The unit tests provide adequate coverage.
 
 
+# ── T24: Edits to the armed standby cue reach GO ─────────────────────────
+
+
+def _arm_as_standby(ids, name, index):
+    call("layout.set_standby_index", {"index": index})
+    return wait_for_armed(ids[name], timeout=3.0)["armed"] is True
+
+
+def _edit_media(cue_id, media):
+    """Edit through UpdateCueCommand, the inspector/dialog path."""
+    call("cue.update", {"id": cue_id, "properties": {"media": media}})
+    time.sleep(0.5)
+
+
+def _first_position(cue_id, timeout=3.0):
+    """The first non-zero playback position after GO, in ms."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        pos = call("cue.get", {"id": cue_id})["current_time"]
+        if pos > 0:
+            return pos
+        time.sleep(0.02)
+    return 0
+
+
+def _ends_within(cue_id, seconds):
+    """GO the standby cue; True when it ends within `seconds`."""
+    sub = subscribe_cue(cue_id, "end")
+    try:
+        call("layout.go", {})
+        return wait_for_signal(sub, timeout=seconds) is not None
+    finally:
+        unsubscribe(sub)
+
+
+def test_t24_edits_to_armed_standby_reach_go(t, ids):
+    """The standby cue is armed (prerolled and seeked) and is also the
+    cue the operator has selected and edits; GO must play the edit."""
+    print("\n=== T24: Edits to the armed standby cue reach GO ===")
+    stop_all()
+
+    # T24a: start time
+    t.check("T24a: tone_C armed as standby", _arm_as_standby(ids, "tone_C", 2))
+    _edit_media(ids["tone_C"], {"start_time": 3000})
+    call("layout.go", {})
+    pos = _first_position(ids["tone_C"])
+    t.check(f"T24a: plays from the new start time (first {pos} ms)",
+            pos >= 2800)
+    stop_all()
+
+    # T24b: stop time (the 8 s tone would otherwise play out)
+    t.check("T24b: tone_D armed as standby", _arm_as_standby(ids, "tone_D", 3))
+    _edit_media(ids["tone_D"], {"stop_time": 1000})
+    t.check("T24b: ends at the new stop time",
+            _ends_within(ids["tone_D"], 3.0))
+    stop_all()
+
+    # T24c: a new file (2 s, replacing the 8 s tone)
+    short = os.path.join(AUDIO_DIR, "tone_short_2s.wav")
+    make_tone(short, 880, 2.0)
+    t.check("T24c: tone_B armed as standby", _arm_as_standby(ids, "tone_B", 1))
+    _edit_media(
+        ids["tone_B"],
+        {"elements": {"UriInput": {"uri": f"file://{short}"}}},
+    )
+    t.check("T24c: plays the new file (ends with the 2 s tone)",
+            _ends_within(ids["tone_B"], 4.0))
+    stop_all()
+
+
 # ── Tear-down helper ───────────────────────────────────────────────────────
 
 
@@ -392,6 +464,9 @@ def run_tests(t):
         # T22 — failure notifications; add/remove extra cues.
         test_t22a_preload_failure_toasts(t)
         test_t22b_auto_arm_failure_is_silent(t)
+
+        # T24 — edits to the armed standby cue.
+        test_t24_edits_to_armed_standby_reach_go(t, ids)
 
     finally:
         # Best-effort cleanup: remove preload flags so a subsequent

@@ -135,8 +135,9 @@ Hot paths that fire on the main thread:
 * `cue_added` / `cue_removed` — wires per-cue listeners
 * `cue_executed` — drops the cue from the armed set without disarming
   the pipeline (it's about to play)
-* `on_uri_changed`, `on_start_time_changed`, `on_preload_changed` —
-  edit invalidation
+* `on_uri_changed`, `on_preload_changed` — edit invalidation (start
+  time, stop time and loop edits on an armed cue are re-seeked by
+  `GstMedia` itself, on the thread that made the edit)
 
 Hot paths that fire off the main thread:
 

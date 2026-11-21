@@ -418,22 +418,6 @@ def test_uri_change_noop_when_not_armed(manager):
     cue.media.prearm.assert_not_called()
 
 
-def test_start_time_change_reseeks_when_armed(manager):
-    cue = _make_cue("c1", preload=True)
-    cue.start_time = 1000
-    manager._try_arm(cue, ArmReason.Preload)
-    cue.start_time = 2000
-    manager.on_start_time_changed(cue)
-    cue.media.reseek.assert_called_with(2000)
-
-
-def test_start_time_change_noop_when_not_armed(manager):
-    cue = _make_cue("c1")
-    cue.start_time = 1000
-    manager.on_start_time_changed(cue)
-    cue.media.reseek.assert_not_called()
-
-
 def test_preload_toggled_true_arms(manager):
     cue = _make_cue("c1", preload=False)
     manager.on_preload_changed(cue, True)
@@ -754,9 +738,10 @@ def _make_wired_cue(cue_id, preload=False, media_type="Audio"):
 def test_per_cue_signals_connected_on_arm(manager):
     """First successful arm of a cue connects per-cue signals.
 
-    After the fix: preload wires via cue.changed('preload'), start_time
-    and pipe (URI proxy) wire via cue.media.changed(). cue.changed('uri')
-    is no longer called — uri is not a cue property.
+    After the fix: preload wires via cue.changed('preload'), pipe (URI
+    proxy) via cue.media.changed(). cue.changed('uri') is no longer
+    called — uri is not a cue property. start_time is not wired: the
+    armed GstMedia re-seeks itself on start/stop/loop edits.
     """
     cue = _make_wired_cue("c1")
     manager._try_arm(cue, ArmReason.Auto)
@@ -766,7 +751,7 @@ def test_per_cue_signals_connected_on_arm(manager):
     cue.error.connect.assert_called()
     assert cue._preload_signal.connect.called
     assert cue.media._pipe_signal.connect.called
-    assert cue.media._start_time_signal.connect.called
+    assert not cue.media._start_time_signal.connect.called
 
 
 def test_per_cue_signals_idempotent_across_rearm(manager):
@@ -959,7 +944,8 @@ class TestWireCueSignalsRealisticShape:
         manager._wire_cue_signals(cue)
 
         pipe_signal.connect.assert_called_once()
-        start_time_signal.connect.assert_called_once()
+        # GstMedia re-seeks itself on start_time edits while armed
+        start_time_signal.connect.assert_not_called()
         preload_signal.connect.assert_called_once()
 
     def test_wire_cue_signals_skips_missing_media(self, manager):

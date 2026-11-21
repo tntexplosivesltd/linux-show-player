@@ -201,3 +201,125 @@ def test_prearm_failed_uri_returns_false(short_wav, caplog):
         and "prearm" in r.message.lower()
         for r in caplog.records
     ), f"no WARNING about prearm logged; got {caplog.records}"
+
+
+# --- Edits made while armed must reach the next play() ----------------
+#
+# Arming seeks once, with the start time, stop time and loop count in
+# force at that moment, and play() on an armed pipeline skips the seek.
+# The standby cue is the armed one, and it is also the cue the operator
+# has selected and is editing.
+
+
+@pytest.fixture(scope="module")
+def long_wav(tmp_path_factory):
+    """A 2-second silent WAV, to tell it apart from short_wav by
+    duration."""
+    path = tmp_path_factory.mktemp("media") / "long.wav"
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(48000)
+        w.writeframes(b"\x00\x00" * 96000)
+    return path
+
+
+def _record_seeks(media, monkeypatch):
+    """Record every seek on the live pipeline as (flags, start, stop),
+    in ms."""
+    from lisp.plugins.gst_backend.gi_repository import Gst
+
+    pipeline = media._GstMedia__pipeline
+    seeks = []
+    real_seek = pipeline.seek
+
+    def recording_seek(rate, fmt, flags, st, start, sp, stop):
+        seeks.append((flags, start // Gst.MSECOND, stop // Gst.MSECOND))
+        return real_seek(rate, fmt, flags, st, start, sp, stop)
+
+    monkeypatch.setattr(pipeline, "seek", recording_seek)
+    return seeks
+
+
+def test_start_time_edit_while_armed_plays_from_new_start(gst_media):
+    gst_media.prearm()
+    gst_media.start_time = 500
+
+    gst_media.play()
+
+    assert gst_media.current_time() >= 450
+    gst_media.stop()
+
+
+def test_stop_time_edit_while_armed_ends_at_new_stop(
+    gst_media, monkeypatch
+):
+    gst_media.prearm()
+    seeks = _record_seeks(gst_media, monkeypatch)
+    gst_media.stop_time = 300
+
+    gst_media.play()
+
+    assert seeks, "nothing applied the new stop time"
+    assert seeks[-1][2] == 300
+    gst_media.stop()
+
+
+def test_loop_edit_while_armed_loops_the_first_play(
+    gst_media, monkeypatch
+):
+    from lisp.plugins.gst_backend.gi_repository import Gst
+
+    gst_media.prearm()
+    seeks = _record_seeks(gst_media, monkeypatch)
+    gst_media.loop = 2
+
+    gst_media.play()
+
+    # SEGMENT makes the pipeline post SEGMENT_DONE, which drives looping
+    assert seeks, "nothing applied the new loop count"
+    assert seeks[-1][0] & Gst.SeekFlags.SEGMENT
+    gst_media.stop()
+
+
+def test_file_edit_while_armed_plays_the_new_file(gst_media, long_wav):
+    from lisp.plugins.gst_backend.gi_repository import Gst
+
+    gst_media.prearm()
+    gst_media.elements[0].uri = f"file://{long_wav}"
+
+    gst_media.play()
+
+    pipeline = gst_media._GstMedia__pipeline
+    ok, duration = pipeline.query_duration(Gst.Format.TIME)
+    assert ok and duration // Gst.MSECOND > 1500, (
+        "the armed pipeline played the old (1 s) file"
+    )
+    gst_media.stop()
+
+
+def test_seek_edits_are_applied_while_armed_not_at_go(
+    gst_media, monkeypatch
+):
+    """The edit is applied when it is made, so GO keeps the pre-arm
+    latency saving: play() has nothing left to seek."""
+    gst_media.prearm()
+    gst_media.start_time = 200
+    gst_media.stop_time = 800
+    seeks = _record_seeks(gst_media, monkeypatch)
+
+    gst_media.play()
+
+    assert seeks == []
+    assert gst_media.current_time() >= 150
+    gst_media.stop()
+
+
+def test_edits_while_not_armed_do_not_seek(gst_media, monkeypatch):
+    seeks = _record_seeks(gst_media, monkeypatch)
+
+    gst_media.start_time = 200
+    gst_media.stop_time = 800
+    gst_media.loop = 1
+
+    assert seeks == []
