@@ -366,8 +366,18 @@ def test_t22b_auto_arm_failure_is_silent(t):
 
 
 def _arm_as_standby(ids, name, index):
+    """Make the cue the standby and wait until its pipeline is armed.
+
+    Standby is moved away first: re-selecting the current standby is a
+    no-op, and stop_all() disarms the media of an armed cue while the
+    manager still lists it, so GO would take the cold path, which reads
+    every setting afresh and would hide the bug.
+    """
+    call("layout.set_standby_index", {"index": 0 if index else 1})
     call("layout.set_standby_index", {"index": index})
-    return wait_for_armed(ids[name], timeout=3.0)["armed"] is True
+    if wait_for_armed(ids[name], timeout=3.0)["armed"] is not True:
+        return False
+    return pre_arm_status()["media_state"].get(ids[name]) == "Armed"
 
 
 def _edit_media(cue_id, media):

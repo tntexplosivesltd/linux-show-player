@@ -94,7 +94,9 @@ class TestPreArmStatus:
         d = _make_dispatcher(app)
         resp = _call(d, "pre_arm.status")
         assert "result" in resp
-        assert resp["result"] == {"armed": {}, "failed": {}}
+        assert resp["result"] == {
+            "armed": {}, "failed": {}, "media_state": {},
+        }
 
     def test_empty_armed_set(self):
         """Manager present but no armed cues."""
@@ -102,7 +104,9 @@ class TestPreArmStatus:
         app = _make_app(mgr)
         d = _make_dispatcher(app)
         resp = _call(d, "pre_arm.status")
-        assert resp["result"] == {"armed": {}, "failed": {}}
+        assert resp["result"] == {
+            "armed": {}, "failed": {}, "media_state": {},
+        }
 
     def test_single_flag_preload(self):
         """Single ArmReason.Preload serialises to 'Preload'."""
@@ -147,6 +151,28 @@ class TestPreArmStatus:
         resp = _call(d, "pre_arm.status")
         assert resp["result"]["failed"] == {"c2": "audio decoder error"}
         assert resp["result"]["armed"] == {}
+
+    def test_media_state_reports_the_pipeline_not_the_manager(self):
+        """The manager can list a cue whose media is no longer armed
+        (stop() disarms the media); media_state shows the media's own
+        state for each cue in the armed set."""
+        from lisp.backend.media import MediaState
+
+        mgr = _make_mgr(
+            _armed={"c1": ArmReason.Auto, "c2": ArmReason.Auto},
+        )
+        app = _make_app(mgr)
+        app.cue_model = {
+            "c1": SimpleNamespace(media=SimpleNamespace(
+                state=MediaState.Armed)),
+            "c2": SimpleNamespace(media=SimpleNamespace(
+                state=MediaState.Null)),
+        }
+        d = _make_dispatcher(app)
+        resp = _call(d, "pre_arm.status")
+        assert resp["result"]["media_state"] == {
+            "c1": "Armed", "c2": "Null",
+        }
 
     def test_armed_and_failed_together(self):
         """Both armed and failed cues appear simultaneously."""
