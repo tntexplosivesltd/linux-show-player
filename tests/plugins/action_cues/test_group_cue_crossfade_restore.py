@@ -187,7 +187,9 @@ def playlist(make_playlist):
     return make_playlist()
 
 
-def _run_until_crossfade(group, c1, c2, expect_fadein_hold=True):
+def _run_until_crossfade(
+    group, c1, c2, expect_fadein_hold=True, expect_fadeout=True
+):
     """Start c1 as the group's current child and reach the crossfade.
 
     Both workers are held (c1's stop, c2's start) until the test
@@ -209,7 +211,8 @@ def _run_until_crossfade(group, c1, c2, expect_fadein_hold=True):
     group._check_crossfade()
 
     # The crossfade really engaged with the temporary durations.
-    assert c1.fadeout_duration == CROSSFADE
+    if expect_fadeout:
+        assert c1.fadeout_duration == CROSSFADE
     if expect_fadein_hold:
         assert c2.fadein_duration == CROSSFADE
 
@@ -377,18 +380,27 @@ class TestCrossfadeRestoreEdgeCases:
         self, playlist, mock_app, qtbot
     ):
         """An exclusive cue blocks the incoming child: it never emits
-        `started` or `fadein_start`, so nothing else would restore."""
+        `started` or `fadein_start`, so nothing else would restore.
+
+        With no child to take over, the outgoing one is not faded out
+        either (H31): it keeps playing, still the group's current
+        child, and its natural end advances or ends the group."""
         group, c1, c2 = playlist
 
-        def blocked(cue):
+        def blocked(cue, notify=True):
             return cue is c2
 
         mock_app.exclusive_manager.is_start_blocked.side_effect = blocked
-        _run_until_crossfade(group, c1, c2, expect_fadein_hold=False)
+        _run_until_crossfade(
+            group, c1, c2, expect_fadein_hold=False, expect_fadeout=False
+        )
         gc.collect()
 
         qtbot.waitUntil(lambda: c2.fadein_duration == 0, timeout=TIMEOUT_MS)
         assert c2.properties()["fadein_duration"] == 0
+        assert c1.fadeout_duration == 0
+        assert c1.state & CueState.Running
+        assert group._connected_children == {c1.id}
 
     def test_outgoing_child_ends_instead_of_stopping(self, playlist, qtbot):
         """EOS can beat the fade-out: the child emits `end`, and the

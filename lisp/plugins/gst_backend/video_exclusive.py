@@ -81,7 +81,7 @@ class VideoExclusiveManager:
     def __init__(self, app):
         self._app = app
 
-    def is_start_blocked(self, cue):
+    def is_start_blocked(self, cue, notify=True):
         """Return True if the cue should be blocked from starting.
 
         A video/image cue is blocked if another video/image cue is
@@ -89,6 +89,8 @@ class VideoExclusiveManager:
         the projection — except when the asking cue is that active cue
         (self-resume: CueAction.Resume / Fade & Resume of a paused
         video).
+
+        :param notify: log and notify the block; False only asks.
         """
         sink = self._video_sink(cue)
         if sink is None:
@@ -97,9 +99,10 @@ class VideoExclusiveManager:
         if not active_video_sinks.others(sink):
             return False
 
-        message = "Blocked: another video/image cue is playing"
-        logger.info(message)
-        self._app.notify.emit(message, NotificationLevel.Info)
+        if notify:
+            message = "Blocked: another video/image cue is playing"
+            logger.info(message)
+            self._app.notify.emit(message, NotificationLevel.Info)
         return True
 
     @staticmethod
