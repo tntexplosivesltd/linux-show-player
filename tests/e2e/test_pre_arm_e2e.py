@@ -373,11 +373,18 @@ def _arm_as_standby(ids, name, index):
     manager still lists it, so GO would take the cold path, which reads
     every setting afresh and would hide the bug.
     """
+    cue_id = ids[name]
     call("layout.set_standby_index", {"index": 0 if index else 1})
     call("layout.set_standby_index", {"index": index})
-    if wait_for_armed(ids[name], timeout=3.0)["armed"] is not True:
-        return False
-    return pre_arm_status()["media_state"].get(ids[name]) == "Armed"
+    # The moves run on the main thread, after these calls return, so
+    # poll the pipeline's own state rather than the (maybe stale) set.
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline:
+        if pre_arm_status()["media_state"].get(cue_id) == "Armed":
+            return True
+        time.sleep(0.05)
+    print(f"  {name} not armed; pre_arm.status: {pre_arm_status()}")
+    return False
 
 
 def _edit_media(cue_id, media):
