@@ -100,9 +100,11 @@ def test_parallel_group_ends_with_the_child_that_started(
     blocked.add(b)
 
     group.execute(CueAction.Start)
+    # The group goes Running on its own worker, after __start__ has
+    # started the children on theirs: wait for both.
+    qtbot.waitUntil(_state_is(group, CueState.Running), timeout=TIMEOUT_MS)
     qtbot.waitUntil(_state_is(a, CueState.Running), timeout=TIMEOUT_MS)
     assert b.state == CueState.Stop
-    assert group.state == CueState.Running
 
     a._ended()
 
@@ -115,6 +117,7 @@ def test_playlist_advance_skips_a_refused_child(
     group, (a, b, c) = make_group("playlist", 3)
 
     group.execute(CueAction.Start)
+    qtbot.waitUntil(_state_is(group, CueState.Running), timeout=TIMEOUT_MS)
     qtbot.waitUntil(_state_is(a, CueState.Running), timeout=TIMEOUT_MS)
     blocked.add(b)
 
