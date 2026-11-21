@@ -267,20 +267,41 @@ class GroupCue(Cue):
             if not c.effective_disabled
         ]
 
-    def execute(self, action=CueAction.Default):
-        # Block start if no playable children can be resolved.
-        # Only guard explicit start actions here — CueAction.Default
-        # is resolved to default_start_action or default_stop_action
-        # by super().execute() based on the group's own state, and
-        # Default on a running-but-now-disabled group must still
-        # reach super() so it remaps to Stop (Stop All / operator
-        # trigger on a playing group stays functional).
-        # Refused like any other blocked start (False), so a parent
-        # group doesn't wait for a nested group that never ran (H31).
+    def _start_refused(self, action, notify=True):
+        """Refuse what `Cue.execute` refuses, plus (H31):
+
+        - a start with no playable children: a parent group (or GO's
+          auto-follow) would otherwise wait for a group that never
+          runs. `Default` arrives here already resolved, so GO and
+          auto-follow are refused too, and a Default on a running
+          group (a stop) is not affected.
+        - resuming a paused group when a paused child would refuse its
+          resume (an exclusive cue or a video started meanwhile): the
+          group stays paused and keeps the child, as a paused cue
+          resumed directly does.
+        """
+        if super()._start_refused(action, notify):
+            return True
+
         if action in (CueAction.Start, CueAction.FadeInStart):
-            if not self._resolve_playable_children():
+            if self._state & CueState.IsRunning:
                 return False
-        return super().execute(action)
+        elif action in (CueAction.Resume, CueAction.FadeInResume):
+            if not self._state & CueState.IsPaused:
+                return False
+        else:
+            return False
+
+        children = self._resolve_playable_children()
+        if not children:
+            return True
+        if self._state & CueState.IsPaused:
+            return any(
+                child._start_refused(CueAction.Resume, notify=notify) is True
+                for child in children
+                if child.state & CueState.IsPaused
+            )
+        return False
 
     def __start__(self, fade=False):
         children = self._resolve_playable_children()
@@ -308,8 +329,9 @@ class GroupCue(Cue):
                 self._connect_child(child, parallel=True)
 
         for child in children:
+            was_paused = child.state & CueState.IsPaused
             if not self._start_child(child):
-                self._disconnect_child(child, parallel=True)
+                self._drop_refused(child, was_paused, parallel=True)
 
         with self._lock:
             return bool(self._connected_children)
@@ -360,12 +382,28 @@ class GroupCue(Cue):
                 self._playlist_index = i
                 self._connect_child(child, parallel=False)
 
+            was_paused = child.state & CueState.IsPaused
             if self._start_child(child):
                 self._arm_crossfade_if_needed(i, children)
                 return True
-            self._disconnect_child(child, parallel=False)
+            self._drop_refused(child, was_paused, parallel=False)
 
+        # Keep the position (a paused child stays the one to resume),
+        # not the last child tried.
+        with self._lock:
+            self._playlist_index = index
         return False
+
+    def _drop_refused(self, child, was_paused, parallel):
+        """A child refused its start: stop following it. One refused
+        a resume is stopped too, or it would stay paused with no group
+        to stop it (__stop__ only stops running children); a paused
+        video also keeps blocking every other video. Normally a paused
+        group refuses the resume before this (`_start_refused`); this
+        is the block arriving in between."""
+        self._disconnect_child(child, parallel=parallel)
+        if was_paused:
+            child.execute(CueAction.Stop)
 
     def _playlist_walk(self, first, count):
         """Playlist indices from ``first`` on, wrapping round when
@@ -567,6 +605,13 @@ class GroupCue(Cue):
             if next_index == index:
                 break
             next_child = children[next_index]
+            # Only ask: a refusal here is expected in a video playlist
+            # (the outgoing video blocks the incoming one), and the
+            # advance at the natural end reports a real block.
+            if next_child._start_refused(
+                CueAction.FadeInStart, notify=False
+            ) is True:
+                continue
             with self._lock:
                 self._playlist_index = next_index
                 self._connect_child(next_child, parallel=False)

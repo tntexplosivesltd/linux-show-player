@@ -39,10 +39,12 @@ class ExclusiveManager:
         self._cue_model = app.cue_model
         self._lock = threading.Lock()
 
-    def is_start_blocked(self, cue):
+    def is_start_blocked(self, cue, notify=True):
         """Return True if the cue should be blocked from starting.
 
         Only media cues participate in exclusive blocking.
+
+        :param notify: log and notify the block; False only asks.
         """
         if not isinstance(cue, MediaCue):
             return False
@@ -54,14 +56,15 @@ class ExclusiveManager:
             if other is cue:
                 continue
             if other.exclusive and other.state & CueState.IsRunning:
-                message = (
-                    f'Blocked by exclusive cue '
-                    f'#{other.index + 1} "{other.name}"'
-                )
-                logger.info(message)
-                self._app.notify.emit(
-                    message, NotificationLevel.Info
-                )
+                if notify:
+                    message = (
+                        f'Blocked by exclusive cue '
+                        f'#{other.index + 1} "{other.name}"'
+                    )
+                    logger.info(message)
+                    self._app.notify.emit(
+                        message, NotificationLevel.Info
+                    )
                 return True
 
         return False

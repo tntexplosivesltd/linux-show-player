@@ -387,7 +387,7 @@ class TestCrossfadeRestoreEdgeCases:
         child, and its natural end advances or ends the group."""
         group, c1, c2 = playlist
 
-        def blocked(cue):
+        def blocked(cue, notify=True):
             return cue is c2
 
         mock_app.exclusive_manager.is_start_blocked.side_effect = blocked

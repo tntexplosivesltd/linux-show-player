@@ -221,26 +221,15 @@ class Cue(HasProperties):
             gid = parent.group_id
         return False
 
-    def execute(self, action=CueAction.Default):
-        """Execute the specified action, if supported.
+    def _start_refused(self, action, notify=True):
+        """True when ``action`` (already resolved, not Default) is a
+        start or resume this cue must refuse: the cue is disabled, an
+        exclusive cue is running, or a video/image cue is playing.
+        `execute` returns False for it.
 
-        .. Note::
-            Even if not specified in Cue.CueActions, when CueAction.Default
-            is given, a "default" action is selected depending on the current
-            cue state, if this action is not supported, nothing will be done.
-
-        :param action: the action to be performed
-        :type action: CueAction
+        :param notify: tell the operator why (the exclusivity managers
+            post a notification); False only asks.
         """
-        if action == CueAction.Default:
-            if self._state & CueState.IsRunning:
-                action = CueAction(self.default_stop_action)
-            else:
-                action = CueAction(self.default_start_action)
-
-        if action == CueAction.DoNothing:
-            return
-
         # Disable gate: block start/resume from any trigger source
         # when the cue (or any ancestor group) is disabled. The
         # allow-list covers every action that operates on an
@@ -270,7 +259,7 @@ class Cue(HasProperties):
             action not in _ALLOWED_WHEN_DISABLED
             and self.effective_disabled
         ):
-            return False
+            return True
 
         # Block start/resume actions if an exclusive cue is running,
         # or if a video/image cue is already playing.
@@ -292,15 +281,42 @@ class Cue(HasProperties):
         if would_transition:
             if (
                 hasattr(self.app, "exclusive_manager")
-                and self.app.exclusive_manager.is_start_blocked(self)
+                and self.app.exclusive_manager.is_start_blocked(
+                    self, notify=notify
+                )
             ):
-                return False
+                return True
             if (
                 hasattr(self.app, "video_exclusive_manager")
                 and self.app.video_exclusive_manager
-                    .is_start_blocked(self)
+                    .is_start_blocked(self, notify=notify)
             ):
-                return False
+                return True
+
+        return False
+
+    def execute(self, action=CueAction.Default):
+        """Execute the specified action, if supported.
+
+        .. Note::
+            Even if not specified in Cue.CueActions, when CueAction.Default
+            is given, a "default" action is selected depending on the current
+            cue state, if this action is not supported, nothing will be done.
+
+        :param action: the action to be performed
+        :type action: CueAction
+        """
+        if action == CueAction.Default:
+            if self._state & CueState.IsRunning:
+                action = CueAction(self.default_stop_action)
+            else:
+                action = CueAction(self.default_start_action)
+
+        if action == CueAction.DoNothing:
+            return
+
+        if self._start_refused(action):
+            return False
 
         if action in self.CueActions:
             if action == CueAction.Interrupt:

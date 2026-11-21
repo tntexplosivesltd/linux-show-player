@@ -137,3 +137,18 @@ class TestVideoExclusiveManager:
             a.play()
             a.dispose()
             assert mgr.is_start_blocked(_cue(b)) is False
+
+
+def test_quiet_query_does_not_notify():
+    app = _make_app()
+    mgr = VideoExclusiveManager(app)
+    a, b = _sink(), _sink()
+    with patch(_CM, return_value=None):
+        a.play()
+        try:
+            assert mgr.is_start_blocked(_cue(b), notify=False) is True
+            app.notify.emit.assert_not_called()
+            assert mgr.is_start_blocked(_cue(b)) is True
+            app.notify.emit.assert_called_once()
+        finally:
+            a.stop()

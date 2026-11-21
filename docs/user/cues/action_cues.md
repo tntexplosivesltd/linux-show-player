@@ -38,6 +38,15 @@ In the list layout, groups can be collapsed and expanded by clicking the arrow n
 
 In playlist mode, when a child ends naturally the next child starts automatically. If a child is manually stopped or interrupted, the entire group stops.
 
+#### Children that can't start
+
+A child is refused a start when it is disabled, when an exclusive cue is playing, or when another video/image cue is playing.
+
+* **Parallel:** the group plays the children that did start and ends when the last of them ends. If none could start, the group ends at once (so an auto-follow on it still fires).
+* **Playlist:** a refused child is skipped, like a disabled one. If no child can play, the group ends. At a crossfade, a child that would be refused is skipped without a notification; if none can take over, the current child plays to its end, and the playlist then moves on (or ends).
+* **GO on a group with no playable children** does nothing, and the standby cue does not move.
+* **Resuming a paused group** whose paused child can't resume (for example, an exclusive cue was started while the group was paused) is refused: the group and its children stay paused until the block clears.
+
 ## Collection Cue
 
 This cue allow to tigger multiple cues at once, for each cue a different action can be specified.<br>

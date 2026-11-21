@@ -45,6 +45,10 @@ def _make_child(cue_id, state=CueState.Stop, duration=10000):
     child.stopped = MagicMock()
     child.interrupted = MagicMock()
     child.error = MagicMock()
+    # Like Cue: an accepted start returns None (False is a refusal),
+    # and the gate lets it through.
+    child.execute.return_value = None
+    child._start_refused.return_value = False
     return child
 
 
@@ -1378,3 +1382,272 @@ class TestNestedGroupWithNothingPlayable:
         outer, _inner = self._nested(mock_app, mode)
         assert outer.__start__(fade=False) is False
         assert outer._connected_children == set()
+
+
+def _blocked(child):
+    """Make ``child`` refuse a start already at the gate (the check
+    `Cue.execute` makes), as for an exclusive cue or a video playing."""
+    child._start_refused.return_value = True
+    child.execute.return_value = False
+    return child
+
+
+def _gate_open(mock_app):
+    mock_app.exclusive_manager.is_start_blocked.return_value = False
+    mock_app.video_exclusive_manager.is_start_blocked.return_value = False
+
+
+class TestGoOnGroupWithNothingPlayable:
+    """GO and auto-follow send CueAction.Default; it must be refused
+    like an explicit Start, not start a group that ends at once."""
+
+    @pytest.mark.parametrize("action", [
+        CueAction.Default, CueAction.Start, CueAction.FadeInStart,
+    ])
+    def test_refused(self, group, mock_app, action):
+        _gate_open(mock_app)
+        c1 = _make_child("c1")
+        c1.effective_disabled = True
+        mock_app.cue_model.get = {"c1": c1}.get
+        group.children = ["c1"]
+
+        with patch.object(group, "start") as start:
+            assert group.execute(action) is False
+        start.assert_not_called()
+
+    def test_running_group_still_stops_on_default(self, group, mock_app):
+        """Default on a running group whose children were disabled
+        since is a stop, which the gate lets through."""
+        _gate_open(mock_app)
+        c1 = _make_child("c1")
+        c1.effective_disabled = True
+        mock_app.cue_model.get = {"c1": c1}.get
+        group.children = ["c1"]
+        group._state = CueState.Running
+
+        with patch.object(group, "stop") as stop:
+            assert group.execute(CueAction.Default) is not False
+        stop.assert_called_once()
+
+
+class TestPausedGroupResumeRefused:
+    """A paused group whose paused child can't resume (an exclusive
+    cue or a video started meanwhile) stays paused and keeps the
+    child, as a paused cue resumed directly does."""
+
+    def _paused_group(self, group, mock_app, mode, *children):
+        _gate_open(mock_app)
+        mock_app.cue_model.get = {c.id: c for c in children}.get
+        group.children = [c.id for c in children]
+        group.group_mode = mode
+        group._state = CueState.Pause
+
+    @pytest.mark.parametrize("action", [
+        CueAction.Default, CueAction.Start, CueAction.Resume,
+    ])
+    def test_playlist_stays_paused(self, group, mock_app, action):
+        c0 = _make_child("c0")
+        c1 = _blocked(_make_child("c1", state=CueState.Pause))
+        c2 = _make_child("c2")
+        self._paused_group(group, mock_app, "playlist", c0, c1, c2)
+        group._playlist_index = 1
+
+        with patch.object(group, "start") as start:
+            assert group.execute(action) is False
+
+        start.assert_not_called()
+        assert group.state == CueState.Pause
+        c1._start_refused.assert_called_with(CueAction.Resume, notify=True)
+        c1.execute.assert_not_called()
+        c2.execute.assert_not_called()
+
+    def test_parallel_stays_paused_if_any_child_cannot_resume(
+        self, group, mock_app
+    ):
+        c1 = _make_child("c1", state=CueState.Pause)
+        c1._start_refused.return_value = False
+        c2 = _blocked(_make_child("c2", state=CueState.Pause))
+        self._paused_group(group, mock_app, "parallel", c1, c2)
+
+        with patch.object(group, "start") as start:
+            assert group.execute(CueAction.Start) is False
+
+        start.assert_not_called()
+        c1.execute.assert_not_called()
+        c2.execute.assert_not_called()
+
+    def test_resumes_when_every_paused_child_can(self, group, mock_app):
+        c1 = _make_child("c1", state=CueState.Pause)
+        c1._start_refused.return_value = False
+        self._paused_group(group, mock_app, "parallel", c1)
+
+        with patch.object(group, "start") as start:
+            assert group.execute(CueAction.Start) is not False
+        start.assert_called_once()
+
+
+class TestPausedChildRefusedInsideStart:
+    """The gate passed, but the block arrived before the resume
+    reached the child: the child is stopped, never left paused with
+    no group to stop it (__stop__ only stops running children)."""
+
+    def _group_with(self, group, mock_app, mode, *children):
+        mock_app.cue_model.get = {c.id: c for c in children}.get
+        group.children = [c.id for c in children]
+        group.group_mode = mode
+
+    def test_playlist_stops_the_paused_child(self, group, mock_app):
+        c0 = _make_child("c0")
+        c1 = _refused(_make_child("c1", state=CueState.Pause))
+        c2 = _refused(_make_child("c2"))
+        self._group_with(group, mock_app, "playlist", c0, c1, c2)
+        group._playlist_index = 1
+
+        assert group.__start__(fade=False) is False
+
+        c1.execute.assert_any_call(CueAction.Stop)
+        c2.execute.assert_called_once_with(CueAction.Start)
+        assert CueAction.Stop not in [
+            c.args[0] for c in c2.execute.call_args_list
+        ]
+
+    def test_parallel_stops_the_paused_child(self, group, mock_app):
+        c1 = _refused(_make_child("c1", state=CueState.Pause))
+        c2 = _make_child("c2", state=CueState.Pause)
+        c2.execute.return_value = None
+        self._group_with(group, mock_app, "parallel", c1, c2)
+
+        assert group.__start__(fade=False) is True
+
+        c1.execute.assert_any_call(CueAction.Stop)
+        assert group._connected_children == {"c2"}
+
+    def test_failed_walk_keeps_the_playlist_position(
+        self, group, mock_app
+    ):
+        """Paused on c1; c1 and c2 refused. The position stays on c1,
+        not the last child tried, so the next GO starts from there."""
+        c0 = _make_child("c0")
+        c1 = _refused(_make_child("c1", state=CueState.Pause))
+        c2 = _refused(_make_child("c2"))
+        self._group_with(group, mock_app, "playlist", c0, c1, c2)
+        group._playlist_index = 1
+
+        assert group.__start__(fade=False) is False
+        assert group._playlist_index == 1
+
+
+class TestCrossfadeIntoRefusedChildren:
+    def _playlist(self, group, mock_app, *children, loop=False):
+        mock_app.cue_model.get = {c.id: c for c in children}.get
+        group.children = [c.id for c in children]
+        group.group_mode = "playlist"
+        group.crossfade = 1.0
+        group.loop = loop
+        group._state = CueState.Running
+        for c in children:
+            c._start_refused.return_value = False
+            c.execute.return_value = None
+        return list(children)
+
+    def test_each_refused_candidates_fadein_hold_is_restored(
+        self, group, mock_app
+    ):
+        children = self._playlist(
+            group, mock_app, *(_make_child(f"c{i}") for i in range(1, 5))
+        )
+        c1, c2, c3, c4 = children
+        for c in (c2, c3, c4):
+            c.CueActions = (CueAction.FadeInStart,)
+        _refused(c2)
+        _refused(c3)
+        restores = {}
+
+        def hold(cue, *_args):
+            restores[cue.id] = MagicMock()
+            return restores[cue.id]
+
+        with patch.object(group, "_hold_fade", side_effect=hold):
+            assert group._crossfade_in_next(0, children) == 3
+
+        restores["c2"].assert_called_once()
+        restores["c3"].assert_called_once()
+        restores["c4"].assert_not_called()
+
+    def test_child_refused_at_the_gate_is_skipped_quietly(
+        self, group, mock_app
+    ):
+        """No "Blocked" notification at every transition of a video
+        playlist: the crossfade only asks, the real advance reports."""
+        c1, c2, c3 = self._playlist(
+            group, mock_app,
+            _make_child("c1"), _make_child("c2"), _make_child("c3"),
+        )
+        c2._start_refused.return_value = True
+
+        assert group._crossfade_in_next(0, [c1, c2, c3]) == 2
+        c2._start_refused.assert_called_with(
+            CueAction.FadeInStart, notify=False
+        )
+        c2.execute.assert_not_called()
+        c3.execute.assert_called_once_with(CueAction.FadeInStart)
+
+    def test_loop_wraps_to_the_first_child(self, group, mock_app):
+        c1, c2, c3 = self._playlist(
+            group, mock_app,
+            _make_child("c1"), _make_child("c2"), _make_child("c3"),
+            loop=True,
+        )
+
+        assert group._crossfade_in_next(2, [c1, c2, c3]) == 0
+        c1.execute.assert_called_once_with(CueAction.FadeInStart)
+
+    def test_single_child_loop_does_not_crossfade_into_itself(
+        self, group, mock_app
+    ):
+        (c1,) = self._playlist(group, mock_app, _make_child("c1"),
+                               loop=True)
+
+        assert group._crossfade_in_next(0, [c1]) is None
+        c1.execute.assert_not_called()
+        assert group._playlist_index == 0
+
+    def test_loop_with_every_other_child_refused(self, group, mock_app):
+        c1, c2, c3 = self._playlist(
+            group, mock_app,
+            _make_child("c1"), _make_child("c2"), _make_child("c3"),
+            loop=True,
+        )
+        _refused(c1)
+        _refused(c3)
+
+        assert group._crossfade_in_next(1, [c1, c2, c3]) is None
+        c2.execute.assert_not_called()
+        assert group._playlist_index == 1
+
+    @pytest.mark.parametrize("still_refused", [True, False])
+    def test_natural_end_after_a_refused_crossfade(
+        self, group, mock_app, still_refused
+    ):
+        """The current child played on; its end retries the advance,
+        which ends the group if the next child is still refused."""
+        c1, c2 = self._playlist(
+            group, mock_app, _make_child("c1"), _make_child("c2"),
+        )
+        with group._lock:
+            group._playlist_index = 0
+            group._connect_child(c1, parallel=False)
+        _refused(c2)
+        assert group._crossfade_in_next(0, [c1, c2]) is None
+        if not still_refused:
+            c2.execute.return_value = None
+
+        group._on_playlist_child_ended(c1)
+
+        if still_refused:
+            assert group.state == CueState.Stop
+        else:
+            assert group.state == CueState.Running
+            assert c2.execute.call_args_list[-1].args[0] in (
+                CueAction.Start, CueAction.FadeInStart,
+            )

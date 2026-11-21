@@ -650,6 +650,8 @@ def test_8_exclusive(ids, group_id):
     # auto-follow runs -- instead of hanging in Running forever.
     A, B, C = ids["tone_A"], ids["tone_B"], ids["tone_C"]
     saved_mode = cue_prop(group_id, "group_mode")
+    saved_crossfade = cue_prop(group_id, "crossfade")
+    saved_loop = cue_prop(group_id, "loop")
     call("cue.set_property", {
         "id": D, "property": "exclusive", "value": True,
     })
@@ -695,6 +697,64 @@ def test_8_exclusive(ids, group_id):
         check("8c: A ended", wait_state(A, "Stop", timeout=5))
         check("8c: B refused", cue_state(B) == "Stop")
         check("8c: C refused", cue_state(C) == "Stop")
+        stop_all()
+
+        # 8d: The same with a crossfade and loop on. At the crossfade
+        # point B and C are refused (skipped quietly); A plays on to
+        # its end, and the advance (wrapping round, each child once)
+        # finds nothing playable, so the group ends, not spins.
+        call("cue.set_property", {
+            "id": group_id, "property": "crossfade", "value": 1.0,
+        })
+        call("cue.set_property", {
+            "id": group_id, "property": "loop", "value": True,
+        })
+        call("cue.execute", {"id": group_id, "action": "Start"})
+        check("8d: A running", wait_state(A, "Running", timeout=5))
+        call("cue.execute", {"id": D, "action": "Start"})
+        check("8d: exclusive D running",
+              wait_state(D, "Running", timeout=5))
+        with _h.cue_signal(group_id, "end") as group_end:
+            call("cue.seek", {"id": A, "position": 5500})
+            ended = _h.wait_for_signal(group_end, timeout=8)
+        check("8d: group end fires (crossfade + loop, rest refused)",
+              ended is not None)
+        check("8d: group not left Running",
+              wait_state(group_id, "Stop", timeout=5))
+        check("8d: B refused", cue_state(B) == "Stop")
+        check("8d: C refused", cue_state(C) == "Stop")
+        stop_all()
+        call("cue.set_property", {
+            "id": group_id, "property": "crossfade", "value": 0.0,
+        })
+        call("cue.set_property", {
+            "id": group_id, "property": "loop", "value": False,
+        })
+
+        # 8e: A paused group whose paused child can't resume (an
+        # exclusive cue started meanwhile) stays paused and keeps the
+        # child, instead of ending and orphaning it.
+        call("cue.execute", {"id": group_id, "action": "Start"})
+        check("8e: A running", wait_state(A, "Running", timeout=5))
+        call("cue.execute", {"id": group_id, "action": "Pause"})
+        check("8e: group paused", wait_state(group_id, "Pause", timeout=5))
+        check("8e: A paused", wait_state(A, "Pause", timeout=5))
+        call("cue.execute", {"id": D, "action": "Start"})
+        check("8e: exclusive D running",
+              wait_state(D, "Running", timeout=5))
+        call("cue.execute", {"id": group_id, "action": "Start"})
+        time.sleep(0.5)  # nothing should happen: give it the chance
+        check("8e: group still paused after a refused resume",
+              cue_state(group_id) == "Pause")
+        check("8e: A still paused (not orphaned or skipped)",
+              cue_state(A) == "Pause")
+        check("8e: B not started", cue_state(B) == "Stop")
+        call("cue.execute", {"id": D, "action": "Stop"})
+        check("8e: D stopped", wait_state(D, "Stop", timeout=5))
+        call("cue.execute", {"id": group_id, "action": "Start"})
+        check("8e: group resumes once unblocked",
+              wait_state(group_id, "Running", timeout=5))
+        check("8e: A resumed", wait_state(A, "Running", timeout=5))
     finally:
         stop_all()
         call("cue.set_property", {
@@ -703,6 +763,13 @@ def test_8_exclusive(ids, group_id):
         call("cue.set_property", {
             "id": group_id, "property": "group_mode",
             "value": saved_mode,
+        })
+        call("cue.set_property", {
+            "id": group_id, "property": "crossfade",
+            "value": saved_crossfade,
+        })
+        call("cue.set_property", {
+            "id": group_id, "property": "loop", "value": saved_loop,
         })
 
 

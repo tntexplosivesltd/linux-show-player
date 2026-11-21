@@ -143,3 +143,26 @@ class TestIsStartBlocked:
         app = _make_app([running, new])
         mgr = ExclusiveManager(app)
         assert mgr.is_start_blocked(new) is True
+
+
+class TestQuietQuery:
+    """notify=False only asks: GroupCue's crossfade uses it to skip a
+    child the outgoing one blocks, without a toast per transition."""
+
+    def test_blocked_without_notifying(self):
+        running = _make_cue(exclusive=True, state=CueState.Running)
+        new = _make_cue(name="New")
+        app = _make_app([running, new])
+        mgr = ExclusiveManager(app)
+
+        assert mgr.is_start_blocked(new, notify=False) is True
+        app.notify.emit.assert_not_called()
+
+    def test_notifies_by_default(self):
+        running = _make_cue(exclusive=True, state=CueState.Running)
+        new = _make_cue(name="New")
+        app = _make_app([running, new])
+        mgr = ExclusiveManager(app)
+
+        assert mgr.is_start_blocked(new) is True
+        app.notify.emit.assert_called_once()
