@@ -243,16 +243,22 @@ class PreArmManager:
         """Arm a cue with the given reason. Returns True on success.
 
         If the cue is already armed, OR-merges the reason and returns
-        True. If not eligible or cap-blocked, returns False.
+        True. If not eligible or cap-blocked, returns False. A listed
+        cue whose media is no longer armed is armed again, keeping its
+        reasons (see _media_unarmed).
         """
         logger.debug(
             "PreArmManager: _try_arm cue=%s reason=%s already_armed=%s",
             cue.id, reason, cue.id in self._armed,
         )
         if cue.id in self._armed:
-            self._armed[cue.id] |= reason
+            if not self._media_unarmed(cue):
+                self._armed[cue.id] |= reason
+                self.armed_set_changed.emit()
+                return True
+            reason |= self._armed.pop(cue.id)
+            self._mtime_at_arm.pop(cue.id, None)
             self.armed_set_changed.emit()
-            return True
         if not self._eligible(cue):
             logger.debug(
                 "PreArmManager: %s not eligible for arming", cue.id
@@ -294,6 +300,20 @@ class PreArmManager:
         )
         return True
 
+    @staticmethod
+    def _media_unarmed(cue) -> bool:
+        """True when a listed cue's media is not armed any more: it was
+        started without cue_executed (MIDI, OSC, a group), or stop()
+        disarmed it. Only a real MediaState counts, so a media without
+        one is taken at the manager's word.
+        """
+        from lisp.backend.media import MediaState
+
+        state = getattr(getattr(cue, "media", None), "state", None)
+        return isinstance(state, MediaState) and state not in (
+            MediaState.Armed, MediaState.Playing, MediaState.Paused,
+        )
+
     def _disarm(self, cue) -> None:
         """Disarm a cue (full removal, regardless of reason).
         Idempotent: silent no-op if not in the armed set.
@@ -315,11 +335,7 @@ class PreArmManager:
         """Add a reason to an already-armed cue. If not armed, attempt
         to arm with the new reason.
         """
-        if cue.id not in self._armed:
-            self._try_arm(cue, reason)
-            return
-        self._armed[cue.id] |= reason
-        self.armed_set_changed.emit()
+        self._try_arm(cue, reason)
 
     def _remove_reason(self, cue, reason: ArmReason) -> None:
         """Remove a reason from an armed cue. If no reasons remain,

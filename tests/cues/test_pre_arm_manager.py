@@ -1099,3 +1099,67 @@ class TestCueRemovedClearsWiringFlag:
         cue._pre_arm_wired = True  # simulate already-wired state
         manager.cue_removed(cue)
         assert getattr(cue, "_pre_arm_wired", False) is False
+
+
+# --- The armed set must follow the media, not only the manager's calls ---
+#
+# A cue started other than by the layout's GO (MIDI, OSC, a group, the
+# harness's cue.start) never fires cue_executed, and stop() on an armed
+# pipeline disarms the media itself. Either way the manager still lists
+# the cue while its media is Ready or Null, and "already armed" stopped
+# it ever being armed again: the cue played cold behind an armed dot.
+
+
+def test_preload_rearms_a_cue_whose_media_was_played_meanwhile(manager):
+    from lisp.backend.media import MediaState
+
+    cue = _make_cue("c1", preload=True)
+    manager._try_arm(cue, ArmReason.Preload)
+    cue.media.state = MediaState.Ready  # played and stopped since
+    cue.media.prearm.reset_mock()
+
+    manager.on_cue_stopped(cue)
+
+    cue.media.prearm.assert_called_once()
+    assert manager._armed["c1"] == ArmReason.Preload
+
+
+def test_standby_rearms_a_cue_whose_media_was_disarmed(manager):
+    from lisp.backend.media import MediaState
+
+    cue = _make_cue("c1", preload=True)
+    manager._try_arm(cue, ArmReason.Preload)
+    cue.media.state = MediaState.Null  # stop() disarmed the media
+    cue.media.prearm.reset_mock()
+
+    manager.standby_changed(cue)
+
+    cue.media.prearm.assert_called_once()
+    assert manager._armed["c1"] == ArmReason.Preload | ArmReason.Auto
+
+
+def test_still_armed_media_is_not_prearmed_again(manager):
+    from lisp.backend.media import MediaState
+
+    cue = _make_cue("c1", preload=True)
+    manager._try_arm(cue, ArmReason.Preload)
+    cue.media.state = MediaState.Armed
+    cue.media.prearm.reset_mock()
+
+    manager.standby_changed(cue)
+
+    cue.media.prearm.assert_not_called()
+    assert manager._armed["c1"] == ArmReason.Preload | ArmReason.Auto
+
+
+def test_failed_rearm_drops_the_stale_entry(manager):
+    from lisp.backend.media import MediaState
+
+    cue = _make_cue("c1", preload=True)
+    manager._try_arm(cue, ArmReason.Preload)
+    cue.media.state = MediaState.Ready
+    cue.media.prearm.return_value = False
+
+    manager.on_cue_stopped(cue)
+
+    assert "c1" not in manager._armed
