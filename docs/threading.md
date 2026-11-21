@@ -39,7 +39,7 @@ There are three idiomatic ways:
   fires on the Qt main thread asynchronously regardless of where the
   emit happens. Used heavily in `GroupCue` for child end-handlers, in
   `CartLayout` for widget updates, and in `PreArmManager` for the
-  crossfade-arm relay.
+  crossfade-arm relay, the post-stop re-arm and `arm_lost`.
 * **`Connection.QtDirect`** for synchronous hop where the emitter
   must wait. Rare — most emitters can't safely block.
 * **`invoke_on_main_thread(fn)`** (test_harness) when a worker
@@ -135,8 +135,21 @@ Hot paths that fire on the main thread:
 * `cue_added` / `cue_removed` — wires per-cue listeners
 * `cue_executed` — drops the cue from the armed set without disarming
   the pipeline (it's about to play)
-* `on_uri_changed`, `on_start_time_changed`, `on_preload_changed` —
-  edit invalidation
+* `on_uri_changed`, `on_preload_changed` — edit invalidation (start
+  time, stop time, loop and file edits on an armed cue are applied by
+  `GstMedia` itself, on the thread that made the edit, under its
+  `__arm_lock`; `play()` and `prearm()` take the same lock on the cue
+  worker. Lock order: `__init_lock` then `__arm_lock`, never the
+  reverse — `play()`/`prearm()` build the pipeline before taking it)
+* `on_cue_stopped` — post-stop re-arm. Connected `QtQueued`: the cue
+  emits `stopped`/`interrupted`/`end`/`error` while it holds `_st_lock`,
+  on a worker or GStreamer thread. A prearm there would block the cue's
+  next `start()`, which gives up when the lock is taken (a dropped
+  GO), and would race `standby_changed` over `_armed`. Only the main
+  thread changes `_armed`.
+* `on_arm_lost` — the armed media could not apply an edit (a new file
+  that will not preroll) and is no longer armed. Connected `QtQueued`;
+  drops the entry, and a preload cue reports the failure.
 
 Hot paths that fire off the main thread:
 

@@ -286,14 +286,15 @@ The manager owns the mapping `cue_id → ArmReason`. The "Playing" state absorbs
 1. Manager removes the just-fired cue from `_armed` (it's now Playing).
 2. Layout has already advanced standby internally (`list_layout/layout.py:328`).
 3. Manager fetches new `standby_cue()` and arms it if eligible. Synchronous on the main thread (typical preroll: 5–50 ms; bounded at 1 s by `get_state(Gst.SECOND)` deadline).
-4. When the current cue ends (`stopped` / `interrupted` / `end` / `error`): if `preload=True`, re-arm immediately. Otherwise stay Unarmed.
+4. When the current cue ends (`stopped` / `interrupted` / `end` / `error`): if `preload=True`, re-arm immediately. A cue still in the armed set (fired other than by the layout's GO, e.g. MIDI/OSC on the standby) is re-armed with its reasons. Otherwise stay Unarmed.
 
 **Standby moves without GO.** Manager disarms cues that are `Auto`-only, retains those whose `ArmReason` includes `Preload`, and arms the new standby. A cue with `ArmReason == Auto | Preload` (preload-marked *and* on standby) downgrades to `Preload` when standby moves away — cue stays armed because the `Preload` bit is still set.
 
 **Edit invalidation.**
 
-- `changed("uri")` on an armed cue → `disarm()` + `prearm()`.
-- `changed("start_time")` on an armed cue → `reseek(start_time)`. No teardown.
+- `changed("pipe")` on an armed cue → `disarm()` + `prearm()` (the pipeline is rebuilt).
+- Start time, stop time, loop count and source file edits are applied by `GstMedia` itself, which records what the armed pipeline was seeked for (`__armed_for`): start/stop/loop re-seek it at once; a new file (the uri its GStreamer element holds) is prerolled again at once, as `uridecodebin` opens its uri only on READY→PAUSED. `play()` re-checks and catches up anything not applied (a failed seek), falling back to the unarmed path (a seek to the start time). A new file that will not preroll leaves the media unarmed and emits `arm_lost`; the manager (queued to the main thread) drops the entry, and a preload cue reports it as a failed pre-arm. _(Revised 2026-11-21: the original manager-side `reseek(start_time)` read `cue.start_time`, which does not exist, and stop time, loop and file edits were never applied — GO played the stale pipeline.)_
+- The manager treats a listed cue whose media is no longer Armed (started without `cue_executed`, or disarmed by `stop()`) as unarmed and arms it again. The post-stop re-arm is queued to the main thread (the cue emits its stop signals holding `_st_lock`), and skipped if the cue was started again meanwhile.
 - `changed("preload")` true → `prearm()` if eligible. False → if `ArmReason == Preload`, disarm; if `ArmReason == Auto | Preload`, downgrade to `Auto`.
 - mtime check: on every "should I arm/keep-armed?" decision, compare `cue.mtime > _mtime_at_arm[cue_id]`. If true, re-arm. No active polling.
 - Other property changes (volume, pan, fade settings, etc.) propagate to the live PAUSED pipeline via `GstProperty.__set__` (`gst_properties.py:35–43`); no manager involvement needed.
@@ -369,7 +370,7 @@ Scenarios:
 - Standby reconciliation: standby moves cue 5 → 8 → 5; arm reasons transition Auto → none → Auto.
 - `Auto | Preload` reason: preload-marked cue is also standby; standby moves away → reason downgrades to `Preload`, cue stays armed.
 - GO advances window: fire 5 GOs, assert armed set follows standby and capacity stays ≤ cap+1 transiently.
-- Edit invalidation routing: URI change → `disarm`+`prearm`; `start_time` change → `reseek`; `volume` change → no manager interaction.
+- Edit invalidation routing: pipe change → `disarm`+`prearm`; start/stop/loop/file edits → handled in `GstMedia` (no manager interaction); `volume` change → no manager interaction.
 - Failure path: mock `prearm()` returns `False` → manager records in `_failed`, paints red only for preload, no exception leaked.
 - Notification routing: assert `app.notify.emit` called with expected level for preload failures; assert NOT called for auto-only failures or cap refusals.
 - Batch coalescing: ≥2 simultaneous failures during `session_loaded` → exactly one summary toast.

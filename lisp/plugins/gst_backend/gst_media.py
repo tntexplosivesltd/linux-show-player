@@ -17,7 +17,7 @@
 
 import logging
 import weakref
-from threading import Lock
+from threading import Lock, RLock
 
 from lisp.backend.media import Media, MediaState
 from lisp.core.properties import Property
@@ -25,6 +25,7 @@ from lisp.core.util import weak_call_proxy
 from lisp.plugins.gst_backend import elements as gst_elements
 from lisp.plugins.gst_backend.gi_repository import Gst
 from lisp.plugins.gst_backend.gst_element import GstMediaElements
+from lisp.plugins.gst_backend.gst_properties import GstURIProperty
 from lisp.plugins.gst_backend.gst_utils import GstError
 from lisp.ui.ui_utils import translate
 
@@ -67,6 +68,16 @@ class GstMedia(Media):
         self.__loop = 0  # current number of loops left to do
         self.__current_pipe = None  # A copy of the pipe property
         self.__armed = False  # True when pre-armed (pipeline in PAUSED)
+        # What the armed pipeline was prerolled and seeked for (see
+        # __armed_settings); play() skips the seek only while it holds.
+        self.__armed_for = None
+        # Serialises the arm state (__armed, __armed_for) and what is
+        # done to an armed pipeline: edits re-seek it on the editing
+        # (main) thread while play() and prearm() run on cue workers.
+        # Always taken after __init_lock, never while holding it the
+        # other way round: play() and prearm() build the pipeline
+        # before taking it. Reentrant: play() emits signals under it.
+        self.__arm_lock = RLock()
         # Serialises pipeline (re)builds. Without it, two threads
         # racing into __init_pipeline (e.g. PreArmManager.prearm on
         # the standby cue and the parallel-group's start firing
@@ -87,6 +98,8 @@ class GstMedia(Media):
 
         self.changed("loop").connect(self.__on_loops_changed)
         self.changed("pipe").connect(self.__on_pipe_changed)
+        self.changed("start_time").connect(self.__on_seek_setting_changed)
+        self.changed("stop_time").connect(self.__on_seek_setting_changed)
 
     @Media.state.getter
     def state(self):
@@ -111,19 +124,35 @@ class GstMedia(Media):
         if self.state == MediaState.Null:
             self.__init_pipeline()
 
-        if self.state in (
-            MediaState.Ready, MediaState.Paused, MediaState.Armed,
-        ):
+        with self.__arm_lock:
+            if self.state not in (
+                MediaState.Ready, MediaState.Paused, MediaState.Armed,
+            ):
+                return
+
             self.on_play.emit(self)
 
             for element in self.elements:
                 element.play()
 
-            if self.state == MediaState.Armed:
-                # Pre-armed: pipeline already in PAUSED and seeked to
-                # start_time. Skip the preroll/seek work — that latency
-                # was paid at prearm time. This is the latency saving.
+            # Pre-armed: pipeline already in PAUSED and seeked. Skip the
+            # preroll/seek work — that latency was paid at prearm time.
+            # This is the latency saving. An edit not applied yet is
+            # caught up here; if that fails, play as an unarmed cue.
+            was_armed = self.__armed
+            armed = was_armed and self.__refresh_armed()
+            # Clear the arm flag — once we go to PLAYING, the state
+            # property must derive from the live pipeline (Playing),
+            # not keep reporting Armed via the override.
+            self.__armed = False
+            self.__armed_for = None
+
+            if armed:
                 pass
+            elif was_armed and self.state == MediaState.Paused:
+                # Still PAUSED where the arm left it, not a pause: play
+                # from the start time, as an unarmed cue would.
+                self.__seek(self.start_time)
             elif self.state == MediaState.Paused:
                 self.__seek(self.current_time())
             else:  # Ready
@@ -131,14 +160,10 @@ class GstMedia(Media):
                 self.__pipeline.get_state(Gst.SECOND)
                 self.__seek(self.start_time)
 
-            # Clear the arm flag — once we go to PLAYING, the state
-            # property must derive from the live pipeline (Playing),
-            # not keep reporting Armed via the override.
-            self.__armed = False
             self.__pipeline.set_state(Gst.State.PLAYING)
             self.__pipeline.get_state(Gst.SECOND)
 
-            self.played.emit(self)
+        self.played.emit(self)
 
     def pause(self):
         if self.state == MediaState.Playing:
@@ -204,40 +229,45 @@ class GstMedia(Media):
                 )
                 return False
 
-        # Pipeline is now in READY; drive it to PAUSED for preroll
-        ret = self.__pipeline.set_state(Gst.State.PAUSED)
-        if ret == Gst.StateChangeReturn.FAILURE:
-            logger.warning("GstMedia.prearm: set_state(PAUSED) FAILURE")
-            self.__pipeline.set_state(Gst.State.NULL)
-            return False
+        with self.__arm_lock:
+            # Re-checked under the lock: a play() may have started it.
+            if self.state != MediaState.Ready:
+                return self.state in (
+                    MediaState.Playing, MediaState.Paused, MediaState.Armed,
+                )
+            # Pipeline is in READY; drive it to PAUSED for preroll
+            if not self.__preroll("prearm"):
+                return False
+            self.__armed = True
+            self.__seek_armed(self.__armed_settings())
 
-        state_ret, *_ = self.__pipeline.get_state(Gst.SECOND)
-        if state_ret != Gst.StateChangeReturn.SUCCESS:
-            logger.warning(
-                "GstMedia.prearm: preroll did not complete (%s)",
-                state_ret,
-            )
-            self.__pipeline.set_state(Gst.State.NULL)
-            return False
-
-        self.__armed = True
-        self.__seek(self.start_time)
         self.armed.emit(self)
         return True
 
     def disarm(self) -> None:
         """Tear down an armed pipeline. Idempotent."""
-        if self.state != MediaState.Armed:
-            return
-        self.__pipeline.set_state(Gst.State.NULL)
-        self.__armed = False
+        with self.__arm_lock:
+            if self.state != MediaState.Armed:
+                return
+            self.__pipeline.set_state(Gst.State.NULL)
+            self.__armed = False
+            self.__armed_for = None
         self.disarmed.emit(self)
 
     def reseek(self, position: int) -> None:
-        """Re-seek a pre-armed pipeline without tearing it down."""
-        if self.state != MediaState.Armed:
-            return
-        self.__seek(position)
+        """Re-seek a pre-armed pipeline without tearing it down.
+
+        Not needed for edits: an armed GstMedia applies start time,
+        stop time, loop and file edits itself (__refresh_armed).
+        """
+        with self.__arm_lock:
+            if self.state != MediaState.Armed:
+                return
+            if self.__seek(position):
+                # The pipeline no longer matches start_time: play() will
+                # seek it back unless start_time is set to `position`.
+                self.__armed_for = (position,) + self.__armed_for[1:] \
+                    if self.__armed_for is not None else None
 
     def seek(self, position):
         if self.__seek(position):
@@ -295,11 +325,14 @@ class GstMedia(Media):
         self.__pipeline.query(query)
         rate = Gst.Query.parse_segment(query)[0]
 
-        # Check if we need to set an early stop position
+        # Set the stop position, an early one or the end of the stream.
+        # Always SET: SeekType.NONE would keep the segment's previous
+        # stop, so a cleared stop time would still cut the cue short on
+        # a pipeline seeked before (an armed one, re-seeked on edit).
         if self.stop_time > 0:
-            stop_type = Gst.SeekType.SET
+            stop = self.stop_time * Gst.MSECOND
         else:
-            stop_type = Gst.SeekType.NONE
+            stop = -1  # GST_CLOCK_TIME_NONE: the end of the stream
 
         # Decide which SeekFlags we want to use
         flags = Gst.SeekFlags.TRICKMODE
@@ -322,12 +355,105 @@ class GstMedia(Media):
             flags,
             Gst.SeekType.SET,
             position * Gst.MSECOND,
-            stop_type,
-            self.stop_time * Gst.MSECOND,
+            Gst.SeekType.SET,
+            stop,
         )
 
     def __on_loops_changed(self, loops):
         self.__loop = loops
+        self.__on_seek_setting_changed(loops)
+
+    def __armed_settings(self):
+        """What an armed pipeline is prerolled and seeked for: the
+        start and stop times and the loop count (one seek: its range and
+        SEGMENT flag), and the source file: the uri its GStreamer element
+        holds, which is what READY->PAUSED opens. (The uri property reads
+        back relative to the session folder, which moves when the session
+        is saved elsewhere though the file does not.)"""
+        uri = None
+        try:
+            source = self.elements[0]
+            prop = getattr(type(source), "uri", None)
+            if isinstance(prop, GstURIProperty):
+                uri = getattr(source, prop.element_name).get_property(
+                    prop.property_name
+                )
+        except (IndexError, AttributeError, TypeError):
+            pass
+        return self.start_time, self.stop_time, self.loop, uri
+
+    def __seek_armed(self, settings):
+        """Seek the armed pipeline for `settings` and record them. A
+        failed seek records the file only, so the next refresh retries.
+        Caller holds __arm_lock."""
+        if self.__seek(settings[0]):
+            self.__armed_for = settings
+        else:
+            self.__armed_for = (None, None, None, settings[3])
+            return False
+        return True
+
+    def __preroll(self, caller):
+        """READY -> PAUSED, waiting for the preroll. On failure the
+        pipeline is set to NULL and the arm state cleared."""
+        ret = self.__pipeline.set_state(Gst.State.PAUSED)
+        if ret == Gst.StateChangeReturn.FAILURE:
+            logger.warning("GstMedia.%s: set_state(PAUSED) FAILURE", caller)
+        else:
+            ret, *_ = self.__pipeline.get_state(Gst.SECOND)
+            if ret == Gst.StateChangeReturn.SUCCESS:
+                return True
+            logger.warning(
+                "GstMedia.%s: preroll did not complete (%s)", caller, ret
+            )
+        self.__pipeline.set_state(Gst.State.NULL)
+        self.__armed = False
+        self.__armed_for = None
+        return False
+
+    def __on_seek_setting_changed(self, _value):
+        # The standby cue is armed, and it is also the cue being edited:
+        # apply the edit now, so GO keeps the pre-arm latency saving.
+        self.__on_armed_edit()
+
+    def __on_source_changed(self, _uri):
+        self.__on_armed_edit()
+
+    def __on_armed_edit(self):
+        # Unlocked fast path: a pipeline rebuild (which holds
+        # __init_lock and resets __armed first) reloads the source uri;
+        # taking __arm_lock there could deadlock with play().
+        if not self.__armed:
+            return
+        with self.__arm_lock:
+            if not self.__armed:
+                return
+            self.__refresh_armed()
+            # A failed re-seek stays armed (play() retries it); a failed
+            # preroll set the pipeline to NULL and cleared the arm. The
+            # manager still lists the cue as armed until told.
+            lost = not self.__armed
+        if lost:
+            self.arm_lost.emit(self)
+
+    def __refresh_armed(self):
+        """Bring an armed pipeline in line with edits made since it was
+        armed; True when it is still armed. Caller holds __arm_lock.
+
+        Start/stop time and loop edits re-seek it. A new file is
+        prerolled again: uridecodebin opens its uri only on
+        READY->PAUSED, so the armed one would play the old file.
+        """
+        current = self.__armed_settings()
+        armed_for = self.__armed_for
+        if current == armed_for:
+            return True
+        if armed_for is None or current[3] != armed_for[3]:
+            self.__pipeline.set_state(Gst.State.READY)
+            self.__pipeline.get_state(Gst.SECOND)
+            if not self.__preroll("prearm"):
+                return False
+        return self.__seek_armed(current)
 
     def __on_pipe_changed(self, new_pipe):
         # Rebuild the pipeline only if something is changed
@@ -377,6 +503,7 @@ class GstMedia(Media):
         # state is invalid. Don't emit `disarmed` here; this is an
         # internal reset, not a user-visible disarm.
         self.__armed = False
+        self.__armed_for = None
 
         # Call the current media-finalizer, if any
         if self.__finalizer is not None:
@@ -436,6 +563,12 @@ class GstMedia(Media):
 
         # Reload the elements properties
         self.elements.update_properties(elements_properties)
+
+        # A new file on an armed pipeline is prerolled when it is set
+        try:
+            self.elements[0].changed("uri").connect(self.__on_source_changed)
+        except (IndexError, ValueError):
+            pass
 
         # The source element should provide the duration
         self.elements[0].changed("duration").connect(self.__duration_changed)
@@ -526,6 +659,7 @@ class GstMedia(Media):
             # for "pipeline gone, including any armed state" — adding
             # `disarmed` would be redundant for `error` subscribers.
             self.__armed = False
+            self.__armed_for = None
             self.__reset_media()
 
             self.error.emit(self)

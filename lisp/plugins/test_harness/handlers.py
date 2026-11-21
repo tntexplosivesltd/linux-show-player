@@ -1366,18 +1366,29 @@ def register_all(dispatcher, app, signal_manager):
         """Return a JSON snapshot of the pre-arm manager state.
 
         Returns {"armed": {cue_id: reason_str, ...},
-                 "failed": {cue_id: reason_text, ...}}.
+                 "failed": {cue_id: reason_text, ...},
+                 "media_state": {cue_id: MediaState name, ...}}.
+        media_state covers the armed set: the manager's view and the
+        pipeline's can differ (e.g. a stop() disarms the media).
         Returns empty dicts if the manager is not available.
         """
         mgr = getattr(app, "pre_arm_manager", None)
         if mgr is None:
-            return {"armed": {}, "failed": {}}
+            return {"armed": {}, "failed": {}, "media_state": {}}
         armed = {
             cue_id: _serialize_arm_reason(reason)
             for cue_id, reason in mgr._armed.items()
         }
         failed = dict(mgr._failed)
-        return {"armed": armed, "failed": failed}
+        media_state = {}
+        cue_model = getattr(app, "cue_model", None) or {}
+        for cue_id in armed:
+            media = getattr(cue_model.get(cue_id), "media", None)
+            if media is not None:
+                media_state[cue_id] = media.state.name
+        return {
+            "armed": armed, "failed": failed, "media_state": media_state,
+        }
 
     def handle_pre_arm_wait_for_armed(params):
         """Block until a cue id appears in the armed set, or timeout.

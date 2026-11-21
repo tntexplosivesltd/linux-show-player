@@ -49,6 +49,8 @@ from tests.e2e.helpers import (  # noqa: E402
     setup_with_tones,
     make_tone,
     signal_sub,
+    subscribe_cue,
+    unsubscribe,
     wait_for_signal,
     AUDIO_DIR,
 )
@@ -360,7 +362,155 @@ def test_t22b_auto_arm_failure_is_silent(t):
 # The unit tests provide adequate coverage.
 
 
-# ── Tear-down helper ───────────────────────────────────────────────────────
+# ── T24: Edits to the armed standby cue reach GO ─────────────────────────
+
+
+def _arm_as_standby(ids, name, index):
+    """Make the cue the standby and wait until its pipeline is armed.
+
+    Standby is moved away first: re-selecting the current standby is a
+    no-op, and stop_all() disarms the media of an armed cue while the
+    manager still lists it, so GO would take the cold path, which reads
+    every setting afresh and would hide the bug.
+    """
+    cue_id = ids[name]
+    call("layout.set_standby_index", {"index": 0 if index else 1})
+    call("layout.set_standby_index", {"index": index})
+    # The moves run on the main thread, after these calls return, so
+    # poll the pipeline's own state rather than the (maybe stale) set.
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline:
+        if pre_arm_status()["media_state"].get(cue_id) == "Armed":
+            return True
+        time.sleep(0.05)
+    print(f"  {name} not armed; pre_arm.status: {pre_arm_status()}")
+    return False
+
+
+def _edit_media(cue_id, media):
+    """Edit through UpdateCueCommand, the inspector/dialog path. The
+    call returns once the main thread has applied it."""
+    call("cue.update", {"id": cue_id, "properties": {"media": media}})
+
+
+def _still_armed(cue_id, timeout=3.0):
+    """The edit was applied to the armed pipeline: GO stays warm."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if pre_arm_status()["media_state"].get(cue_id) == "Armed":
+            return True
+        time.sleep(0.05)
+    print(f"  {cue_id} not armed; pre_arm.status: {pre_arm_status()}")
+    return False
+
+
+def _first_position(cue_id, timeout=3.0):
+    """The first non-zero playback position after GO, in ms."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        pos = call("cue.get", {"id": cue_id})["current_time"]
+        if pos > 0:
+            return pos
+        time.sleep(0.02)
+    return 0
+
+
+def _go_until_end(cue_id, seconds):
+    """GO the standby cue; seconds until it ends, or None if it plays
+    on past `seconds`."""
+    sub = subscribe_cue(cue_id, "end")
+    try:
+        started = time.monotonic()
+        call("layout.go", {})
+        if wait_for_signal(sub, timeout=seconds) is None:
+            return None
+        return time.monotonic() - started
+    finally:
+        unsubscribe(sub)
+
+
+def _ends_within(cue_id, seconds):
+    """GO the standby cue; True when it ends within `seconds`."""
+    return _go_until_end(cue_id, seconds) is not None
+
+
+def _uri_of(cue_id):
+    return call("cue.get_element_property", {
+        "id": cue_id, "element": "UriInput", "property": "uri",
+    })["value"]
+
+
+def test_t24_edits_to_armed_standby_reach_go(t, ids):
+    """The standby cue is armed (prerolled and seeked) and is also the
+    cue the operator has selected and edits; GO must play the edit."""
+    print("\n=== T24: Edits to the armed standby cue reach GO ===")
+    stop_all()
+    tone_b_uri = _uri_of(ids["tone_B"])
+    try:
+        _t24_cases(t, ids)
+    finally:
+        stop_all()
+        _edit_media(ids["tone_C"], {"start_time": 0})
+        _edit_media(ids["tone_D"], {"stop_time": 0})
+        _edit_media(ids["tone_B"], {
+            "loop": 0, "elements": {"UriInput": {"uri": tone_b_uri}},
+        })
+
+
+def _t24_cases(t, ids):
+    # T24a: start time
+    t.check("T24a: tone_C armed as standby", _arm_as_standby(ids, "tone_C", 2))
+    _edit_media(ids["tone_C"], {"start_time": 3000})
+    t.check("T24a: still armed after the edit (no cold GO)",
+            _still_armed(ids["tone_C"]))
+    call("layout.go", {})
+    pos = _first_position(ids["tone_C"])
+    t.check(f"T24a: plays from the new start time (first {pos} ms)",
+            pos >= 2800)
+    stop_all()
+
+    # T24b: stop time (the 8 s tone would otherwise play out)
+    t.check("T24b: tone_D armed as standby", _arm_as_standby(ids, "tone_D", 3))
+    _edit_media(ids["tone_D"], {"stop_time": 1000})
+    t.check("T24b: still armed after the edit (no cold GO)",
+            _still_armed(ids["tone_D"]))
+    t.check("T24b: ends at the new stop time",
+            _ends_within(ids["tone_D"], 3.0))
+    stop_all()
+
+    # T24d: clearing the stop time (a seek with SeekType.NONE kept the
+    # old stop). tone_D is armed with the 1 s stop from T24b.
+    t.check("T24d: tone_D armed as standby", _arm_as_standby(ids, "tone_D", 3))
+    _edit_media(ids["tone_D"], {"stop_time": 0})
+    t.check("T24d: still armed after the edit (no cold GO)",
+            _still_armed(ids["tone_D"]))
+    t.check("T24d: plays past the cleared stop time",
+            _go_until_end(ids["tone_D"], 2.5) is None)
+    stop_all()
+
+    # T24c: a new file (2 s, replacing the 8 s tone)
+    short = os.path.join(AUDIO_DIR, "tone_short_2s.wav")
+    make_tone(short, 880, 2.0)
+    t.check("T24c: tone_B armed as standby", _arm_as_standby(ids, "tone_B", 1))
+    _edit_media(
+        ids["tone_B"],
+        {"elements": {"UriInput": {"uri": f"file://{short}"}}},
+    )
+    t.check("T24c: re-armed with the new file before GO",
+            _still_armed(ids["tone_B"]))
+    t.check("T24c: plays the new file (ends with the 2 s tone)",
+            _ends_within(ids["tone_B"], 4.0))
+    stop_all()
+
+    # T24e: loop count, on the 2 s file from T24c: one loop is 4 s.
+    t.check("T24e: tone_B armed as standby", _arm_as_standby(ids, "tone_B", 1))
+    _edit_media(ids["tone_B"], {"loop": 1})
+    t.check("T24e: still armed after the edit (no cold GO)",
+            _still_armed(ids["tone_B"]))
+    took = _go_until_end(ids["tone_B"], 7.0)
+    t.check(f"T24e: the first play loops (ended after {took} s)",
+            took is not None and took >= 3.5)
+    stop_all()
 
 
 def _reset_preload_flags(ids):
@@ -392,6 +542,9 @@ def run_tests(t):
         # T22 — failure notifications; add/remove extra cues.
         test_t22a_preload_failure_toasts(t)
         test_t22b_auto_arm_failure_is_silent(t)
+
+        # T24 — edits to the armed standby cue.
+        test_t24_edits_to_armed_standby_reach_go(t, ids)
 
     finally:
         # Best-effort cleanup: remove preload flags so a subsequent

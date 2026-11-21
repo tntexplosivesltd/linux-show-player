@@ -54,6 +54,16 @@ def _make_cue(cue_id, preload=False, media_type="Audio", is_group=False):
     input_element.MediaType = media_type
     cue.media.elements = [input_element]
     cue.media.prearm.return_value = True
+
+    def _prearm():
+        # Like GstMedia: a successful prearm leaves the media Armed.
+        ok = cue.media.prearm.return_value
+        if ok:
+            from lisp.backend.media import MediaState
+            cue.media.state = MediaState.Armed
+        return ok
+
+    cue.media.prearm.side_effect = _prearm
     cue.media.disarm = MagicMock()
     cue.media.reseek = MagicMock()
     type(cue).__name__ = "GroupCue" if is_group else "MediaCue"
@@ -418,22 +428,6 @@ def test_uri_change_noop_when_not_armed(manager):
     cue.media.prearm.assert_not_called()
 
 
-def test_start_time_change_reseeks_when_armed(manager):
-    cue = _make_cue("c1", preload=True)
-    cue.start_time = 1000
-    manager._try_arm(cue, ArmReason.Preload)
-    cue.start_time = 2000
-    manager.on_start_time_changed(cue)
-    cue.media.reseek.assert_called_with(2000)
-
-
-def test_start_time_change_noop_when_not_armed(manager):
-    cue = _make_cue("c1")
-    cue.start_time = 1000
-    manager.on_start_time_changed(cue)
-    cue.media.reseek.assert_not_called()
-
-
 def test_preload_toggled_true_arms(manager):
     cue = _make_cue("c1", preload=False)
     manager.on_preload_changed(cue, True)
@@ -754,9 +748,10 @@ def _make_wired_cue(cue_id, preload=False, media_type="Audio"):
 def test_per_cue_signals_connected_on_arm(manager):
     """First successful arm of a cue connects per-cue signals.
 
-    After the fix: preload wires via cue.changed('preload'), start_time
-    and pipe (URI proxy) wire via cue.media.changed(). cue.changed('uri')
-    is no longer called — uri is not a cue property.
+    After the fix: preload wires via cue.changed('preload'), pipe (URI
+    proxy) via cue.media.changed(). cue.changed('uri') is no longer
+    called — uri is not a cue property. start_time is not wired: the
+    armed GstMedia re-seeks itself on start/stop/loop edits.
     """
     cue = _make_wired_cue("c1")
     manager._try_arm(cue, ArmReason.Auto)
@@ -766,7 +761,7 @@ def test_per_cue_signals_connected_on_arm(manager):
     cue.error.connect.assert_called()
     assert cue._preload_signal.connect.called
     assert cue.media._pipe_signal.connect.called
-    assert cue.media._start_time_signal.connect.called
+    assert not cue.media._start_time_signal.connect.called
 
 
 def test_per_cue_signals_idempotent_across_rearm(manager):
@@ -959,7 +954,8 @@ class TestWireCueSignalsRealisticShape:
         manager._wire_cue_signals(cue)
 
         pipe_signal.connect.assert_called_once()
-        start_time_signal.connect.assert_called_once()
+        # GstMedia re-seeks itself on start_time edits while armed
+        start_time_signal.connect.assert_not_called()
         preload_signal.connect.assert_called_once()
 
     def test_wire_cue_signals_skips_missing_media(self, manager):
@@ -1113,3 +1109,239 @@ class TestCueRemovedClearsWiringFlag:
         cue._pre_arm_wired = True  # simulate already-wired state
         manager.cue_removed(cue)
         assert getattr(cue, "_pre_arm_wired", False) is False
+
+
+# --- The armed set must follow the media, not only the manager's calls ---
+#
+# A cue started other than by the layout's GO (MIDI, OSC, a group, the
+# harness's cue.start) never fires cue_executed, and stop() on an armed
+# pipeline disarms the media itself. Either way the manager still lists
+# the cue while its media is Ready or Null, and "already armed" stopped
+# it ever being armed again: the cue played cold behind an armed dot.
+
+
+def test_preload_rearms_a_cue_whose_media_was_played_meanwhile(manager):
+    from lisp.backend.media import MediaState
+
+    cue = _make_cue("c1", preload=True)
+    manager._try_arm(cue, ArmReason.Preload)
+    cue.media.state = MediaState.Ready  # played and stopped since
+    cue.media.prearm.reset_mock()
+
+    manager.on_cue_stopped(cue)
+
+    cue.media.prearm.assert_called_once()
+    assert manager._armed["c1"] == ArmReason.Preload
+
+
+def test_standby_rearms_a_cue_whose_media_was_disarmed(manager):
+    from lisp.backend.media import MediaState
+
+    cue = _make_cue("c1", preload=True)
+    manager._try_arm(cue, ArmReason.Preload)
+    cue.media.state = MediaState.Null  # stop() disarmed the media
+    cue.media.prearm.reset_mock()
+
+    manager.standby_changed(cue)
+
+    cue.media.prearm.assert_called_once()
+    assert manager._armed["c1"] == ArmReason.Preload | ArmReason.Auto
+
+
+def test_still_armed_media_is_not_prearmed_again(manager):
+    from lisp.backend.media import MediaState
+
+    cue = _make_cue("c1", preload=True)
+    manager._try_arm(cue, ArmReason.Preload)
+    cue.media.state = MediaState.Armed
+    cue.media.prearm.reset_mock()
+
+    manager.standby_changed(cue)
+
+    cue.media.prearm.assert_not_called()
+    assert manager._armed["c1"] == ArmReason.Preload | ArmReason.Auto
+
+
+def test_failed_rearm_drops_the_stale_entry(manager):
+    from lisp.backend.media import MediaState
+
+    cue = _make_cue("c1", preload=True)
+    manager._try_arm(cue, ArmReason.Preload)
+    cue.media.state = MediaState.Ready
+    cue.media.prearm.return_value = False
+
+    manager.on_cue_stopped(cue)
+
+    assert "c1" not in manager._armed
+
+
+def test_auto_standby_played_outside_go_rearms_when_it_stops(manager):
+    """The standby fired by MIDI/OSC: standby doesn't move, and the cue
+    isn't preload, so only its stop can re-arm it."""
+    from lisp.backend.media import MediaState
+
+    cue = _make_cue("c1")
+    manager._try_arm(cue, ArmReason.Auto)
+    cue.media.state = MediaState.Ready
+    cue.media.prearm.reset_mock()
+
+    manager.on_cue_stopped(cue)
+
+    cue.media.prearm.assert_called_once()
+    assert manager._armed["c1"] == ArmReason.Auto
+
+
+def test_unlisted_non_preload_cue_is_not_armed_on_stop(manager):
+    cue = _make_cue("c1")
+
+    manager.on_cue_stopped(cue)
+
+    cue.media.prearm.assert_not_called()
+    assert "c1" not in manager._armed
+
+
+@pytest.mark.parametrize("state_name", ["Playing", "Paused"])
+def test_listed_cue_still_playing_is_not_prearmed(manager, state_name):
+    from lisp.backend.media import MediaState
+
+    cue = _make_cue("c1", preload=True)
+    manager._try_arm(cue, ArmReason.Preload)
+    cue.media.state = MediaState[state_name]
+    cue.media.prearm.reset_mock()
+
+    manager.standby_changed(cue)
+
+    cue.media.prearm.assert_not_called()
+    assert manager._armed["c1"] == ArmReason.Preload | ArmReason.Auto
+
+
+# --- Re-arming on stop runs on the main thread, after the cue's lock ---
+#
+# Cue emits stopped/interrupted/end while holding its _st_lock, on a
+# worker (or GStreamer) thread. A prearm there blocks the cue's next
+# start() (which gives up when the lock is taken: a dropped GO), and
+# races standby_changed on the main thread over the armed set.
+
+
+@pytest.mark.parametrize("name", ["stopped", "interrupted", "end", "error"])
+def test_stop_signals_are_queued_to_the_main_thread(manager, name):
+    from lisp.core.signal import Connection
+
+    cue = _make_wired_cue("c1")
+    manager._try_arm(cue, ArmReason.Auto)
+
+    getattr(cue, name).connect.assert_called_once_with(
+        manager.on_cue_stopped, Connection.QtQueued
+    )
+
+
+def test_a_stop_on_a_worker_thread_rearms_on_the_main_thread(
+    manager, qtbot
+):
+    import threading
+
+    from lisp.backend.media import MediaState
+    from lisp.core.signal import Signal
+
+    cue = _make_cue("c1")
+    for name in ("stopped", "interrupted", "end", "error"):
+        setattr(cue, name, Signal())
+    manager._try_arm(cue, ArmReason.Auto)
+    cue.media.state = MediaState.Ready  # fired by MIDI, then stopped
+
+    prearm_threads = []
+    real_prearm = cue.media.prearm.side_effect
+
+    def _recording_prearm():
+        prearm_threads.append(threading.current_thread())
+        return real_prearm()
+
+    cue.media.prearm.side_effect = _recording_prearm
+    under_lock = []
+    st_lock = threading.Lock()
+
+    def _stop_on_worker():
+        with st_lock:  # as Cue.stop() does
+            cue.stopped.emit(cue)
+            under_lock.extend(prearm_threads)
+
+    worker = threading.Thread(target=_stop_on_worker)
+    worker.start()
+    worker.join(timeout=2)
+
+    qtbot.waitUntil(lambda: bool(prearm_threads), timeout=2000)
+    assert under_lock == []
+    assert prearm_threads == [threading.main_thread()]
+    assert manager._armed["c1"] == ArmReason.Auto
+
+
+def test_a_cue_started_again_before_its_stop_is_handled_is_left(manager):
+    """Queued, the stop can arrive after the cue was started again;
+    its next stop re-arms it."""
+    from lisp.cues.cue import CueState
+
+    cue = _make_cue("c1", preload=True)
+    cue.state = CueState.Running
+
+    manager.on_cue_stopped(cue)
+
+    cue.media.prearm.assert_not_called()
+    assert "c1" not in manager._armed
+
+
+# --- A media that loses its arm by itself tells the manager -----------
+#
+# An edit the armed media cannot apply (a new file that will not
+# preroll) leaves it unarmed; the armed set and the list's dot must
+# follow, and a preload cue must report the failure.
+
+
+def test_media_arm_lost_is_queued_to_the_main_thread(manager):
+    from lisp.core.signal import Connection
+
+    cue = _make_wired_cue("c1")
+    manager._try_arm(cue, ArmReason.Auto)
+
+    cue.media.arm_lost.connect.assert_called_once()
+    assert cue.media.arm_lost.connect.call_args.args[1] \
+        is Connection.QtQueued
+
+
+def test_a_preload_cue_whose_media_lost_its_arm_is_reported(
+    manager, monkeypatch
+):
+    from lisp.backend.media import MediaState
+
+    cue = _make_cue("c1", preload=True)
+    manager._try_arm(cue, ArmReason.Preload)
+    toasts = []
+    monkeypatch.setattr(manager, "_on_prearm_failed", toasts.append)
+    cue.media.state = MediaState.Null
+
+    manager.on_arm_lost(cue)
+
+    assert "c1" not in manager._armed
+    assert "c1" in manager._failed
+    assert toasts == [cue]
+
+
+def test_an_auto_cue_whose_media_lost_its_arm_is_dropped(manager):
+    from lisp.backend.media import MediaState
+
+    cue = _make_cue("c1")
+    manager._try_arm(cue, ArmReason.Auto)
+    cue.media.state = MediaState.Null
+
+    manager.on_arm_lost(cue)
+
+    assert "c1" not in manager._armed
+    assert manager._failed == {}
+
+
+def test_a_stale_arm_lost_for_a_rearmed_media_is_ignored(manager):
+    cue = _make_cue("c1", preload=True)
+    manager._try_arm(cue, ArmReason.Preload)  # media is Armed
+
+    manager.on_arm_lost(cue)
+
+    assert manager._armed["c1"] == ArmReason.Preload

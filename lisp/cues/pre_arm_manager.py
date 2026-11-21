@@ -20,7 +20,7 @@ import logging
 from enum import Flag, auto
 from pathlib import Path
 
-from lisp.core.signal import Signal
+from lisp.core.signal import Connection, Signal
 from lisp.ui.widgets.notification import NotificationLevel
 
 logger = logging.getLogger(__name__)
@@ -173,20 +173,24 @@ class PreArmManager:
         def _on_uri(_v, c=cue):
             self.on_uri_changed(c)
 
-        def _on_start(_v, c=cue):
-            self.on_start_time_changed(c)
-
         def _on_preload(value, c=cue):
             self.on_preload_changed(c, value)
 
-        handlers.extend([_on_uri, _on_start, _on_preload])
+        def _on_arm_lost(_media, c=cue):
+            self.on_arm_lost(c)
+
+        handlers.extend([_on_uri, _on_preload, _on_arm_lost])
         self._cue_handlers[cue.id] = handlers
 
+        # Queued: the cue emits these holding its _st_lock, on a worker
+        # or GStreamer thread. Re-arming there would block the cue's
+        # next start() (a dropped GO) and race standby_changed over
+        # _armed, which only the main thread may change.
         for sig_name in ("stopped", "interrupted", "end", "error"):
             sig = getattr(cue, sig_name, None)
             if sig is not None:
                 try:
-                    sig.connect(self.on_cue_stopped)
+                    sig.connect(self.on_cue_stopped, Connection.QtQueued)
                 except AttributeError:
                     pass
 
@@ -196,15 +200,12 @@ class PreArmManager:
         except (AttributeError, TypeError, ValueError):
             pass
 
-        # start_time and pipe-rebuild signals live on cue.media
-        # (Media.start_time and GstMedia.pipe respectively — neither
-        # exists as a top-level cue property).
+        # The pipe-rebuild signal lives on cue.media (GstMedia.pipe is
+        # not a cue property). Start/stop time and loop edits are not
+        # routed here: the armed media re-seeks itself (GstMedia
+        # __refresh_armed), as only it knows what it was seeked for.
         media = getattr(cue, "media", None)
         if media is not None:
-            try:
-                media.changed("start_time").connect(_on_start)
-            except (AttributeError, TypeError, ValueError):
-                pass
             # URI / file changes drive a full pipe rebuild. Subscribing
             # through `pipe` is the robust proxy: any element swap
             # (including different URI in the same input element) will
@@ -213,6 +214,11 @@ class PreArmManager:
             try:
                 media.changed("pipe").connect(_on_uri)
             except (AttributeError, TypeError, ValueError):
+                pass
+            # An edit the armed media could not apply left it unarmed.
+            try:
+                media.arm_lost.connect(_on_arm_lost, Connection.QtQueued)
+            except AttributeError:
                 pass
 
     # --- Eligibility --------------------------------------------------
@@ -249,16 +255,22 @@ class PreArmManager:
         """Arm a cue with the given reason. Returns True on success.
 
         If the cue is already armed, OR-merges the reason and returns
-        True. If not eligible or cap-blocked, returns False.
+        True. If not eligible or cap-blocked, returns False. A listed
+        cue whose media is no longer armed is armed again, keeping its
+        reasons (see _media_unarmed).
         """
         logger.debug(
             "PreArmManager: _try_arm cue=%s reason=%s already_armed=%s",
             cue.id, reason, cue.id in self._armed,
         )
         if cue.id in self._armed:
-            self._armed[cue.id] |= reason
+            if not self._media_unarmed(cue):
+                self._armed[cue.id] |= reason
+                self.armed_set_changed.emit()
+                return True
+            reason |= self._armed.pop(cue.id)
+            self._mtime_at_arm.pop(cue.id, None)
             self.armed_set_changed.emit()
-            return True
         if not self._eligible(cue):
             logger.debug(
                 "PreArmManager: %s not eligible for arming", cue.id
@@ -300,6 +312,20 @@ class PreArmManager:
         )
         return True
 
+    @staticmethod
+    def _media_unarmed(cue) -> bool:
+        """True when a listed cue's media is not armed any more: it was
+        started without cue_executed (MIDI, OSC, a group), or stop()
+        disarmed it. Only a real MediaState counts, so a media without
+        one is taken at the manager's word.
+        """
+        from lisp.backend.media import MediaState
+
+        state = getattr(getattr(cue, "media", None), "state", None)
+        return isinstance(state, MediaState) and state not in (
+            MediaState.Armed, MediaState.Playing, MediaState.Paused,
+        )
+
     def _disarm(self, cue) -> None:
         """Disarm a cue (full removal, regardless of reason).
         Idempotent: silent no-op if not in the armed set.
@@ -321,11 +347,7 @@ class PreArmManager:
         """Add a reason to an already-armed cue. If not armed, attempt
         to arm with the new reason.
         """
-        if cue.id not in self._armed:
-            self._try_arm(cue, reason)
-            return
-        self._armed[cue.id] |= reason
-        self.armed_set_changed.emit()
+        self._try_arm(cue, reason)
 
     def _remove_reason(self, cue, reason: ArmReason) -> None:
         """Remove a reason from an armed cue. If no reasons remain,
@@ -563,12 +585,41 @@ class PreArmManager:
     @_safe
     def on_cue_stopped(self, cue) -> None:
         """Called when a cue stops/ends/is interrupted/errors. If marked
-        preload, re-arm immediately (after an mtime check). Otherwise
-        no-op.
+        preload, re-arm immediately (after an mtime check). A cue still
+        listed (e.g. the Auto standby, fired by MIDI or OSC, which does
+        not move standby) is re-armed with its reasons. Otherwise no-op.
         """
-        if getattr(cue, "preload", False) and self._eligible(cue):
+        if not self._eligible(cue):
+            return
+        if self._running(cue):
+            return  # started again since; its next stop re-arms it
+        if getattr(cue, "preload", False):
             self.maybe_rearm_for_mtime(cue)
             self._try_arm(cue, ArmReason.Preload)
+        elif cue.id in self._armed:
+            self._try_arm(cue, self._armed[cue.id])
+
+    @staticmethod
+    def _running(cue) -> bool:
+        from lisp.cues.cue import CueState
+
+        state = getattr(cue, "state", None)
+        return isinstance(state, int) and bool(state & CueState.IsRunning)
+
+    @_safe
+    def on_arm_lost(self, cue) -> None:
+        """The cue's media lost its arm by itself: an edit it could not
+        apply (a new file that will not preroll). Drop the entry; a
+        preload cue reports the failure, as a failed arm does.
+        """
+        if cue.id not in self._armed or not self._media_unarmed(cue):
+            return  # stale: re-armed (or disarmed) since
+        self._armed.pop(cue.id)
+        self._mtime_at_arm.pop(cue.id, None)
+        self.armed_set_changed.emit()
+        logger.warning("PreArmManager: %s lost its arm", cue.id)
+        self._record_failure(cue, "preload failed")
+        self._on_prearm_failed(cue)
 
     # --- T11: Edit invalidation ---------------------------------------
 
@@ -584,22 +635,6 @@ class PreArmManager:
         reason = self._armed[cue.id]
         self._disarm(cue)
         self._try_arm(cue, reason)
-
-    @_safe
-    def on_start_time_changed(self, cue) -> None:
-        """Armed cue's start_time changed — re-seek (no teardown).
-
-        Spec: GstMedia.reseek() is cheap relative to a full pre-arm
-        cycle.
-        """
-        if cue.id not in self._armed:
-            return
-        try:
-            cue.media.reseek(cue.start_time)
-        except Exception as exc:
-            logger.warning(
-                "PreArmManager: reseek failed for %s: %s", cue.id, exc
-            )
 
     @_safe
     def on_preload_changed(self, cue, new_value: bool) -> None:
