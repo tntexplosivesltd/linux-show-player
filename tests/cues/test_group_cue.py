@@ -1349,3 +1349,32 @@ class TestCrossfadeRefusedNextChild:
         c1.execute.assert_called_once_with(CueAction.FadeOutStop)
         assert group._playlist_index == 2
         assert group._connected_children == {"c3"}
+
+
+class TestNestedGroupWithNothingPlayable:
+    """H31: a nested group whose children are all disabled refuses
+    its start; the outer group must see that refusal, not wait for
+    an inner group that never ran."""
+
+    def _nested(self, mock_app, outer_mode):
+        leaf = _make_child("leaf")
+        leaf.disabled = True
+        leaf.effective_disabled = True
+        inner = GroupCue(mock_app)
+        outer = GroupCue(mock_app)
+        cues = {leaf.id: leaf, inner.id: inner, outer.id: outer}
+        mock_app.cue_model.get = cues.get
+        inner.children = [leaf.id]
+        outer.children = [inner.id]
+        outer.group_mode = outer_mode
+        return outer, inner
+
+    def test_execute_start_reports_refusal(self, mock_app):
+        _outer, inner = self._nested(mock_app, "parallel")
+        assert inner.execute(CueAction.Start) is False
+
+    @pytest.mark.parametrize("mode", ["parallel", "playlist"])
+    def test_outer_group_does_not_wait_for_it(self, mock_app, mode):
+        outer, _inner = self._nested(mock_app, mode)
+        assert outer.__start__(fade=False) is False
+        assert outer._connected_children == set()

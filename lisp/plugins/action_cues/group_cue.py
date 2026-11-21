@@ -275,9 +275,11 @@ class GroupCue(Cue):
         # Default on a running-but-now-disabled group must still
         # reach super() so it remaps to Stop (Stop All / operator
         # trigger on a playing group stays functional).
+        # Refused like any other blocked start (False), so a parent
+        # group doesn't wait for a nested group that never ran (H31).
         if action in (CueAction.Start, CueAction.FadeInStart):
             if not self._resolve_playable_children():
-                return
+                return False
         return super().execute(action)
 
     def __start__(self, fade=False):
