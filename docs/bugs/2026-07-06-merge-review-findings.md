@@ -10,10 +10,10 @@ Generated 2026-07-06 from a 3-agent QA / security / code-review panel run over a
 | Severity | To-fix (still present, deduped) |
 |---|---:|
 | Critical | 1 |
-| High | 34 |
-| Medium | 74 |
-| Low | 106 |
-| **Total** | **215** |
+| High | 36 |
+| Medium | 76 |
+| Low | 107 |
+| **Total** | **220** |
 
 _Also: 8 finding(s) already fixed on master, 1 not-applicable — see appendix._
 
@@ -23,7 +23,7 @@ _Also: 8 finding(s) already fixed on master, 1 not-applicable — see appendix._
   GroupCue playback (`__start__`, `_resolve_children`, `_resolve_playable_children` in lisp/plugins/action_cues/group_cue.py) iterates the GroupCue's own `children` Property (an explicit list of child ids) and looks each id up in cue_model — it does NOT scan the model for cues whose `group_id` equals the group's id. `Un…  
   _Fix:_ When promoting children to a grandparent, also splice the grandparent GroupCue's `children` list: replace the dissolved/removed group's id with the promoted child ids (preserving relative order), in both `UngroupCuesCommand.do()`/`undo()` and `CueModel.pop()`'s safety-net loop (guard with `isinstance(parent, GroupCue)` since a plain '' top-level parent has no children list to touch). Add tests th…
 
-## High (34)
+## High (36)
 
 - [ ] **H1** · `lisp/ui/settings/cue_pages/cue_general.py:548` · _162ec1d9 (qa)_ — **cue_number inclusion gated on QWidget.isVisible(), which is False whenever the General tab isn't the active tab**  
   getSettings() only adds `cue_number` when `self.cueNumberGroup.isVisible()` is True, instead of using the codebase's established `isGroupEnabled()`/checkable-group pattern used for every other field. QWidget.isVisible() reflects on-screen visibility, not the checkable-enabled state used elsewhere. I verified empirical…  
@@ -127,8 +127,14 @@ _Also: 8 finding(s) already fixed on master, 1 not-applicable — see appendix._
 - [x] **H34** · `lisp/plugins/action_cues/group_cue.py:349` · _found 2026-11-18 (Shore Dance 2026 show build)_ — **GO on a group never fades children in: every child gets a plain Start, ignoring its own `fadein_duration`** — fixed: `GroupCue._start_child` starts/resumes each child with `FadeInStart`/`FadeInResume` when the child has a fade-in and supports the action, else plain `Start`/`Resume`; used by both the parallel and playlist paths (GO, natural advance, loop). The group's own `fade` flag is no longer threaded through. Unit tests in `tests/cues/test_group_cue.py` (`TestParallelChildFadeIn`, `TestPlaylistChildFadeIn`); E2E `test_groups_e2e.py` §16 drives the real GO button, samples the child's `Volume.live_volume` mid-ramp, and covers playlist GO and natural advance (§16a–f; 6 checks fail without the fix). Review follow-up: `_start_child` reads through a crossfade hold whose restore is released but still queued to the main thread (`_restoring`), so a GO right after stopping mid-crossfade doesn't fade a child over the crossfade time. Fades that fired but did not ramp (silent cue on a stalled sink, skipped fade on a rebuilt pipeline) were M74.  
   `_start_parallel` / `_play_child_at` only sent a child `FadeInStart`/`FadeInResume` when the group's `fade` argument was true. That argument is the group's OWN fade-in: GO runs the group's `default_start_action` (`Start` → `fade=False`), `GroupCue.CueActions` has no `FadeInStart`, and even `Cue.execute(FadeInStart)` passes `fade=self.fadein_duration > 0` — the group's fade-in, always 0. So no path ever faded a child in: a grouped backdrop image with a 1 s fade-in cut in at full alpha (probe `~/lisp-e2e-ci/probes/group_fadein_probe.py`: `live_alpha` 1.00 from the first sample). Playlist children are included now that H25's crossfade restores no longer leave a stale `fadein_duration` behind; the crossfade path already honoured a child's own fade-in.  
   _Fix:_ Decide per child from the child's own `fadein_duration` and `CueActions`, never from the group's `fade` flag.
+- [ ] **H35** · `lisp/plugins/action_cues/collection_cue.py:88` · _found 2026-11-21 (H31 triage / PR #28 review)_ — **A Collection cue with a deleted target raises, and the targets after it never fire**  
+  `__start__` looks each target up with `cue_model.get(target_id)` and calls `cue.execute(...)` on the result. A target removed from the show returns `None`, `None.execute` raises `AttributeError`, and the loop stops: every later target is skipped. The exception surfaces only through `Cue.start` (see H36), so the operator sees nothing.  
+  _Fix:_ Skip (and log) a target that no longer resolves, and keep going; consider dropping dead ids when a cue is removed (as `GroupCue` children are). Unit test: a collection whose first target is missing still executes the second.  
+- [ ] **H36** · `lisp/cues/cue.py:386` · _found 2026-11-21 (H31 triage / PR #28 review)_ — **An exception in a cue's `__start__` is silent: GO does nothing visible**  
+  `Cue.start` (an `@async_function`) wraps the start in `try/finally` with no `except`. An exception from `__start__` (H35, a bad element, a plugin bug) unwinds out of the worker thread to stderr; the cue never reaches Running or Error, no `error` signal, no notification. On stage, GO simply does nothing.  
+  _Fix:_ Catch exceptions around `__start__` (and the other `__*__` hooks), log them, and move the cue to Error with the `error` signal so the layout and notifications show it.  
 
-## Medium (74)
+## Medium (76)
 
 - [ ] **M1** · `lisp/plugins/test_harness/handlers.py:438` · _00bc9852 (qa)_ — **Unvalidated generic setattr with no unit test coverage**  
   handle_layout_set_property does `setattr(app.layout, name, value)` with no allowlist and no check that `name` actually names a known ProxyProperty (e.g. `volume_indicators_visible`). If a test passes a mistyped or non-existent property name, Python silently creates a new instance attribute instead of raising, and the…  
@@ -147,7 +153,7 @@ _Also: 8 finding(s) already fixed on master, 1 not-applicable — see appendix._
   _Fix:_ Make `updateSize()` hibernation-aware (e.g. compute the compact height when `self._hibernated` is True, or have `resizeEvent` skip/adjust hibernated items and re-apply `set_hibernated(True)` after resizing), and add a test that calls `updateSize()`/simulates a resize while `_hibernated` is True and asserts the compact height/hidden controls are preserved.
 - [ ] **M6** · `tests/e2e/test_hibernation_workflow_e2e.py:239` · _01647356 (qa)_ — **No coverage for stopping (rather than resuming) a hibernating GroupCue**  
   The new e2e test only exercises `layout.stop_all`, which calls `cue.execute()` on every cue in the model directly (lisp/layout/cue_layout.py `execute_all`), so paused/hibernating children get stopped correctly regardless of their group. It never exercises the operator action of stopping the GroupCue cue itself (contex…  
-  _Fix:_ Add an e2e/unit test that hibernates a GroupCue's children, then issues `cue.execute`/`layout.context_action` 'Stop' on the group specifically (not `layout.stop_all`), and asserts the children are fully stopped and the Hibernating bit is cleared. If the assertion fails, fix `GroupCue.__stop__`'s running-child filter to also include `CueState.Pause` children.
+  _Fix:_ Add an e2e/unit test that hibernates a GroupCue's children, then issues `cue.execute`/`layout.context_action` 'Stop' on the group specifically (not `layout.stop_all`), and asserts the children are fully stopped and the Hibernating bit is cleared. If the assertion fails, fix `GroupCue.__stop__`'s running-child filter to also include `CueState.Pause` children. — 2026-11-21: confirmed by reading the code (not yet run): `GroupCue.__stop__` stops only `IsRunning` children, so stopping a paused group (paused children are `Pause`, not `IsRunning`) leaves them paused. A bug, not only a missing test.
 - [ ] **M7** · `lisp/plugins/action_cues/stop_cue.py:239` · _01647356 (code)_ — **Armed hibernate listener persists and can spuriously hibernate an unrelated later pause**  
   `_arm_hibernate_listener` connects a sticky handler to `target.paused` (fired=False) BEFORE dispatch, and the code deliberately never disarms on the success/instant paths (only on fade-abort, exception, or re-arm). If the dispatched Pause is a no-op because the target is not Running at dispatch time (e.g. the StopCue…  
   _Fix:_ Only arm/dispatch hibernation when the target is actually running (guard on `target.state & CueState.IsRunning` before arming), and/or bound the listener's lifetime: disarm after the pause is observed or after a short timeout, or connect a self-disconnecting one-shot so an unrelated future pause cannot trigger it. For the group cascade, only arm children that are currently running.
@@ -352,8 +358,14 @@ _Also: 8 finding(s) already fixed on master, 1 not-applicable — see appendix._
 - [ ] **M75** · `lisp/plugins/gst_backend/video_compositor.py` · _found 2026-11-21 (PR #24, 3-core Docker repro)_ — **Under heavy load the first video cue's first picture appears late: the projection stays black for up to ~1.5 s after GO**  
   Not a gap between cues (PR #24 fixed those: late frames are drawn, and a playlist's old cue is released only once the new cue's frame is composited). With the projection rendering below real time (software GL in Docker pinned to 3 cores, 8–15 frames/s, about GitHub's runner speed), the first frame of the first cue reaches the screen 0.5–0.67 s after GO; on 2 cores (3–5 frames/s) about 1.5 s, with the mixer running up to 1.8 s behind real time. The pixel E2Es judge from 0.5 s into the capture, so `test_video_compositor_parity_e2e.py` ("no black gap at any auto-advance") failed 3/3 on 3 cores with its longest dark run starting at the 500 ms edge (33, 33, 167 ms; the tests print `longest dark run starts …`), and `test_video_transition_flicker_e2e.py` 1/3 (350 ms). CI may fail on it until fixed. Where the time goes (preroll, decode, the pump's first push, GL upload, mixer latency) is not yet traced.  
   _Fix:_ Trace a cold GO under `--cpuset-cpus=0-2` (`~/lisp-e2e-ci/gaps/` tools: per-stage timestamps from GO to the first projection-sink buffer) and cut the dominant stage. Do not widen the tests' 0.5 s settle window unless the delay is proven to be outside LiSP.
+- [ ] **M76** · `lisp/plugins/action_cues/group_cue.py:636` · _found 2026-11-21 (H31 triage / PR #28 review)_ — **A playlist crossfade into a child that can't take `FadeInStart` (a nested group, most action cues) hangs the playlist**  
+  `_crossfade_in_next` sends `execute(CueAction.FadeInStart)`. `Cue.execute` silently ignores an action outside the child's `CueActions` and returns `None`, which reads as "started": the current child is faded out, the next one never starts, and the group waits for an `end` that never comes.  
+  _Fix:_ Fall back to `Start` for a child without `FadeInStart`, as `_start_child` already does (or skip the crossfade for it and advance at the natural end). Unit test with a real `Cue` subclass lacking `FadeInStart`.  
+- [ ] **M77** · `lisp/plugins/action_cues/resume_cue.py:165` · _found 2026-11-21 (H31 triage / PR #28 review)_ — **Fade & Resume fades a target whose resume was refused**  
+  With a fade, `__start__` zeroes the target's faders, calls `target.execute(CueAction.Resume)` and ignores its result. If exclusivity refuses the resume (an exclusive cue or another video playing), the target stays paused while the fade runs on it; resuming it by hand during the fade starts it quiet or silent.  
+  _Fix:_ Check `execute()`'s result; on a refusal restore the faders and end (or error) without fading.  
 
-## Low (106)
+## Low (107)
 
 - [ ] **L1** · `tests/plugins/list_layout/test_volume_indicator.py:41` · _00bc9852 (qa)_ — **No explicit test for negative-finite linear volume input**  
   _format_db_text/linear_to_db correctly funnels any linear value <= MIN_VOLUME (including negative, finite values) to MIN_VOLUME_DB without raising (math.log10 domain error is avoided because the `value > MIN_VOLUME` guard short-circuits first), but the added test suite (tests/plugins/list_layout/test_volume_indicator.…  
@@ -673,6 +685,9 @@ _Also: 8 finding(s) already fixed on master, 1 not-applicable — see appendix._
 - [ ] **L106** · `lisp/plugins/gst_backend/gst_media.py:184` · _f5f9f3f5 (code)_ — **Armed cues hold a PAUSED sink open; up to maxArmed pipelines may contend for the audio device**  
   prearm leaves the pipeline in PAUSED with elements including the output sink instantiated, holding audio-device resources. With the default cap of 16, up to 16 sinks may be open simultaneously. On multiplexing backends (PulseAudio/PipeWire) this is fine, but on an exclusive-access sink (e.g. bare ALSA hw device) the s…  
   _Fix:_ Document/verify the sink-sharing assumption, and consider prearming without fully realizing an exclusive output sink, or lowering the default cap. Add a unit test that exercises the ASYNC/FAILURE preroll return and asserts prearm() returns False and resets the pipeline to NULL.
+- [ ] **L107** · `lisp/plugins/action_cues/group_cue.py:733` · _found 2026-11-21 (H31 triage / PR #28 review)_ — **A child that ends before its group reaches Running is ignored, leaving the group Running**  
+  `_on_child_ended` / `_on_playlist_child_ended` act only while the group is Running, and `Cue.start` sets Running only after `__start__` returns (on the group's worker). A child ending in between is dropped. The window is narrow (the handlers are QtQueued, and `_start_parallel` covers children that ended during `__start__`), but PR #28's CI hit the same ordering in a test.  
+  _Fix:_ Re-check, once the group is Running, whether its connected children have all ended (or record early ends and apply them).  
 
 ---
 
