@@ -721,13 +721,34 @@ class Cue(HasProperties):
 
         These run on a worker thread: left alone, the exception goes to
         stderr and the cue keeps its old state, so on stage GO just does
-        nothing. Log it (the log reaches the operator) and put the cue
-        in Error, so the layout shows it and `error` listeners (groups,
-        pre-arm) react.
+        nothing. Log it (the log reaches the operator), silence whatever
+        the hook left playing, and put the cue in Error, so the layout
+        shows it and `error` listeners (groups, pre-arm) react.
         """
+        assert self._st_lock.locked(), "_hook_failed needs _st_lock"
         logger.exception(
             "Cue %r (%s) failed to %s", self.name, self.id, action
         )
+
+        if action != "start" and not (
+            self._state & (CueState.Running | CueState.Pause)
+        ):
+            # A stop/pause hook releases the lock for its fade; another
+            # thread (an interrupt, a media error) settled the cue in
+            # that window and has emitted its own signal. Leave it.
+            return
+
+        # Best effort: a failed stop must still stop, and a start that
+        # failed half-way (a group with some children started) must
+        # not leave anything playing that no one can stop, since an
+        # Error cue is not Running or Paused.
+        try:
+            self.__interrupt__(False)
+        except Exception:
+            logger.exception(
+                "Cue %r (%s): clean-up after the failed %s also failed",
+                self.name, self.id, action,
+            )
         self._error()
 
     def _error(self):

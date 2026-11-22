@@ -13,60 +13,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from lisp.core.signal import Signal
-from lisp.cues.media_cue import MediaCue
-
-
-class _Element:
-    def __init__(self, live, saved=1.0, attribute="live_volume"):
-        setattr(self, attribute, live)
-        self.volume = saved
-        self.alpha = saved
-        self.fader = MagicMock()
-
-    def get_fader(self, attribute):
-        return self.fader
-
-
-class _Media:
-    """A media whose play() rebuilds its elements when asked to, the
-    way GstMedia.play() runs __init_pipeline from NULL. Any other
-    attribute (signals the cue connects to) is a mock."""
-
-    def __init__(self, rebuild_on_play):
-        self._mocks = {}
-        self.elements_changed = Signal()
-        self.rebuild_on_play = rebuild_on_play
-        self.fail_play = False
-        self.played = []
-        self._build()
-
-    def __getattr__(self, name):
-        if name.startswith("__"):
-            raise AttributeError(name)
-        return self._mocks.setdefault(name, MagicMock())
-
-    def _build(self):
-        self.parts = {
-            "Volume": _Element(live=1.0),
-            "VideoAlpha": _Element(live=1.0, attribute="live_alpha"),
-        }
-
-    def element(self, name):
-        return self.parts.get(name)
-
-    def play(self):
-        if self.fail_play:
-            raise RuntimeError("play failed")
-        if self.rebuild_on_play:
-            self._build()
-            self.elements_changed.emit(self)
-        self.played.append(
-            (
-                self.parts["Volume"].live_volume,
-                self.parts["VideoAlpha"].live_alpha,
-            )
-        )
+from tests.cues.media_fakes import FakeElement as _Element
+from tests.cues.media_fakes import make_media_cue
 
 
 class _RebuildingVolume(_Element):
@@ -98,11 +46,7 @@ def _wait_until(predicate, timeout=2.0):
         time.sleep(0.005)
 
 
-def _cue(mock_app, rebuild_on_play):
-    media = _Media(rebuild_on_play)
-    cue = MediaCue(mock_app, media)
-    cue.fadein_duration = 1.0
-    return cue, media
+_cue = make_media_cue
 
 
 class TestFadeInStartIsSilentOnTheElementsThatPlay:
