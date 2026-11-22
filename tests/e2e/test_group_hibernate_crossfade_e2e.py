@@ -240,7 +240,7 @@ def test_c_natural_end_during_hibernate_fade(group, kids):
     call("cue.set_property", {
         "id": group, "property": "crossfade", "value": 0.0,
     })
-    hib, res = add_action_cues(group, hib_ms=2000, resume_ms=500)
+    hib, res = add_action_cues(group, hib_ms=2000, resume_ms=2000)
     try:
         call("cue.execute", {"id": group, "action": "Start"})
         wait_state(kids["A"], lambda s: s == "Running")
@@ -260,10 +260,20 @@ def test_c_natural_end_during_hibernate_fade(group, kids):
                       for _, row in sampler.samples),
               "B or C sampled while running")
 
-        call("cue.execute", {"id": res, "action": "Start"})
-        ok = wait_state(kids["B"], lambda s: s == "Running", timeout=5)
-        check("C: resume starts B, the child after A", ok,
-              state(kids["B"]))
+        with VolumeSampler({"B": kids["B"]}) as ramp:
+            call("cue.execute", {"id": res, "action": "Start"})
+            ok = wait_state(kids["B"], lambda s: s == "Running", timeout=5)
+            check("C: resume starts B, the child after A", ok,
+                  state(kids["B"]))
+            time.sleep(2.5)  # the 2 s Fade & Resume
+        levels = [row["B"] for _, row in ramp.samples if "B" in row]
+        print(f"    B live_volume after the resume: {levels[:4]} ... "
+              f"{levels[-2:]}")
+        # Fade & Resume fades the held child in (it wasn't playing,
+        # so no fader of its covered it): it starts low and rises.
+        check("C: B fades in on the resume, not a hard start",
+              bool(levels) and levels[0] < 0.5 and levels[-1] > 0.9,
+              f"levels {levels[:3]} ... {levels[-2:]}")
         s = snapshot("1 s after resume", {"group": group, **kids})
         check("C: A not restarted", s["A"] == "Stop", s["A"])
     finally:
