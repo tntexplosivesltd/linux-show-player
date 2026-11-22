@@ -888,6 +888,104 @@ class TestHandoffLinger:
             sched.fire(vc.LINGER_MS)
         detach.assert_called_once_with(reg_a)
 
+    @staticmethod
+    def _output_at(comp, pts):
+        """The mixer produced the output buffer for running time `pts`."""
+        info = MagicMock()
+        info.get_buffer.return_value.pts = pts
+        assert comp._on_mixer_output(None, info) == vc.Gst.PadProbeReturn.OK
+
+    def test_standalone_stop_waits_until_last_frame_is_composited(self):
+        # A fade-out's last frames are still queued for the mixer when
+        # the cue stops (pump lead + projection lag, more under load).
+        # Releasing at LINGER_MS dropped them: the picture cut from
+        # ~15-20 % straight to black instead of finishing the fade.
+        comp, sched = self._comp()
+        a = object()
+        reg_a = self._register(comp, a)
+        reg_a.last_pts = 5_000
+        reg_a.hold_until_shown = True  # a fade-out was drained
+        with patch.object(comp, "_detach") as detach:
+            comp.unregister(a)
+            sched.fire(vc.LINGER_MS)
+            detach.assert_not_called()  # its last frame not out yet
+            self._output_at(comp, 4_000)
+            sched.fire(0)
+            detach.assert_not_called()
+            self._output_at(comp, 5_000)  # the output holding it
+            sched.fire(0)
+        detach.assert_called_once_with(reg_a)
+
+    def test_hard_stop_is_not_held_for_its_queued_frames(self):
+        # Only a drained fade-out waits for its last frame: a hard Stop
+        # still goes black at LINGER_MS, as before (under load the
+        # queued frames would otherwise keep moving after the audio
+        # stopped).
+        comp, sched = self._comp()
+        a = object()
+        reg_a = self._register(comp, a)
+        reg_a.last_pts = 5_000
+        assert reg_a.hold_until_shown is False
+        with patch.object(comp, "_detach") as detach:
+            comp.unregister(a)
+            sched.fire(vc.LINGER_MS)
+        detach.assert_called_once_with(reg_a)
+
+    def test_standalone_stop_without_frames_releases_at_linger(self):
+        # Nothing pushed, nothing to wait for: black at LINGER_MS.
+        comp, sched = self._comp()
+        a = object()
+        reg_a = self._register(comp, a)
+        assert reg_a.last_pts is None
+        reg_a.hold_until_shown = True
+        with patch.object(comp, "_detach") as detach:
+            comp.unregister(a)
+            sched.fire(vc.LINGER_MS)
+        detach.assert_called_once_with(reg_a)
+
+    def test_cap_releases_a_stop_whose_last_frame_never_shows(self):
+        comp, sched = self._comp()
+        a = object()
+        reg_a = self._register(comp, a)
+        reg_a.last_pts = 5_000
+        reg_a.hold_until_shown = True  # a fade-out was drained
+        with patch.object(comp, "_detach") as detach:
+            comp.unregister(a)
+            sched.fire(vc.LINGER_MS)
+            self._output_at(comp, 1_000)
+            sched.fire(0)
+            detach.assert_not_called()
+            sched.fire(vc.LINGER_CAP_MS)
+        detach.assert_called_once_with(reg_a)
+
+    def test_successor_frame_ends_a_pending_drain(self):
+        # A playlist's next cue showing takes over from a stop that is
+        # still waiting for its last frame: the usual handoff applies.
+        comp, sched = self._comp()
+        a, b = object(), object()
+        reg_a = self._register(comp, a)
+        reg_a.last_pts = 5_000
+        reg_a.hold_until_shown = True  # a fade-out was drained
+        with patch.object(comp, "_detach") as detach:
+            comp.unregister(a)
+            sched.fire(vc.LINGER_MS)  # no successor yet: drain
+            reg_b = self._register_agg(comp, b, composited=True)
+            comp.frame_ready(reg_b)
+            self._output_at(comp, 2_000)
+            sched.fire(0)
+        detach.assert_called_once_with(reg_a)
+
+    def test_teardown_drops_pending_drains(self):
+        comp, sched = self._comp()
+        a = object()
+        reg_a = self._register(comp, a)
+        reg_a.last_pts = 5_000
+        reg_a.hold_until_shown = True  # a fade-out was drained
+        comp.unregister(a)
+        sched.fire(vc.LINGER_MS)
+        comp._teardown()
+        assert comp._drains == []
+
     def test_handoff_holds_until_successor_frame(self):
         comp, sched = self._comp()
         a, b = object(), object()

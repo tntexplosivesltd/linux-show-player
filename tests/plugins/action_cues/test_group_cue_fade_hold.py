@@ -484,6 +484,9 @@ def stop_cue_env(mock_app, monkeypatch):
 
     runner = MagicMock()
     runner.run_until_complete.return_value = True
+    # The real runner's abort state (a MagicMock's is truthy).
+    runner.aborted = False
+    runner.abort_event = threading.Event()
 
     def collect(cues, *a, **kw):
         calls.append(("collect",))
@@ -664,6 +667,12 @@ class _GatedRunner:
     def __init__(self, *args, **kwargs):
         self.done = threading.Event()
         self.completed = True
+        # As ParallelFadeRunner: abort() also ends a following drain.
+        self.abort_event = threading.Event()
+
+    @property
+    def aborted(self):
+        return self.abort_event.is_set()
 
     def run_until_complete(self):
         self.done.wait(5)
@@ -671,6 +680,7 @@ class _GatedRunner:
 
     def abort(self):
         self.completed = False
+        self.abort_event.set()
         self.done.set()
 
     def current_time(self):

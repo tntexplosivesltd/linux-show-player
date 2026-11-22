@@ -1,5 +1,6 @@
 """Unit tests for StopCue (Fade & Stop) action cue."""
 import pytest
+import threading
 from unittest.mock import MagicMock
 
 from lisp.core.fade_functions import FadeOutType
@@ -239,6 +240,9 @@ class TestFadeThenAction:
 
         fake_runner = MagicMock()
         fake_runner.run_until_complete.return_value = True
+        # The real runner's abort state (a MagicMock's is truthy).
+        fake_runner.aborted = False
+        fake_runner.abort_event = threading.Event()
         runner_cls = MagicMock(return_value=fake_runner)
         monkeypatch.setattr(
             "lisp.plugins.action_cues.stop_cue.ParallelFadeRunner",
@@ -278,6 +282,112 @@ class TestFadeThenAction:
         fake_runner.run_until_complete.assert_called_once()
         target.execute.assert_called_once_with(CueAction.Interrupt)
 
+    def _faded_run(self, mock_app, monkeypatch, completed,
+                   before_start=None):
+        """A StopCue fading one video cue, its runner done or aborted,
+        with every call to the target recorded in order."""
+        from lisp.cues.cue import CueState
+        from lisp.cues.media_cue import MediaCue
+
+        runner = MagicMock()
+        runner.run_until_complete.return_value = completed
+        # The real runner's abort state (a MagicMock's is truthy).
+        runner.abort_event = threading.Event()
+        runner.aborted = not completed
+        monkeypatch.setattr(
+            "lisp.plugins.action_cues.stop_cue.ParallelFadeRunner",
+            MagicMock(return_value=runner),
+        )
+        alpha_el = MagicMock()
+        target = MagicMock(spec=MediaCue)
+        target.state = CueState.Running
+        target.media = MagicMock()
+        target.media.element = (
+            lambda n: alpha_el if n == "VideoAlpha" else None)
+        calls = []
+        target.media.drain_video.side_effect = (
+            lambda *a, **k: calls.append("drain"))
+        target.execute.side_effect = lambda action: calls.append(action)
+        mock_app.cue_model.get.return_value = target
+
+        class _FakeThread:
+            def __init__(self, target=None, args=(), kwargs=None,
+                         daemon=False, name=None):
+                self._target, self._args = target, args
+                self._kwargs = kwargs or {}
+
+            def start(self):
+                self._target(*self._args, **self._kwargs)
+        monkeypatch.setattr("lisp.core.decorators.Thread", _FakeThread)
+
+        cue = StopCue(app=mock_app)
+        cue.target_id = "t1"
+        cue.duration = 1000
+        cue.action = CueAction.Stop.value
+        self.last_runner, self.last_target = runner, target
+        if before_start is not None:
+            before_start(runner, target, calls)
+        cue.__start__()
+        return calls
+
+    def test_completed_fade_drains_video_before_the_action(
+            self, mock_app, monkeypatch):
+        # Faded to black, the cue keeps running until its alpha-0
+        # frames reach the projection; stopping at once cut the
+        # picture from ~15 % straight to black.
+        calls = self._faded_run(mock_app, monkeypatch, completed=True)
+        assert calls == ["drain", CueAction.Stop]
+
+    def test_drain_gets_the_runs_abort_event_and_a_deadline(
+            self, mock_app, monkeypatch):
+        seen = {}
+
+        def setup(runner, target, calls):
+            def drain(abort=None, deadline=None):
+                seen.update(abort=abort, deadline=deadline)
+                calls.append("drain")
+            target.media.drain_video.side_effect = drain
+
+        self._faded_run(mock_app, monkeypatch, completed=True,
+                        before_start=setup)
+        assert seen["abort"] is self.last_runner.abort_event
+        assert seen["deadline"] is not None
+
+    def test_stop_during_the_drain_skips_the_action(
+            self, mock_app, monkeypatch):
+        # "I changed my mind" during the drain is the same as during
+        # the fade: the action is not dispatched.
+        def setup(runner, target, calls):
+            def drain(abort=None, deadline=None):
+                calls.append("drain")
+                runner.aborted = True  # the StopCue was stopped
+            target.media.drain_video.side_effect = drain
+
+        calls = self._faded_run(mock_app, monkeypatch, completed=True,
+                                before_start=setup)
+        assert calls == ["drain"]
+
+    def test_cue_no_longer_running_is_not_drained(
+            self, mock_app, monkeypatch):
+        # Only cues the fade took to black and that still play are
+        # drained: a stopped (or paused) one pumps nothing and would
+        # hold the action for the whole drain timeout.
+        from lisp.cues.cue import CueState
+
+        def setup(runner, target, calls):
+            def run():
+                target.state = CueState.Stop  # ended during the fade
+                return True
+            runner.run_until_complete.side_effect = run
+
+        calls = self._faded_run(mock_app, monkeypatch, completed=True,
+                                before_start=setup)
+        assert calls == [CueAction.Stop]
+
+    def test_aborted_fade_does_not_drain(self, mock_app, monkeypatch):
+        calls = self._faded_run(mock_app, monkeypatch, completed=False)
+        assert calls == []
+
     def test_action_is_non_fading_variant(self, mock_app):
         """action=Stop should dispatch the plain non-fading variant."""
         cue, target = self._setup(mock_app)
@@ -307,6 +417,9 @@ class TestFadeThenAction:
 
         fake_runner = MagicMock()
         fake_runner.run_until_complete.return_value = True
+        # The real runner's abort state (a MagicMock's is truthy).
+        fake_runner.aborted = False
+        fake_runner.abort_event = threading.Event()
         monkeypatch.setattr(
             "lisp.plugins.action_cues.stop_cue.ParallelFadeRunner",
             MagicMock(return_value=fake_runner),

@@ -25,7 +25,8 @@ filename-to-class-name conversion strips the prefix and finds no
 """
 
 import logging
-from threading import Thread
+import time
+from threading import Event, Thread
 
 from lisp.cues.cue import CueState
 from lisp.cues.media_cue import MediaCue
@@ -67,6 +68,33 @@ def collect_live_faders(cues, states=CueState.IsRunning):
                 continue
             faders.append(element.get_fader(fader_prop))
     return faders
+
+
+# drain_videos: every cue drained in turn shares one deadline this far
+# out (s), so several faded video cues hold the action no longer than
+# one drain may (VideoSink.DRAIN_TIMEOUT_MAX).
+DRAIN_BUDGET_S = 1.5
+
+
+def drain_videos(cues, abort=None, budget=DRAIN_BUDGET_S):
+    """After a completed fade-out, before its action: let each faded
+    video cue's last frames reach the projection (Media.drain_video),
+    so the picture is not cut from ~15 % straight to black. Pass only
+    the cues the fade took down that still play: a stopped or paused
+    one pumps nothing and would wait out the deadline. `abort` (an
+    Event) ends the drains at once. Never raises: the action must
+    still be dispatched."""
+    deadline = time.monotonic() + budget
+    for cue in cues:
+        if abort is not None and abort.is_set():
+            return
+        media = getattr(cue, "media", None)
+        if media is None:
+            continue
+        try:
+            media.drain_video(abort=abort, deadline=deadline)
+        except Exception:
+            logger.exception("drain_videos: drain failed for %r", cue)
 
 
 def build_affected_set(target):
@@ -119,6 +147,8 @@ class ParallelFadeRunner:
         self._curve = curve
         self._duration_seconds = duration_seconds
         self._aborted = False
+        # Set by abort(): also ends a drain that follows the fade.
+        self.abort_event = Event()
         self._threads = []
 
     def run_until_complete(self):
@@ -145,9 +175,15 @@ class ParallelFadeRunner:
 
         return not self._aborted
 
+    @property
+    def aborted(self):
+        """True once abort() was called, during the fade or after."""
+        return self._aborted
+
     def abort(self):
         """Cooperatively cancel the in-flight fades."""
         self._aborted = True
+        self.abort_event.set()
         for fader in self._faders:
             try:
                 fader.stop()

@@ -279,6 +279,12 @@ class GstMedia(Media):
     def element(self, class_name):
         return getattr(self.elements, class_name, None)
 
+    def drain_video(self, abort=None, deadline=None):
+        sink = self.element("VideoSink")
+        if sink is None:
+            return True
+        return sink.wait_drained(abort=abort, deadline=deadline)
+
     def input_uri(self):
         try:
             return self.elements[0].input_uri()

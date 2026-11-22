@@ -127,6 +127,15 @@ class Media(HasProperties):
     def stop(self):
         """The media go in READY state (stop the playback)."""
 
+    def drain_video(self, abort=None, deadline=None) -> bool:
+        """After a completed fade-out, before stop/pause: block until
+        the frames rendered so far have reached the video output, so
+        the fade is not cut short. `abort` (threading.Event) ends the
+        wait at once; `deadline` (time.monotonic()) bounds it. True
+        when drained (or nothing to drain), False on timeout or abort.
+        Default: no video, nothing to do."""
+        return True
+
     def prearm(self) -> bool:
         """Pre-arm the media into a started-but-not-playing state.
 

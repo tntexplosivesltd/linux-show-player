@@ -36,6 +36,7 @@ from lisp.plugins.action_cues._fader_coordinator import (
     build_affected_groups,
     build_affected_set,
     collect_live_faders,
+    drain_videos,
     ParallelFadeRunner,
 )
 from lisp.ui.cuelistdialog import CueSelectDialog
@@ -209,7 +210,11 @@ class StopCue(TargetingCue, Cue):
                     curve=curve,
                     duration_seconds=self.duration / 1000,
                 )
-                self._run_fade_then_action(target, hold, self._runner)
+                # The cues this fade takes down: only those are drained.
+                faded = [c for c in affected
+                         if c.state & CueState.IsRunning]
+                self._run_fade_then_action(
+                    target, hold, self._runner, faded)
                 return True
         except Exception:
             logger.exception("StopCue: could not start the fade")
@@ -234,7 +239,7 @@ class StopCue(TargetingCue, Cue):
         return False
 
     @async_function
-    def _run_fade_then_action(self, target, hold, runner):
+    def _run_fade_then_action(self, target, hold, runner, faded=()):
         """Drive the runner to completion (in a daemon thread), then
         dispatch the action. Skip dispatch if the runner was aborted.
 
@@ -250,6 +255,19 @@ class StopCue(TargetingCue, Cue):
                 self._disarm_hibernate_listener(target)
                 hold.release()
                 return  # caller's __stop__ handled state
+            # Faded to black and silence: let the last frames reach the
+            # projection before the action stops the picture. Only cues
+            # the fade took down that still play: a paused one pumps
+            # nothing. A stop of this cue meanwhile ends the drain.
+            drain_videos(
+                [c for c in faded if c.state & CueState.Running],
+                abort=runner.abort_event,
+            )
+            if runner.aborted:
+                # Stopped during the drain: as an abort mid-fade.
+                self._disarm_hibernate_listener(target)
+                hold.release()
+                return
             # Dispatch Pause. Cue.pause() is @async_function — it
             # returns before the target transitions. We do NOT disarm
             # here (it would race with the pending paused emission).

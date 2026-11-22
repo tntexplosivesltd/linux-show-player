@@ -58,7 +58,9 @@ CANVAS_EXPOSE_MS = (250, 1000)
 # per-cue sinks got this for free (the stale frame stayed on the X
 # surface); the shared canvas must do it explicitly.
 # - No successor within LINGER_MS → release (standalone stop → black,
-#   matching the old deferred clear).
+#   matching the old deferred clear). After a drained fade-out, release
+#   once the mixer has output the cue's last pushed frame instead, so
+#   the fade finishes on screen (see _drain).
 # - Successor's first frame pushed → release once the mixer has
 #   composited it, whatever the load (see _handoff).
 #   HANDOFF_RELEASE_MS (> the pump's 100ms lead) is the fallback when
@@ -318,6 +320,17 @@ class Registration:
         self.timed_frames = 0
         self.late_frames = 0
         self.last_late_rt = None
+        # Projection pts of the last frame pushed (None before the
+        # first). A stopped cue's branch is kept until the mixer has
+        # output it (see _drain), so a fade-out is not cut short.
+        self.last_pts = None
+        # Cue running time (ns) of the last timed frame pushed (None
+        # before the first): VideoSink.wait_drained waits on it.
+        self.last_rt = None
+        # Set by VideoSink.wait_drained (a completed fade-out): keep
+        # the branch on stop until its last frame is out (see _drain).
+        # A hard stop's branch goes black at LINGER_MS, as before.
+        self.hold_until_shown = False
 
 
 def _have_factory(name):
@@ -488,6 +501,9 @@ class VideoCompositor:
         # regs to release once every successor is composited; see
         # _handoff).
         self._handoffs = []
+        # Stopped registrations with no successor, released once the
+        # mixer has output their last pushed frame (see _drain).
+        self._drains = []
         # Sinks blamed for a repeat shared failure (see _fail): no
         # branch until the projection is stable again (see register).
         self._quarantined = set()
@@ -678,6 +694,7 @@ class VideoCompositor:
             self._registrations.clear()
             self._lingering.clear()
             self._handoffs.clear()
+            self._drains.clear()
             timers = list(self._timers)
             self._timers.clear()
         for timer in timers:
@@ -770,12 +787,47 @@ class VideoCompositor:
         with self._lock:
             self._handoffs.append((list(successors), list(regs)))
 
+    def _drain(self, reg):
+        """Main loop. Release a stopped registration with no successor
+        once the mixer has output its last pushed frame, judged at each
+        mixer output (_on_mixer_output).
+
+        The pump pushes frames up to PUMP_LEAD ahead, and under load
+        the mixer runs hundreds of ms behind real time (see _handoff),
+        so when a cue stops its last frames are often still queued in
+        the appsrc. Releasing at LINGER_MS dropped them: a 1 s fade-out
+        cut from 15-20 % straight to black (measured on the projector,
+        idle machine; worse under load). LINGER_CAP_MS stays the
+        backstop, and a successor's frame still hands off (frame_ready)
+        whichever comes first."""
+        with self._lock:
+            waiting = reg.last_pts is not None and reg in self._lingering
+            if waiting:
+                self._drains.append(reg)
+        if not waiting:
+            self._release(reg)
+
     def _on_mixer_output(self, _pad, info):
         """Mixer src pad probe (aggregator thread, so its pads' buffers
         are settled for this output): release every handoff whose
-        successors are all in this output."""
+        successors are all in this output, and every drain whose last
+        frame this output reached."""
         due = []
         with self._lock:
+            if self._drains:
+                buf = info.get_buffer()
+                pts = None if buf is None else buf.pts
+                if pts == Gst.CLOCK_TIME_NONE:
+                    pts = None
+                keep = []
+                for reg in self._drains:
+                    if reg not in self._lingering:
+                        continue  # released already (handoff, cap)
+                    if pts is not None and pts >= reg.last_pts:
+                        due.append([reg])
+                    else:
+                        keep.append(reg)
+                self._drains = keep
             if self._handoffs:
                 attached = set(map(id, self._registrations.values()))
                 attached.update(map(id, self._lingering))
@@ -858,15 +910,19 @@ class VideoCompositor:
             self._unschedule(timer_id)
 
     def _on_linger_timeout(self, reg):
-        """Main loop. With no successor, release now (black on stop).
-        With a successor, hand off once its first frame is up."""
+        """Main loop. With no successor, release once its last frame
+        is out (black on stop, see _drain). With a successor, hand off
+        once its first frame is up."""
         with self._lock:
             # A registration that ended without video shows nothing.
             active = [
                 r for r in self._registrations.values() if not r.no_video
             ]
         if not active:
-            self._release(reg)
+            if reg.hold_until_shown:
+                self._drain(reg)
+            else:
+                self._release(reg)
         elif all(r.frame_seen for r in active):
             # Successor already showing (its frame_ready came first):
             # hand off once every successor's frame is composited.
