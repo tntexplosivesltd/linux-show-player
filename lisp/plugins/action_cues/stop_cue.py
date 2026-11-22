@@ -15,7 +15,9 @@
 # You should have received a copy of the GNU General Public License
 # along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
+import itertools
 import logging
+from time import monotonic, sleep
 from collections import namedtuple
 
 from PyQt5.QtCore import QT_TRANSLATE_NOOP, Qt
@@ -28,9 +30,10 @@ from lisp.application import Application
 from lisp.core.decorators import async_function
 from lisp.core.fade_functions import FadeOutType
 from lisp.core.properties import Property
-from lisp.cues.cue import Cue, CueAction
+from lisp.cues.cue import Cue, CueAction, CueState
 from lisp.cues.targeting import TargetingCue
 from lisp.plugins.action_cues._fader_coordinator import (
+    build_affected_groups,
     build_affected_set,
     collect_live_faders,
     ParallelFadeRunner,
@@ -53,6 +56,28 @@ _ActionLike = namedtuple("_ActionLike", ["name", "value"])
 HIBERNATE_ACTION = _ActionLike(name="Hibernate", value="Hibernate")
 
 
+class _GroupHold:
+    """The GroupCues one run of a StopCue holds for its fade (M78).
+
+    Each run has its own token: a run still waiting for its action to
+    land (`StopCue._release_once_settled`) can't release a later run's
+    hold, though both runs belong to the same cue.
+    """
+
+    def __init__(self, token, groups):
+        self.token = token
+        self.groups = groups
+        self._released = False
+
+    def release(self):
+        """Release every group (once; later calls do nothing)."""
+        if self._released:
+            return
+        self._released = True
+        for group in self.groups:
+            group.release_transitions(self.token)
+
+
 class StopCue(TargetingCue, Cue):
     Name = QT_TRANSLATE_NOOP("CueName", "Fade & Stop")
     Category = QT_TRANSLATE_NOOP("CueCategory", "Action cues")
@@ -61,6 +86,10 @@ class StopCue(TargetingCue, Cue):
     action = Property(default=CueAction.Stop.value)
     fade_type = Property(default=FadeOutType.Linear.name)
     icon = Property(default="fade-stop")
+
+    # Seconds to wait, after the action, for the held groups to
+    # leave Running before releasing them anyway.
+    SETTLE_TIMEOUT = 2.0
 
     CueActions = (
         CueAction.Default,
@@ -76,6 +105,10 @@ class StopCue(TargetingCue, Cue):
         # In-flight ParallelFadeRunner, if any. Set by __start__, cleared
         # on completion/abort. Used by __stop__ to cancel the fade.
         self._runner = None
+
+        # Numbers this cue's runs: each run holds the groups under its
+        # own token (`_GroupHold`).
+        self._runs = itertools.count(1)
 
         # List of (cue, handler) pairs armed by _arm_hibernate_listener
         # when action=Hibernate. For single-target cases this is one
@@ -142,23 +175,54 @@ class StopCue(TargetingCue, Cue):
             self._error()
             return False
 
-        affected = build_affected_set(target)
-        faders = collect_live_faders(affected)
+        fading = self.duration > 0
+        if fading:
+            # Resolve everything that can fail on bad data before the
+            # hold: a hold left behind would stall the playlist.
+            try:
+                curve = FadeOutType[self.fade_type]
+            except KeyError:
+                logger.warning(
+                    "StopCue: unknown fade type %r", self.fade_type
+                )
+                self._error()
+                return False
+            # Hold the groups BEFORE collecting the faders: a child a
+            # group started in between would play on unfaded (M78).
+            hold = self._hold_groups(target)
+        else:
+            hold = None
 
-        # Arm the hibernate listener BEFORE any dispatch so the
-        # pause-to-hibernate hop is race-free.
-        if self.action == HIBERNATE_ACTION.value:
-            self._arm_hibernate_listener(target)
+        try:
+            affected = build_affected_set(target)
+            faders = collect_live_faders(affected)
 
-        if self.duration > 0 and faders:
-            self._runner = ParallelFadeRunner(
-                faders,
-                to_value=0.0,
-                curve=FadeOutType[self.fade_type],
-                duration_seconds=self.duration / 1000,
-            )
-            self._run_fade_then_action(target)
-            return True
+            # Arm the hibernate listener BEFORE any dispatch so the
+            # pause-to-hibernate hop is race-free.
+            if self.action == HIBERNATE_ACTION.value:
+                self._arm_hibernate_listener(target)
+
+            if fading and faders:
+                self._runner = ParallelFadeRunner(
+                    faders,
+                    to_value=0.0,
+                    curve=curve,
+                    duration_seconds=self.duration / 1000,
+                )
+                self._run_fade_then_action(target, hold, self._runner)
+                return True
+        except Exception:
+            logger.exception("StopCue: could not start the fade")
+            self._disarm_hibernate_listener(target)
+            if hold is not None:
+                hold.release()
+            self._runner = None
+            self._error()
+            return False
+
+        # Nothing to fade: nothing to hold the groups for.
+        if hold is not None:
+            hold.release()
 
         # Instant path: no fade to run, dispatch action.
         # NOTE: Cue.pause() is @async_function — returns before the
@@ -170,17 +234,21 @@ class StopCue(TargetingCue, Cue):
         return False
 
     @async_function
-    def _run_fade_then_action(self, target):
+    def _run_fade_then_action(self, target, hold, runner):
         """Drive the runner to completion (in a daemon thread), then
         dispatch the action. Skip dispatch if the runner was aborted.
+
+        Uses its own run's runner and hold, never ``self._runner``
+        (a later run of this cue may have replaced it).
         """
         try:
-            completed = self._runner.run_until_complete()
+            completed = runner.run_until_complete()
             if not completed:
                 # Fade aborted — disarm the hibernate listener so the
                 # target isn't accidentally hibernated by a later
-                # unrelated pause.
+                # unrelated pause, and let the groups play on.
                 self._disarm_hibernate_listener(target)
+                hold.release()
                 return  # caller's __stop__ handled state
             # Dispatch Pause. Cue.pause() is @async_function — it
             # returns before the target transitions. We do NOT disarm
@@ -191,12 +259,48 @@ class StopCue(TargetingCue, Cue):
         except Exception:
             logger.exception("StopCue: error during fade-and-action")
             self._disarm_hibernate_listener(target)
+            hold.release()
             self._error()
             return
         finally:
-            self._runner = None
+            if self._runner is runner:
+                self._runner = None
 
         self._ended()
+        # This cue can run again from here on: its next run holds
+        # under a token of its own, which this release leaves alone.
+        self._release_once_settled(hold)
+
+    def _release_once_settled(self, hold):
+        """After the action: release the groups once they have left
+        Running (the action is async; releasing before it lands could
+        start a held child just to cut it). A group still Running
+        after SETTLE_TIMEOUT never got the action, or got it late (its
+        state lock was busy): it is released so it isn't held, silent,
+        for good."""
+        deadline = monotonic() + self.SETTLE_TIMEOUT
+        while monotonic() < deadline and any(
+            group.state & CueState.Running for group in hold.groups
+        ):
+            sleep(0.02)
+        late = [g for g in hold.groups if g.state & CueState.Running]
+        if late:
+            logger.warning(
+                "StopCue %r: %s still running %.1f s after its %s; "
+                "releasing it",
+                self.name, ", ".join(repr(g.name) for g in late),
+                self.SETTLE_TIMEOUT, self.action,
+            )
+        hold.release()
+
+    def _hold_groups(self, target):
+        """Stop every group being faded from starting a new child
+        until the fade is done (`GroupCue.hold_transitions`)."""
+        hold = _GroupHold(
+            (self.id, next(self._runs)), build_affected_groups(target))
+        for group in hold.groups:
+            group.hold_transitions(hold.token)
+        return hold
 
     def _arm_hibernate_listener(self, target):
         """Subscribe one-shot-style handlers to target.paused that flip

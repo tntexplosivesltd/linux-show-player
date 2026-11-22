@@ -848,7 +848,10 @@ class TestHibernateMidFadeAbort:
         cue._runner = _StubRunner()
         # _run_fade_then_action is @async_function; drive the body
         # inline by calling the underlying function.
-        cue._run_fade_then_action.__wrapped__(cue, target)
+        from lisp.plugins.action_cues.stop_cue import _GroupHold
+
+        cue._run_fade_then_action.__wrapped__(
+            cue, target, _GroupHold(("t", 1), []), cue._runner)
 
         assert cue._hib_handlers is None
         # An unrelated subsequent pause on the target must NOT set

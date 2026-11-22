@@ -30,6 +30,7 @@ from lisp.core.util import rsetattr
 from lisp.cues.cue import Cue, CueAction, CueState
 from lisp.cues.targeting import TargetingCue
 from lisp.plugins.action_cues._fader_coordinator import (
+    build_affected_groups,
     build_affected_set,
     collect_live_faders,
     ParallelFadeRunner,
@@ -161,7 +162,18 @@ class ResumeCue(TargetingCue, Cue):
             for fader in faders:
                 rsetattr(fader.target, fader.attribute, 1.0)
 
-        target.execute(CueAction.Resume)
+        groups = build_affected_groups(target) if self.duration > 0 else ()
+        # A playlist group whose child ended during the Fade & Stop
+        # starts the next one on this resume: fade that one in too (it
+        # is not among the faders above, M78).
+        for group in groups:
+            group.fade_in_held_next(self.duration / 1000)
+
+        if target.execute(CueAction.Resume) is False:
+            # Refused: the request was for this resume only, not for
+            # whatever resumes the group later.
+            for group in groups:
+                group.fade_in_held_next(0)
 
         if not will_fade:
             return False
