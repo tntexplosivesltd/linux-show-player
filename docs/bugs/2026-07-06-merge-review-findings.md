@@ -11,9 +11,9 @@ Generated 2026-07-06 from a 3-agent QA / security / code-review panel run over a
 |---|---:|
 | Critical | 1 |
 | High | 36 |
-| Medium | 76 |
+| Medium | 77 |
 | Low | 107 |
-| **Total** | **220** |
+| **Total** | **221** |
 
 _Also: 8 finding(s) already fixed on master, 1 not-applicable — see appendix._
 
@@ -134,7 +134,7 @@ _Also: 8 finding(s) already fixed on master, 1 not-applicable — see appendix._
   `Cue.start` (an `@async_function`) wraps the start in `try/finally` with no `except`. An exception from `__start__` (H35, a bad element, a plugin bug) unwinds out of the worker thread to stderr; the cue never reaches Running or Error, no `error` signal, no notification. On stage, GO simply does nothing.  
   _Fix:_ Catch exceptions around `__start__` (and the other `__*__` hooks), log them, and move the cue to Error with the `error` signal so the layout and notifications show it.  
 
-## Medium (76)
+## Medium (77)
 
 - [ ] **M1** · `lisp/plugins/test_harness/handlers.py:438` · _00bc9852 (qa)_ — **Unvalidated generic setattr with no unit test coverage**  
   handle_layout_set_property does `setattr(app.layout, name, value)` with no allowlist and no check that `name` actually names a known ProxyProperty (e.g. `volume_indicators_visible`). If a test passes a mistyped or non-existent property name, Python silently creates a new instance attribute instead of raising, and the…  
@@ -364,6 +364,9 @@ _Also: 8 finding(s) already fixed on master, 1 not-applicable — see appendix._
 - [ ] **M77** · `lisp/plugins/action_cues/resume_cue.py:165` · _found 2026-11-21 (H31 triage / PR #28 review)_ — **Fade & Resume fades a target whose resume was refused**  
   With a fade, `__start__` zeroes the target's faders, calls `target.execute(CueAction.Resume)` and ignores its result. If exclusivity refuses the resume (an exclusive cue or another video playing), the target stays paused while the fade runs on it; resuming it by hand during the fade starts it quiet or silent.  
   _Fix:_ Check `execute()`'s result; on a refusal restore the faders and end (or error) without fading.  
+- [ ] **M78** · `lisp/plugins/action_cues/stop_cue.py:146` · _found 2026-11-22 (show review, Docker E2E)_ — **A crossfade that starts during a Fade & Stop/Hibernate of its playlist group is not faded: the next track swells in and is cut at the pause**  
+  `StopCue.__start__` collects the faders of the cues playing when it fires, then fades them. The group's crossfade monitor keeps running: if the crossfade point falls inside the fade, the incoming child fades in to full (it is not in the snapshot) and the outgoing child's own crossfade fade takes its volume controller back from the StopCue's. At the end of the fade both are audible and the pause (or stop) cuts them hard. Measured in Docker (2 s hibernate, crossfade starting 0.8 s in): incoming at 0.47–0.61, outgoing at 0.21–0.26 just before the pause. A child ending naturally during the fade starts the next one unfaded too. Shore Dance hibernates its 3 s-crossfade background playlist with a 3 s fade: ~1–2% of hibernates.  
+  _Fix:_ While a Fade & Stop fades a group, the group starts no new child (crossfade monitor off, natural advance held); the group's own pause/stop/interrupt ends the hold, an aborted fade releases it, and a resume starts the held next child.  
 
 ## Low (107)
 
