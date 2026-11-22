@@ -15,6 +15,7 @@
 # You should have received a copy of the GNU General Public License
 # along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
+import logging
 from threading import Lock
 from uuid import uuid4
 
@@ -25,6 +26,8 @@ from lisp.core.properties import Property, WriteOnceProperty
 from lisp.core.rwait import RWait
 from lisp.core.signal import Signal
 from lisp.core.util import EqEnum, typename
+
+logger = logging.getLogger(__name__)
 
 
 class CueState:
@@ -426,7 +429,11 @@ class Cue(HasProperties):
                 was_hibernating = bool(
                     self._state & CueState.Hibernating
                 )
-                running = self.__start__(fade)
+                try:
+                    running = self.__start__(fade)
+                except Exception:
+                    self._hook_failed("start")
+                    return
                 self._state = CueState.Running
                 self.started.emit(self)
 
@@ -518,7 +525,12 @@ class Cue(HasProperties):
                 if self._state & (CueState.Running | CueState.Pause):
                     # Here the __stop__ function should release and re-acquire
                     # the state-lock during a fade operation
-                    if not self.__stop__(fade):
+                    try:
+                        stopped = self.__stop__(fade)
+                    except Exception:
+                        self._hook_failed("stop")
+                        return
+                    if not stopped:
                         # Stop operation interrupted
                         return
 
@@ -580,7 +592,12 @@ class Cue(HasProperties):
                 if self._state & CueState.Running:
                     # Here the __pause__ function should release and re-acquire
                     # the state-lock during a fade operation
-                    if not self.__pause__(fade):
+                    try:
+                        paused = self.__pause__(fade)
+                    except Exception:
+                        self._hook_failed("pause")
+                        return
+                    if not paused:
                         return
 
                     self._state ^= CueState.Running
@@ -632,7 +649,11 @@ class Cue(HasProperties):
 
                 # Interrupt the cue
                 if self._state & (CueState.Running | CueState.Pause):
-                    self.__interrupt__(fade)
+                    try:
+                        self.__interrupt__(fade)
+                    except Exception:
+                        self._hook_failed("interrupt")
+                        return
 
                     was_hibernating = bool(
                         self._state & CueState.Hibernating
@@ -693,6 +714,42 @@ class Cue(HasProperties):
 
         if locked:
             self._st_lock.release()
+
+    def _hook_failed(self, action):
+        """A `__start__`/`__stop__`/`__pause__`/`__interrupt__` hook
+        raised (H36). Call from inside the `except`, holding `_st_lock`.
+
+        These run on a worker thread: left alone, the exception goes to
+        stderr and the cue keeps its old state, so on stage GO just does
+        nothing. Log it (the log reaches the operator), silence whatever
+        the hook left playing, and put the cue in Error, so the layout
+        shows it and `error` listeners (groups, pre-arm) react.
+        """
+        assert self._st_lock.locked(), "_hook_failed needs _st_lock"
+        logger.exception(
+            "Cue %r (%s) failed to %s", self.name, self.id, action
+        )
+
+        if action != "start" and not (
+            self._state & (CueState.Running | CueState.Pause)
+        ):
+            # A stop/pause hook releases the lock for its fade; another
+            # thread (an interrupt, a media error) settled the cue in
+            # that window and has emitted its own signal. Leave it.
+            return
+
+        # Best effort: a failed stop must still stop, and a start that
+        # failed half-way (a group with some children started) must
+        # not leave anything playing that no one can stop, since an
+        # Error cue is not Running or Paused.
+        try:
+            self.__interrupt__(False)
+        except Exception:
+            logger.exception(
+                "Cue %r (%s): clean-up after the failed %s also failed",
+                self.name, self.id, action,
+            )
+        self._error()
 
     def _error(self):
         """Remove Running/Pause/Stop/Hibernating and add Error."""

@@ -123,56 +123,82 @@ class MediaCue(Cue):
         return True
 
     def __stop__(self, fade=False):
-        if self.__in_fadeout:
-            self.__fader_group.stop()
-        else:
-            if self.__in_fadein:
+        try:
+            if self.__in_fadeout:
                 self.__fader_group.stop()
+            else:
+                if self.__in_fadein:
+                    self.__fader_group.stop()
 
-            if fade and self._state & CueState.Running and self._can_fade():
-                self._st_lock.release()
-                self.__fadeout(
-                    self.fadeout_duration,
-                    self.__fade_to_zero(),
-                    FadeOutType[self.fadeout_type],
-                )
-                self._st_lock.acquire()
-
-        self.media.stop()
+                if (
+                    fade
+                    and self._state & CueState.Running
+                    and self._can_fade()
+                ):
+                    # Take the lock back even if the fade raises: the
+                    # caller's `finally` releases it (H36).
+                    self._st_lock.release()
+                    try:
+                        self.__fadeout(
+                            self.fadeout_duration,
+                            self.__fade_to_zero(),
+                            FadeOutType[self.fadeout_type],
+                        )
+                    finally:
+                        self._st_lock.acquire()
+        finally:
+            # Even if the fade failed: the cue must still go quiet.
+            self.media.stop()
         return True
 
     def __pause__(self, fade=False):
-        if self.__in_fadeout:
-            self.__fader_group.stop()
-        else:
-            if self.__in_fadein:
+        try:
+            if self.__in_fadeout:
                 self.__fader_group.stop()
+            else:
+                if self.__in_fadein:
+                    self.__fader_group.stop()
 
-            if fade and self._state & CueState.Running and self._can_fade():
-                self._st_lock.release()
-                self.__fadeout(
-                    self.fadeout_duration,
-                    self.__fade_to_zero(),
-                    FadeOutType[self.fadeout_type],
-                )
-                self._st_lock.acquire()
-
-        self.media.pause()
+                if (
+                    fade
+                    and self._state & CueState.Running
+                    and self._can_fade()
+                ):
+                    # Take the lock back even if the fade raises: the
+                    # caller's `finally` releases it (H36).
+                    self._st_lock.release()
+                    try:
+                        self.__fadeout(
+                            self.fadeout_duration,
+                            self.__fade_to_zero(),
+                            FadeOutType[self.fadeout_type],
+                        )
+                    finally:
+                        self._st_lock.acquire()
+        finally:
+            # Even if the fade failed: the cue must still go quiet.
+            self.media.pause()
         return True
 
     def __interrupt__(self, fade=False):
-        if self._can_fade():
-            self.__fader_group.stop()
+        try:
+            if self._can_fade():
+                self.__fader_group.stop()
 
-            fade_duration = self._interrupt_fade_duration()
-            if fade and fade_duration > 0 and self._state & CueState.Running:
-                self.__fadeout(
-                    fade_duration,
-                    self.__fade_to_zero(),
-                    self._interrupt_fade_type(),
-                )
-
-        self.media.stop()
+                fade_duration = self._interrupt_fade_duration()
+                if (
+                    fade
+                    and fade_duration > 0
+                    and self._state & CueState.Running
+                ):
+                    self.__fadeout(
+                        fade_duration,
+                        self.__fade_to_zero(),
+                        self._interrupt_fade_type(),
+                    )
+        finally:
+            # Even if the fade failed: the cue must still go quiet.
+            self.media.stop()
 
     @async_function
     def fadein(self, duration, fade_type):
