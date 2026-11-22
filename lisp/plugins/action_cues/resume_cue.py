@@ -162,14 +162,18 @@ class ResumeCue(TargetingCue, Cue):
             for fader in faders:
                 rsetattr(fader.target, fader.attribute, 1.0)
 
-        if self.duration > 0:
-            # A playlist group whose child ended during the Fade & Stop
-            # starts the next one on this resume: fade that one in too
-            # (it is not among the faders above, M78).
-            for group in build_affected_groups(target):
-                group.fade_in_held_next(self.duration / 1000)
+        groups = build_affected_groups(target) if self.duration > 0 else ()
+        # A playlist group whose child ended during the Fade & Stop
+        # starts the next one on this resume: fade that one in too (it
+        # is not among the faders above, M78).
+        for group in groups:
+            group.fade_in_held_next(self.duration / 1000)
 
-        target.execute(CueAction.Resume)
+        if target.execute(CueAction.Resume) is False:
+            # Refused: the request was for this resume only, not for
+            # whatever resumes the group later.
+            for group in groups:
+                group.fade_in_held_next(0)
 
         if not will_fade:
             return False

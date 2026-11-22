@@ -174,19 +174,19 @@ def after_hibernate_and_resume(tag, group, kids, res, sampler):
     stopped = {n: state(i) == "Stop" for n, i in kids.items()}
     last = {}
     for name, levels in series.items():
-        if (
-            stopped[name]
-            and len(levels) > 1
-            and levels[-1] >= 0.99
-            and levels[-2] <= 0.15
+        # Faded out, then read back at its saved level as it stopped:
+        # GstMedia.stop() resets the Volume element before the
+        # pipeline leaves PLAYING (M79, on master too). Not this
+        # test's subject: judge the fade by the level before the
+        # reset, however many readings caught it.
+        reset = len(levels)
+        while reset > 1 and levels[reset - 1] >= 0.99:
+            reset -= 1
+        if stopped[name] and reset < len(levels) and (
+            levels[reset - 1] <= 0.15
         ):
-            # Faded out, then read back at its saved level as it
-            # stopped: GstMedia.stop() resets the Volume element
-            # before the pipeline leaves PLAYING (M79, on master too).
-            # Not this test's subject: judge the fade by the level
-            # before the reset.
             print(f"    {name}: level reset on stop seen (M79)")
-            levels = levels[:-1]
+            levels = levels[:reset]
         last[name] = levels[-1]
     loud = {n: v for n, v in last.items() if v > 0.15}
     check(f"{tag}: music silent when the hibernate pauses it",
@@ -325,18 +325,22 @@ def main():
     if port is not None:
         _h.PORT = port
     create_test_audio()
+    # E2E_HIB_CASES / E2E_HIB_REPS narrow and repeat the run (for
+    # chasing an intermittent failure); default: every case, twice.
+    cases = {
+        "A": test_a_hibernate_mid_crossfade,
+        "B": test_b_crossfade_during_hibernate_fade,
+        "C": test_c_natural_end_during_hibernate_fade,
+    }
+    chosen = (os.environ.get("E2E_HIB_CASES") or "ABC").upper()
+    unknown = set(chosen) - set(cases)
+    if unknown:
+        sys.exit(f"E2E_HIB_CASES: no case {''.join(sorted(unknown))}"
+                 f" (cases: {''.join(cases)})")
     if not args.no_launch:
         start_lisp()
     try:
         group, kids = setup()
-        # E2E_HIB_CASES / E2E_HIB_REPS narrow and repeat the run (for
-        # chasing an intermittent failure); default: every case, twice.
-        cases = {
-            "A": test_a_hibernate_mid_crossfade,
-            "B": test_b_crossfade_during_hibernate_fade,
-            "C": test_c_natural_end_during_hibernate_fade,
-        }
-        chosen = os.environ.get("E2E_HIB_CASES") or "ABC"
         for _ in range(int(os.environ.get("E2E_HIB_REPS") or 2)):
             for name in chosen:
                 cases[name](group, kids)

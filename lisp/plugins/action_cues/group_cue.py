@@ -299,7 +299,20 @@ class GroupCue(Cue):
           resume (an exclusive cue or a video started meanwhile): the
           group stays paused and keeps the child, as a paused cue
           resumed directly does.
+        - resuming a paused group with no paused child but a held
+          advance (M78) when every child it would start refuses: the
+          group stays paused and keeps the advance.
+
+        A refusal drops a Fade & Resume's fade-in request
+        (`fade_in_held_next`): it was for this resume only.
         """
+        refused = self._refuses_start(action, notify)
+        if refused:
+            with self._lock:
+                self._held_fadein = None
+        return refused
+
+    def _refuses_start(self, action, notify):
         if super()._start_refused(action, notify):
             return True
 
@@ -316,12 +329,37 @@ class GroupCue(Cue):
         if not children:
             return True
         if self._state & CueState.IsPaused:
-            return any(
-                child._start_refused(CueAction.Resume, notify=notify) is True
-                for child in children
-                if child.state & CueState.IsPaused
-            )
+            paused = [c for c in children if c.state & CueState.IsPaused]
+            if paused:
+                return any(
+                    child._start_refused(CueAction.Resume, notify=notify)
+                    is True
+                    for child in paused
+                )
+            with self._lock:
+                held_after = self._held_after_id
+            if held_after is not None:
+                return self._held_advance_refused(held_after, notify)
         return False
+
+    def _held_advance_refused(self, held_after, notify):
+        """True when every child the held advance would try (as
+        `_play_child_at` walks them) refuses to start. The operator
+        hears of it once, for the first child."""
+        index, playable = self._next_after(held_after)
+        if index is None:
+            return False  # the playlist is over: the resume ends it
+        candidates = [
+            playable[i] for i in self._playlist_walk(index, len(playable))
+        ]
+        if not all(
+            child._start_refused(CueAction.Start, notify=False) is True
+            for child in candidates
+        ):
+            return False
+        if notify:
+            candidates[0]._start_refused(CueAction.Start, notify=True)
+        return True
 
     def __start__(self, fade=False):
         with self._lock:
@@ -379,7 +417,12 @@ class GroupCue(Cue):
         held_idx = None
         if not resuming and held_after is not None:
             # A paused child, if any, wins: it is a song in progress.
-            held_idx, _ = self._next_after(held_after)
+            # Index the list the advance was resolved against.
+            held_idx, children = self._next_after(held_after)
+            if held_idx is None:
+                # The playlist ended inside the fade: end the group,
+                # as the catch-up and a natural advance would.
+                return False
         if not resuming:
             idx = held_idx if held_idx is not None else 0
         with self._lock:
@@ -888,6 +931,8 @@ class GroupCue(Cue):
         with self._lock:
             if self._held_after_id is not None and seconds > 0:
                 self._held_fadein = seconds
+            else:
+                self._held_fadein = None
 
     def _catch_up(self):
         """Main thread, after the last release: run what the hold kept

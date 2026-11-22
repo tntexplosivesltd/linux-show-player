@@ -254,6 +254,53 @@ releases, error handling and cue bus messages alike.
 
 ---
 
+## Fade & Stop holding a playlist group (M78)
+
+A Fade & Stop fades only the cues playing when it fires. While it
+fades a playlist `GroupCue`, the group must start no new child: a
+crossfade or a natural advance would bring one in at full level, and
+the pause or stop at the end of the fade would cut it. Three threads
+take part:
+
+| Step | Thread | Lock |
+|---|---|---|
+| `StopCue.__start__` → `GroupCue.hold_transitions(token)` | the StopCue's start worker | `group._lock` |
+| A natural end is recorded (`_held_after_id`), not advanced; no crossfade fires | a child's `end` (GStreamer/worker) or the Clock_33 crossfade check (main) | `group._lock` |
+| The fade ends, the action is dispatched, then `_release_once_settled` polls `group.state` until it leaves Running (at most `SETTLE_TIMEOUT`) | the StopCue's fade thread | none (a state read) |
+| `release_transitions(token)` → `_request_catch_up` (QtQueued) | the fade thread | `group._lock` |
+| `_catch_up`: if no token is left and the group still runs, run the held advance or re-arm the crossfade | main | `group._lock` |
+
+Rules:
+
+* **One token per run, not per cue** (`stop_cue._GroupHold`). The
+  StopCue reports its end before its settle wait finishes, so it can
+  run again while the old run is still waiting. A shared token would
+  let the old run's release drop the new run's hold.
+* **The release waits for the action to land.** `Cue.pause`/`stop` are
+  async: releasing at dispatch time could start the held child just
+  before the pause cuts it. The settle wait is bounded, so a group that
+  never gets the action isn't held, silent, for good. It logs a warning
+  when it gives up.
+* **The catch-up runs on the main thread**, queued, never inline in
+  the release. It re-checks the state under `_lock`, but `_lock` does
+  not serialise with the group's `_st_lock`. A pause still waiting for
+  `_st_lock` when the settle wait times out is the one gap left.
+* **Pause, stop and interrupt keep the token; any (re)start clears every
+  token.** A stop dropping the hold before Running clears would let a
+  queued natural end start a child in between. A restart is past every
+  fade, so a later release finds nothing to drop.
+* **The held advance runs on the resume** (`_start_playlist`). It is
+  pre-checked in `_start_refused`, so a resume whose every candidate
+  child refuses leaves the group paused. A Fade & Resume's fade-in for
+  the held child (`fade_in_held_next`) holds for that resume only, and
+  a refusal drops it.
+* `_hold_child_fadein` writes the child's `fadein_duration` from the
+  group's start worker, so `property_changed` fires off the main
+  thread there (L109). The restore is queued to the main thread, as
+  for the crossfade.
+
+---
+
 ## Testing concurrency code
 
 * Unit tests can drive concurrency directly with `threading.Thread` +

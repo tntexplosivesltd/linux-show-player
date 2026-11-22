@@ -15,6 +15,7 @@
 # You should have received a copy of the GNU General Public License
 # along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
+import itertools
 import logging
 from time import monotonic, sleep
 from collections import namedtuple
@@ -55,6 +56,28 @@ _ActionLike = namedtuple("_ActionLike", ["name", "value"])
 HIBERNATE_ACTION = _ActionLike(name="Hibernate", value="Hibernate")
 
 
+class _GroupHold:
+    """The GroupCues one run of a StopCue holds for its fade (M78).
+
+    Each run has its own token: a run still waiting for its action to
+    land (`StopCue._release_once_settled`) can't release a later run's
+    hold, though both runs belong to the same cue.
+    """
+
+    def __init__(self, token, groups):
+        self.token = token
+        self.groups = groups
+        self._released = False
+
+    def release(self):
+        """Release every group (once; later calls do nothing)."""
+        if self._released:
+            return
+        self._released = True
+        for group in self.groups:
+            group.release_transitions(self.token)
+
+
 class StopCue(TargetingCue, Cue):
     Name = QT_TRANSLATE_NOOP("CueName", "Fade & Stop")
     Category = QT_TRANSLATE_NOOP("CueCategory", "Action cues")
@@ -83,9 +106,9 @@ class StopCue(TargetingCue, Cue):
         # on completion/abort. Used by __stop__ to cancel the fade.
         self._runner = None
 
-        # GroupCues held for the in-flight fade (M78), released if it
-        # is aborted. None = nothing held.
-        self._held_groups = None
+        # Numbers this cue's runs: each run holds the groups under its
+        # own token (`_GroupHold`).
+        self._runs = itertools.count(1)
 
         # List of (cue, handler) pairs armed by _arm_hibernate_listener
         # when action=Hibernate. For single-target cases this is one
@@ -166,7 +189,9 @@ class StopCue(TargetingCue, Cue):
                 return False
             # Hold the groups BEFORE collecting the faders: a child a
             # group started in between would play on unfaded (M78).
-            self._hold_groups(target)
+            hold = self._hold_groups(target)
+        else:
+            hold = None
 
         try:
             affected = build_affected_set(target)
@@ -184,18 +209,20 @@ class StopCue(TargetingCue, Cue):
                     curve=curve,
                     duration_seconds=self.duration / 1000,
                 )
-                self._run_fade_then_action(target)
+                self._run_fade_then_action(target, hold)
                 return True
         except Exception:
             logger.exception("StopCue: could not start the fade")
             self._disarm_hibernate_listener(target)
-            self._release_groups()
+            if hold is not None:
+                hold.release()
             self._runner = None
             self._error()
             return False
 
         # Nothing to fade: nothing to hold the groups for.
-        self._release_groups()
+        if hold is not None:
+            hold.release()
 
         # Instant path: no fade to run, dispatch action.
         # NOTE: Cue.pause() is @async_function — returns before the
@@ -207,7 +234,7 @@ class StopCue(TargetingCue, Cue):
         return False
 
     @async_function
-    def _run_fade_then_action(self, target):
+    def _run_fade_then_action(self, target, hold):
         """Drive the runner to completion (in a daemon thread), then
         dispatch the action. Skip dispatch if the runner was aborted.
         """
@@ -218,7 +245,7 @@ class StopCue(TargetingCue, Cue):
                 # target isn't accidentally hibernated by a later
                 # unrelated pause, and let the groups play on.
                 self._disarm_hibernate_listener(target)
-                self._release_groups()
+                hold.release()
                 return  # caller's __stop__ handled state
             # Dispatch Pause. Cue.pause() is @async_function — it
             # returns before the target transitions. We do NOT disarm
@@ -229,43 +256,47 @@ class StopCue(TargetingCue, Cue):
         except Exception:
             logger.exception("StopCue: error during fade-and-action")
             self._disarm_hibernate_listener(target)
-            self._release_groups()
+            hold.release()
             self._error()
             return
         finally:
             self._runner = None
 
         self._ended()
-        self._release_groups_once_settled()
+        # This cue can run again from here on: its next run holds
+        # under a token of its own, which this release leaves alone.
+        self._release_once_settled(hold)
 
-    def _release_groups_once_settled(self):
+    def _release_once_settled(self, hold):
         """After the action: release the groups once they have left
         Running (the action is async; releasing before it lands could
         start a held child just to cut it). A group still Running
-        after SETTLE_TIMEOUT never got the action (its state lock was
-        busy, say): releasing it lets it advance again."""
-        groups = self._held_groups or ()
+        after SETTLE_TIMEOUT never got the action, or got it late (its
+        state lock was busy): it is released so it isn't held, silent,
+        for good."""
         deadline = monotonic() + self.SETTLE_TIMEOUT
         while monotonic() < deadline and any(
-            group.state & CueState.Running for group in groups
+            group.state & CueState.Running for group in hold.groups
         ):
             sleep(0.02)
-        self._release_groups()
+        late = [g for g in hold.groups if g.state & CueState.Running]
+        if late:
+            logger.warning(
+                "StopCue %r: %s still running %.1f s after its %s; "
+                "releasing it",
+                self.name, ", ".join(repr(g.name) for g in late),
+                self.SETTLE_TIMEOUT, self.action,
+            )
+        hold.release()
 
     def _hold_groups(self, target):
         """Stop every group being faded from starting a new child
         until the fade is done (`GroupCue.hold_transitions`)."""
-        self._release_groups()
-        groups = build_affected_groups(target)
-        for group in groups:
-            group.hold_transitions(self.id)
-        self._held_groups = groups
-
-    def _release_groups(self):
-        """Release the groups held for the fade (no-op if none)."""
-        groups, self._held_groups = self._held_groups, None
-        for group in groups or ():
-            group.release_transitions(self.id)
+        hold = _GroupHold(
+            (self.id, next(self._runs)), build_affected_groups(target))
+        for group in hold.groups:
+            group.hold_transitions(hold.token)
+        return hold
 
     def _arm_hibernate_listener(self, target):
         """Subscribe one-shot-style handlers to target.paused that flip

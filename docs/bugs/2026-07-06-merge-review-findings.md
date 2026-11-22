@@ -12,8 +12,8 @@ Generated 2026-07-06 from a 3-agent QA / security / code-review panel run over a
 | Critical | 1 |
 | High | 36 |
 | Medium | 78 |
-| Low | 108 |
-| **Total** | **223** |
+| Low | 110 |
+| **Total** | **225** |
 
 _Also: 8 finding(s) already fixed on master, 1 not-applicable — see appendix._
 
@@ -366,7 +366,7 @@ _Also: 8 finding(s) already fixed on master, 1 not-applicable — see appendix._
   _Fix:_ Check `execute()`'s result; on a refusal restore the faders and end (or error) without fading.  
 - [ ] **M78** · `lisp/plugins/action_cues/stop_cue.py:146` · _found 2026-11-22 (show review, Docker E2E)_ — **A crossfade that starts during a Fade & Stop/Hibernate of its playlist group is not faded: the next track swells in and is cut at the pause**  
   `StopCue.__start__` collects the faders of the cues playing when it fires, then fades them. The group's crossfade monitor keeps running: if the crossfade point falls inside the fade, the incoming child fades in to full (it is not in the snapshot) and the outgoing child's own crossfade fade takes its volume controller back from the StopCue's. At the end of the fade both are audible and the pause (or stop) cuts them hard. Measured in Docker (2 s hibernate, crossfade starting 0.8 s in): incoming at 0.47–0.61, outgoing at 0.21–0.26 just before the pause. A child ending naturally during the fade starts the next one unfaded too. Shore Dance hibernates its 3 s-crossfade background playlist with a 3 s fade: ~1–2% of hibernates.  
-  _Fix:_ While a Fade & Stop fades a playlist group, the group starts no new child (crossfade monitor off, natural advance held). The StopCue releases its hold (one token per StopCue) once its action has landed, or at once on an abort; the catch-up runs on the main thread if the group still plays; a resume runs the held advance, faded in by Fade & Resume. Remaining window: L108.  
+  _Fix:_ While a Fade & Stop fades a playlist group, the group starts no new child (crossfade monitor off, natural advance held). The StopCue releases its hold (one token per run of it) once its action has landed, or at once on an abort; the catch-up runs on the main thread if the group still plays; a resume runs the held advance, faded in by Fade & Resume. Remaining window: L108.  
 - [ ] **M79** · `lisp/plugins/gst_backend/gst_media.py:194` · _found 2026-11-22 (PR #31 E2E, Docker)_ — **A faded stop ends with the level reset to full while the pipeline still plays: a possible blip at full volume after every fade-out**  
   `GstMedia.stop()` calls `element.stop()` on every element (Volume: `live_volume = volume`, back to the saved level) and only then sets the pipeline to READY. Buffers that pass the Volume element in between get full gain. Seen in Docker as a cue that faded to 0.0 reading 1.0 just before it stopped: 6/80 and 4/80 hibernate-mid-crossfade reps (master and PR #31 alike). Every Fade & Stop, crossfade fade-out and fade-out stop ends this way; whether the few ms are audible depends on the sink's buffering.  
   _Fix:_ Leave PLAYING first (READY, or PAUSED then READY), then reset the elements; or reset Volume's level only once the pipeline is down. Test: a fade-out stop never renders a buffer at the saved level after the fade (probe on the sink pad, or the E2E sampler with the M79 allowance removed).  
@@ -697,6 +697,12 @@ _Also: 8 finding(s) already fixed on master, 1 not-applicable — see appendix._
 - [ ] **L108** · `lisp/plugins/action_cues/group_cue.py` (`hold_transitions`) · _found 2026-11-22 (PR #31 review)_ — **A child start already dispatched when a Fade & Stop starts still escapes the fade**  
   `hold_transitions` stops the group starting children, but a start dispatched just before it (`execute` is async; the child is still in pre-wait or bringing its pipeline up) is not yet `IsRunning`, so `collect_live_faders` skips it: it plays on unfaded and the pause cuts it. The window is the start-up time of one child (tens of ms, longer for an unarmed pipeline) at the instant the Fade & Stop fires. Fading it is not simple: its own fade-in, started later, takes the volume controller back, and a fade on a pipeline not yet playing anchors nothing.  
   _Fix:_ Have the StopCue wait for children the held group has in flight (`_connected_children` not yet running) to reach Running, then fade them too (or stop them).  
+- [ ] **L109** · `lisp/plugins/action_cues/group_cue.py` (`_hold_child_fadein`) · _found 2026-11-22 (PR #31 review, round 2)_ — **The held child's fade-in from Fade & Resume is written from the group's start worker**  
+  `_start_playlist` runs on the group's start worker (`Cue.start` is async). `_hold_child_fadein` sets the child's `fadein_duration` there, so `property_changed` fires off the main thread. A directly connected listener such as the inspector's refresh timer then runs on the worker, and Qt refuses to start a timer from another thread, so the refresh is lost (and Qt prints a warning). Nothing audible. Until now `_hold_fade` only ran on the main thread, from the crossfade check.  
+  _Fix:_ Pass the fade-in to the child's start as an override instead of writing the Property (`_start_child` / the cue's fade-in path), or queue the write.  
+- [ ] **L110** · `lisp/plugins/action_cues/stop_cue.py` (`_release_once_settled`) · _found 2026-11-22 (PR #31 review, round 2)_ — **The settle wait gives up on a pause that is only late**  
+  After its fade, a Fade & Stop releases the group once it leaves Running, or after `SETTLE_TIMEOUT` (2 s). `Cue.pause`/`stop` wait for the group's `_st_lock`. If that lock is held for more than 2 s (a slow child start under load), the release lets the catch-up start the held child or re-arm the crossfade, and the late pause then cuts it (the M78 symptom, or L108's shape). It now logs a warning when this happens.  
+  _Fix:_ Keep waiting, up to a hard cap, while an action is still pending on the group (a pending-action flag set by `_dispatch_action`, or `_st_lock.locked()`).  
 
 ---
 

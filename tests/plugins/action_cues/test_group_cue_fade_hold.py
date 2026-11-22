@@ -7,11 +7,11 @@ outside that set: it faded in to full and was cut hard by the pause,
 and the outgoing child's own crossfade fade took its volume back from
 the StopCue's (measured in Docker: both audible at the pause).
 
-While held (one token per StopCue), the group starts nothing: no
-crossfade, and a natural end is recorded instead of advancing. The
-StopCue releases its token once its action has landed, or at once on
-an abort; the catch-up then runs on the main thread, if the group is
-still playing. A resume after the pause runs the held advance, faded
+While held (one token per run of a StopCue), the group starts
+nothing: no crossfade, and a natural end is recorded instead of
+advancing. The StopCue releases its token once its action has landed,
+or at once on an abort; the catch-up then runs on the main thread, if
+the group is still playing. A resume after the pause runs the held advance, faded
 in by Fade & Resume.
 """
 
@@ -512,8 +512,9 @@ class TestStopCueHoldsTheGroups:
 
         cue.__start__()
 
+        token = (cue.id, 1)
         assert calls[:3] == [
-            ("hold", "g", cue.id), ("hold", "n", cue.id), ("collect",),
+            ("hold", "g", token), ("hold", "n", token), ("collect",),
         ]
         outer.execute.assert_called_once_with(CueAction.Pause)
 
@@ -635,6 +636,24 @@ class TestResumeCueFadesTheHeldChildIn:
 
         assert order == [(CueAction.Resume, 3.0)]
 
+    def test_a_refused_resume_drops_the_request(self, mock_app):
+        from lisp.plugins.action_cues.resume_cue import ResumeCue
+
+        group, kids = _playlist(mock_app, crossfade=0.0)
+        mock_app.cue_model.get = {
+            group.id: group, **{k.id: k for k in kids}}.get
+        group._state = CueState.Pause
+        group._held_after_id = "c1"
+        group.execute = MagicMock(return_value=False)
+
+        cue = ResumeCue(app=mock_app)
+        cue.target_id = group.id
+        cue.duration = 3000
+        cue.__start__()
+
+        assert group._held_fadein is None
+        assert group._held_after_id == "c1"
+
 
 # ── A real StopCue on a real playlist group ─────────────────────
 
@@ -731,3 +750,319 @@ class TestRealStopCueOnARealGroup:
             == [((CueAction.Start,),)],
             timeout=3000,
         )
+
+
+# ── Review round 2 ──────────────────────────────────────────────
+
+
+def _gate_open(mock_app):
+    mock_app.exclusive_manager.is_start_blocked.return_value = False
+    mock_app.video_exclusive_manager.is_start_blocked.return_value = False
+
+
+class TestRefusedResumeOfAHeldGroup:
+    """A paused group whose child ended during the fade has no paused
+    child: the resume is pre-checked against the children it would
+    start, so a block keeps the group paused (it doesn't end)."""
+
+    def _held(self, mock_app, loop=False):
+        group, kids = _playlist(mock_app, crossfade=0.0, loop=loop)
+        _gate_open(mock_app)
+        _playing(group, kids, 0)
+        group.hold_transitions("s1")
+        _end(group, kids[0])
+        group.__pause__()
+        group._state = CueState.Pause
+        return group, kids
+
+    def test_refused_when_every_next_child_refuses(self, mock_app):
+        group, kids = self._held(mock_app)
+        for kid in kids[1:]:
+            kid._start_refused.return_value = True
+
+        assert group.execute(CueAction.Resume) is False
+        assert group.state & CueState.Pause
+        assert group._held_after_id == "c1"
+        for kid in kids:
+            kid.execute.assert_not_called()
+
+    def test_notifies_once(self, mock_app):
+        group, kids = self._held(mock_app)
+        for kid in kids[1:]:
+            kid._start_refused.return_value = True
+
+        group.execute(CueAction.Resume)
+
+        notified = [
+            k.id for k in kids for c in k._start_refused.call_args_list
+            if c.kwargs.get("notify", True)
+        ]
+        assert notified == ["c2"]
+
+    def test_not_refused_when_a_later_child_can_start(self, mock_app):
+        group, kids = self._held(mock_app)
+        kids[1]._start_refused.return_value = True
+
+        assert group._start_refused(CueAction.Resume) is False
+
+    def test_a_child_before_the_held_one_counts_only_when_looping(
+        self, mock_app
+    ):
+        group, kids = self._held(mock_app, loop=True)
+        kids[1]._start_refused.return_value = True
+        kids[2]._start_refused.return_value = True
+
+        # c1 (wrapped round to) can start.
+        assert group._start_refused(CueAction.Resume) is False
+
+    def test_nothing_after_the_held_one_is_not_a_refusal(self, mock_app):
+        # The playlist ended inside the fade: the resume ends it.
+        group, kids = self._held(mock_app)
+        group._held_after_id = "c3"
+
+        assert group._start_refused(CueAction.Resume) is False
+
+    def test_refusal_drops_a_fade_and_resume_request(self, mock_app):
+        group, kids = self._held(mock_app)
+        for kid in kids[1:]:
+            kid._start_refused.return_value = True
+        group.fade_in_held_next(3.0)
+
+        group.execute(CueAction.Resume)
+
+        assert group._held_fadein is None
+        assert group._held_after_id == "c1"
+
+
+class TestHeldAdvanceOnResume:
+    def test_nothing_after_the_held_child_ends_the_group(self, mock_app):
+        # Like the catch-up and a natural advance: don't replay the
+        # first song.
+        group, kids = _playlist(mock_app, crossfade=0.0)
+        group._held_after_id = "c3"
+        group._state = CueState.Pause
+
+        assert group.__start__() is False
+        for kid in kids:
+            kid.execute.assert_not_called()
+        assert group._held_after_id is None
+
+    def test_uses_one_resolution_of_the_children(self, mock_app):
+        # c2 enabled between __start__'s resolution and the held
+        # advance's: the index must point into the list it came from.
+        group, kids = _playlist(mock_app, crossfade=0.0)
+        kids[1].effective_disabled = True
+        group._held_after_id = "c1"
+        group._state = CueState.Pause
+        real = group._next_after
+
+        def next_after(ended_id):
+            kids[1].effective_disabled = False  # enabled meanwhile
+            return real(ended_id)
+
+        group._next_after = next_after
+
+        group.__start__()
+
+        kids[1].execute.assert_called_once_with(CueAction.Start)
+        kids[2].execute.assert_not_called()
+
+
+class TestHeldFadeInRestore:
+    """The held child's fade-in (from Fade & Resume) is temporary."""
+
+    def _held(self, mock_app):
+        group, kids = _playlist(mock_app, crossfade=0.0)
+        group._held_after_id = "c1"
+        group._state = CueState.Pause
+        group.fade_in_held_next(3.0)
+        return group, kids
+
+    def test_restored_when_the_held_child_is_refused(
+        self, mock_app, settle
+    ):
+        group, kids = self._held(mock_app)
+        kids[1].execute.return_value = False  # refused: c3 starts
+
+        group.__start__()
+        settle()
+
+        kids[2].execute.assert_called_once_with(CueAction.Start)
+        assert kids[1].fadein_duration == 0
+        assert group._pending_restores == {}
+
+    def test_restored_once_the_child_is_done_with_it(
+        self, mock_app, settle
+    ):
+        group, kids = self._held(mock_app)
+
+        group.__start__()
+        assert kids[1].fadein_duration == 3.0
+        group._pending_restores[(kids[1].id, "fadein_duration")]()
+        settle()
+
+        assert kids[1].fadein_duration == 0
+
+    def test_a_child_with_its_own_fade_in_keeps_it(self, mock_app):
+        group, kids = self._held(mock_app)
+        kids[1].fadein_duration = 1.5
+        seen = []
+        kids[1].execute.side_effect = lambda action: seen.append(
+            (action, kids[1].fadein_duration))
+
+        group.__start__()
+
+        assert seen == [(CueAction.FadeInStart, 1.5)]
+        assert group._pending_restores == {}
+
+    def test_a_child_that_cannot_fade_starts_plainly(self, mock_app):
+        group, kids = self._held(mock_app)
+        kids[1].CueActions = (CueAction.Start, CueAction.Resume)
+
+        group.__start__()
+
+        kids[1].execute.assert_called_once_with(CueAction.Start)
+        assert kids[1].fadein_duration == 0
+        assert group._pending_restores == {}
+
+    @pytest.mark.parametrize("seconds", [0, -1.0])
+    def test_no_fade_requested(self, mock_app, seconds):
+        group, kids = self._held(mock_app)
+        group.fade_in_held_next(seconds)
+
+        assert group._held_fadein is None
+
+    def test_a_paused_child_wins_and_the_fade_in_is_dropped(
+        self, mock_app
+    ):
+        group, kids = self._held(mock_app)
+        group._playlist_index = 1
+        kids[1].state = CueState.Pause
+
+        group.__start__()
+
+        kids[1].execute.assert_called_once_with(CueAction.Resume)
+        assert kids[1].fadein_duration == 0
+        assert group._held_fadein is None
+
+
+class _SettlingGroup:
+    """Leaves Running ``after`` seconds after the dispatch (the
+    async action landing late)."""
+
+    def __init__(self, group, after):
+        self.group = group
+        self.after = after
+
+    def execute(self, action):
+        def land():
+            self.group._state = CueState.Pause
+
+        threading.Timer(self.after, land).start()
+
+
+class TestStopCueSettleWait:
+    def test_release_waits_for_the_action_to_land(
+        self, stop_cue_env, monkeypatch
+    ):
+        from lisp.plugins.action_cues import stop_cue as sc
+
+        cue, outer, _runner, calls = stop_cue_env
+        monkeypatch.setattr(sc.StopCue, "SETTLE_TIMEOUT", 2.0)
+        outer._state = CueState.Running
+        landed = []
+        settling = _SettlingGroup(outer, 0.2)
+
+        def execute(action):
+            settling.execute(action)
+
+        outer.execute = execute
+        real_release = outer.release_transitions
+
+        def release(owner):
+            landed.append(outer.state)
+            real_release(owner)
+
+        monkeypatch.setattr(outer, "release_transitions", release)
+
+        cue.__start__()
+
+        assert landed == [CueState.Pause]
+
+    def test_timeout_releases_no_earlier_than_the_timeout(
+        self, stop_cue_env, monkeypatch
+    ):
+        import time
+
+        from lisp.plugins.action_cues import stop_cue as sc
+
+        cue, outer, _runner, calls = stop_cue_env
+        monkeypatch.setattr(sc.StopCue, "SETTLE_TIMEOUT", 0.3)
+        outer._state = CueState.Running
+
+        t0 = time.monotonic()
+        cue.__start__()
+
+        assert time.monotonic() - t0 >= 0.3
+        assert _released(calls) == [("release", "g"), ("release", "n")]
+
+    def test_hibernate_listener_disarmed_on_an_early_error(
+        self, stop_cue_env, monkeypatch
+    ):
+        from lisp.plugins.action_cues import stop_cue as sc
+
+        cue, outer, _runner, calls = stop_cue_env
+
+        def boom(*a, **kw):
+            raise RuntimeError("no runner")
+
+        monkeypatch.setattr(sc, "ParallelFadeRunner", boom)
+
+        assert cue.__start__() is False
+        # Armed (Hibernate), then undone: no handler left on paused.
+        assert outer.paused._Signal__slots == {}
+        assert cue._hib_handlers is None
+        assert _released(calls) == [("release", "g"), ("release", "n")]
+
+
+class TestStopCueRunsOwnTheirHolds:
+    """Each run of a StopCue holds and releases under its own token,
+    so a run still waiting for its action can't release the next
+    run's hold."""
+
+    def test_each_run_holds_under_its_own_token(self, stop_cue_env):
+        cue, _outer, _runner, calls = stop_cue_env
+
+        cue.__start__()
+        cue.__start__()
+
+        holds = [c[2] for c in calls if c[:2] == ("hold", "g")]
+        releases = [c[2] for c in calls if c[:2] == ("release", "g")]
+        assert len(set(holds)) == 2
+        assert releases == holds
+
+    def test_refire_during_the_settle_wait_keeps_the_new_hold(
+        self, real_env, qtbot, monkeypatch
+    ):
+        from lisp.plugins.action_cues import stop_cue as sc
+
+        cue, group, kids, runners = real_env
+        monkeypatch.setattr(sc.StopCue, "SETTLE_TIMEOUT", 0.3)
+        # The first run's action never lands (the group stays
+        # Running): its settle wait runs the full timeout.
+        group.execute = MagicMock()
+
+        cue.__start__()
+        runners[0].done.set()
+        qtbot.waitUntil(lambda: bool(cue.state & CueState.Stop),
+                        timeout=3000)
+        assert cue.__start__() is True  # re-fired inside the wait
+
+        qtbot.wait(600)  # the first run's settle wait is over
+        assert len(group._fade_holders) == 1
+        _end(group, kids[0])  # held by the second run's fade
+        qtbot.wait(50)
+        kids[1].execute.assert_not_called()
+
+        runners[1].abort()
+        qtbot.waitUntil(lambda: not group._fade_holders, timeout=3000)
