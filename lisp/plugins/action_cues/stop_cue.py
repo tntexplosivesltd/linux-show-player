@@ -209,7 +209,7 @@ class StopCue(TargetingCue, Cue):
                     curve=curve,
                     duration_seconds=self.duration / 1000,
                 )
-                self._run_fade_then_action(target, hold)
+                self._run_fade_then_action(target, hold, self._runner)
                 return True
         except Exception:
             logger.exception("StopCue: could not start the fade")
@@ -234,12 +234,15 @@ class StopCue(TargetingCue, Cue):
         return False
 
     @async_function
-    def _run_fade_then_action(self, target, hold):
+    def _run_fade_then_action(self, target, hold, runner):
         """Drive the runner to completion (in a daemon thread), then
         dispatch the action. Skip dispatch if the runner was aborted.
+
+        Uses its own run's runner and hold, never ``self._runner``
+        (a later run of this cue may have replaced it).
         """
         try:
-            completed = self._runner.run_until_complete()
+            completed = runner.run_until_complete()
             if not completed:
                 # Fade aborted — disarm the hibernate listener so the
                 # target isn't accidentally hibernated by a later
@@ -260,7 +263,8 @@ class StopCue(TargetingCue, Cue):
             self._error()
             return
         finally:
-            self._runner = None
+            if self._runner is runner:
+                self._runner = None
 
         self._ended()
         # This cue can run again from here on: its next run holds

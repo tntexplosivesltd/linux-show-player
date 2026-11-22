@@ -851,7 +851,7 @@ class TestHibernateMidFadeAbort:
         from lisp.plugins.action_cues.stop_cue import _GroupHold
 
         cue._run_fade_then_action.__wrapped__(
-            cue, target, _GroupHold(("t", 1), []))
+            cue, target, _GroupHold(("t", 1), []), cue._runner)
 
         assert cue._hib_handlers is None
         # An unrelated subsequent pause on the target must NOT set

@@ -1052,10 +1052,18 @@ class TestStopCueRunsOwnTheirHolds:
         # Running): its settle wait runs the full timeout.
         group.execute = MagicMock()
 
+        ended = threading.Event()
+
+        def on_end(*_):
+            ended.set()
+
+        cue.end.connect(on_end)
+
         cue.__start__()
         runners[0].done.set()
-        qtbot.waitUntil(lambda: bool(cue.state & CueState.Stop),
-                        timeout=3000)
+        # The first run has ended (so it can run again) and is now in
+        # its settle wait.
+        qtbot.waitUntil(ended.is_set, timeout=3000)
         assert cue.__start__() is True  # re-fired inside the wait
 
         qtbot.wait(600)  # the first run's settle wait is over
