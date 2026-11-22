@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 from lisp.cues.cue import CueState
 from lisp.cues.media_cue import MediaCue
 from lisp.plugins.action_cues._fader_coordinator import (
+    drain_videos,
     build_affected_set,
     collect_live_faders,
 )
@@ -289,3 +290,47 @@ class TestParallelFadeRunner:
             assert runner.run_until_complete() is True
 
         good.fade.assert_called_once()
+
+
+class TestDrainVideos:
+    """After a completed fade-out, the faded video cues' last frames
+    are drained to the projection before the action runs."""
+
+    def _cue(self, drain=None):
+        cue = MagicMock(spec=MediaCue)
+        cue.media = MagicMock()
+        if drain is not None:
+            cue.media.drain_video.side_effect = drain
+        return cue
+
+    def test_all_cues_share_one_deadline(self):
+        # Several cues are drained in turn: together they must not
+        # hold the action longer than one drain may.
+        deadlines = []
+        cues = [self._cue(lambda abort=None, deadline=None:
+                          deadlines.append(deadline)) for _ in range(3)]
+        drain_videos(cues)
+        assert len(set(deadlines)) == 1 and deadlines[0] is not None
+
+    def test_a_failing_drain_does_not_stop_the_others(self):
+        def boom(abort=None, deadline=None):
+            raise RuntimeError("boom")
+        ok = self._cue()
+        drain_videos([self._cue(boom), ok])
+        ok.media.drain_video.assert_called_once()
+
+    def test_cue_without_media_is_skipped(self):
+        plain = MagicMock(spec=["state"])  # e.g. an action cue
+        ok = self._cue()
+        drain_videos([plain, ok])
+        ok.media.drain_video.assert_called_once()
+
+    def test_abort_ends_the_remaining_drains(self):
+        import threading
+        abort = threading.Event()
+
+        def first(abort=None, deadline=None):
+            abort.set()
+        later = self._cue()
+        drain_videos([self._cue(first), later], abort=abort)
+        later.media.drain_video.assert_not_called()

@@ -17,6 +17,7 @@
 
 import logging
 import time
+import weakref
 
 from PyQt5.QtCore import QT_TRANSLATE_NOOP
 
@@ -57,6 +58,31 @@ MAX_AHEAD = APPSRC_MAX_QUEUE_TIME
 
 # A failing pump fails on every frame; log it at most this often (s).
 PUMP_ERROR_LOG_INTERVAL = 5.0
+
+# wait_drained (after a completed fade-out, before the cue stops):
+# polls every DRAIN_POLL s until DRAIN_FRAMES frames that took their
+# alpha after the fade have been pushed. It waits at most as long as
+# the queue holds (its current level + PUMP_LEAD, the time the last
+# faded frame needs to be pumped) plus DRAIN_MARGIN_S, never more than
+# DRAIN_TIMEOUT_MAX: a stalled pump must not hold a stop for long.
+DRAIN_POLL = 0.01
+DRAIN_FRAMES = 2
+DRAIN_MARGIN_S = 0.25
+DRAIN_TIMEOUT_MAX = 1.5
+
+
+def _weak_probe(method_ref):
+    """A pad-probe callback that holds its target weakly. GStreamer
+    keeps a strong reference to the callback, and a bound method would
+    keep the element (and its whole cue pipeline) alive in a cycle the
+    GC cannot see. Once the target is gone the probe passes data on."""
+    def probe(pad, info):
+        method = method_ref()
+        if method is None:
+            return Gst.PadProbeReturn.OK
+        return method(pad, info)
+
+    return probe
 
 
 def cue_latency_due(buffers_seen):
@@ -118,6 +144,21 @@ class VideoSink(GstMediaElement):
         self.pipeline.add(self.video_queue)
         self.pipeline.add(self.video_appsink)
         self.video_queue.link(self.video_appsink)
+        # Running time of the newest frame to enter the queue. Frames
+        # take their alpha upstream (VideoAlpha), so this is the newest
+        # frame whose level is decided; wait_drained waits past it.
+        # A flush (seek) restarts running time: forget both values.
+        self._queued_rt = None
+        self._queue_probe = None
+        queue_in = self.video_queue.get_static_pad("sink")
+        if queue_in is not None:
+            self._queue_probe = queue_in.add_probe(
+                Gst.PadProbeType.BUFFER | Gst.PadProbeType.EVENT_FLUSH,
+                _weak_probe(weakref.WeakMethod(self.__on_queue_in)),
+            )
+            if not self._queue_probe:
+                logger.warning("VideoSink: cannot probe the video queue; "
+                               "fade-outs may end with a cut to black")
 
         self._audio_removed = False
         self._video_removed = False
@@ -192,11 +233,95 @@ class VideoSink(GstMediaElement):
     def eos(self):
         self.__unregister()
 
+    def __on_queue_in(self, pad, info):
+        """Streaming thread: a frame enters the queue, its alpha
+        already applied upstream. Record its running time. A flush
+        restarts running time, so the values from before it go."""
+        try:
+            if info.type & Gst.PadProbeType.EVENT_FLUSH:
+                event = info.get_event()
+                if (event is not None
+                        and event.type == Gst.EventType.FLUSH_STOP):
+                    self._queued_rt = None
+                    reg = self._registration
+                    if reg is not None:
+                        reg.last_rt = None
+                return Gst.PadProbeReturn.OK
+            buf = info.get_buffer()
+            event = pad.get_sticky_event(Gst.EventType.SEGMENT, 0)
+            if buf is not None and event is not None:
+                rt = event.parse_segment().to_running_time(
+                    Gst.Format.TIME, buf.pts)
+                if rt != Gst.CLOCK_TIME_NONE:
+                    self._queued_rt = rt
+        except Exception:
+            self.__log_pump_error()
+        return Gst.PadProbeReturn.OK
+
+    def drain_timeout(self):
+        """Seconds wait_drained may wait: what the queue holds now plus
+        PUMP_LEAD (when the last faded frame is pumped), plus
+        DRAIN_MARGIN_S, at most DRAIN_TIMEOUT_MAX."""
+        try:
+            level = self.video_queue.get_property("current-level-time")
+        except Exception:
+            level = 0
+        if not isinstance(level, int):
+            level = 0
+        wait = (level + PUMP_LEAD) / Gst.SECOND + DRAIN_MARGIN_S
+        return min(wait, DRAIN_TIMEOUT_MAX)
+
+    def wait_drained(self, abort=None, deadline=None):
+        """After a completed fade-out, before the cue stops: block
+        until the pump has pushed a frame newer than every frame queued
+        so far. Those queued frames took their alpha during the fade
+        (up to ~10 MB of them sit between VideoAlpha and the appsink,
+        then each is pumped PUMP_LEAD early), so the next one is the
+        first at the fade's final level. Stopping before it dropped the
+        darkest frames and cut the picture from 10-20 % to black.
+
+        Marks the branch so the compositor keeps it until the mixer has
+        output the last pushed frame (a hard stop's is not kept).
+        `abort` (a threading.Event) ends the wait at once: a second
+        Stop cuts, as it does mid-fade. `deadline` (time.monotonic())
+        bounds it too, for several cues drained in turn.
+
+        Returns False on timeout or abort, True once drained or when
+        nothing goes to the projection. Called from the fade's worker
+        thread, never a streaming thread (it waits on the pump)."""
+        reg = self._registration
+        target = self._queued_rt
+        if reg is None or target is None:
+            return True
+        reg.hold_until_shown = True
+        end = time.monotonic() + self.drain_timeout()
+        if deadline is not None:
+            end = min(end, deadline)
+        # Two frames past it: the first can still be one that took its
+        # alpha as the fader's last step landed (measured: up to a 7 %
+        # step to black with one, 0-3 % with two).
+        for _ in range(DRAIN_FRAMES):
+            while True:
+                reg = self._registration
+                if reg is None:
+                    return True
+                if reg.last_rt is not None and reg.last_rt > target:
+                    target = reg.last_rt
+                    break
+                if abort is not None and abort.is_set():
+                    return False
+                if time.monotonic() >= end:
+                    return False
+                time.sleep(DRAIN_POLL)
+        return True
+
     def __unregister(self):
         # Drop our handle first so an in-flight new-sample on the
         # streaming thread stops pushing before the appsrc goes away.
         self._registration = None
         self._starting = False
+        # The next run starts its running time again.
+        self._queued_rt = None
         active_video_sinks.discard(self)
         compositor = _compositor()
         if compositor is not None:
@@ -347,6 +472,12 @@ class VideoSink(GstMediaElement):
         out.pts = pts
         out.dts = Gst.CLOCK_TIME_NONE
         ret = reg.appsrc.push_buffer(out)
+        if ret == Gst.FlowReturn.OK:
+            # The compositor holds a stopped branch until the mixer has
+            # output this frame (no cut at the end of a fade-out).
+            reg.last_pts = pts
+            if not preroll:
+                reg.last_rt = running_time
         if ret != Gst.FlowReturn.OK and not reg.push_warned:
             # FLUSHING is expected for a branch the compositor dropped.
             reg.push_warned = True
@@ -430,6 +561,11 @@ class VideoSink(GstMediaElement):
         if self._eos_handler is not None:
             self.video_appsink.disconnect(self._eos_handler)
             self._eos_handler = None
+        if self._queue_probe:
+            pad = self.video_queue.get_static_pad("sink")
+            if pad is not None:
+                pad.remove_probe(self._queue_probe)
+            self._queue_probe = None
         if not self._video_removed:
             self.pipeline.remove(self.video_queue)
             self.pipeline.remove(self.video_appsink)

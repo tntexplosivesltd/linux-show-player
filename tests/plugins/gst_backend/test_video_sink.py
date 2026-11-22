@@ -1,5 +1,6 @@
 """Tests for VideoSink element."""
 
+import time
 from unittest.mock import MagicMock, patch
 
 from lisp.backend.media_element import ElementType, MediaType
@@ -8,8 +9,10 @@ from lisp.plugins.gst_backend import video_compositor as vc
 from lisp.plugins.gst_backend.elements.video_sink import (
     LATENCY_REFRESH_BUFFERS,
     LATENCY_WARMUP_BUFFERS,
+    DRAIN_TIMEOUT_MAX,
     PUMP_LEAD,
     VideoSink,
+    _weak_probe,
     cue_latency_due,
 )
 
@@ -378,6 +381,150 @@ class TestVideoSinkPump:
         reg.appsrc.push_buffer.assert_called_once_with(out)
         assert rets == [Gst.FlowReturn.OK]
 
+    def test_pushed_frame_is_recorded_as_last_pts(self):
+        # The compositor keeps a stopped branch until the mixer has
+        # output this frame, so a fade-out is not cut short.
+        sink, comp, reg, buf, _, appsink = self._setup()
+        assert reg.last_pts is None
+        self._run(sink, appsink)
+        assert reg.last_pts == (2000 + 1500 - 86) * Gst.MSECOND
+
+    def test_failed_push_is_not_recorded_as_last_pts(self):
+        # A frame the appsrc refused never reaches the mixer: waiting
+        # for it would hold a stopped cue until LINGER_CAP_MS.
+        sink, comp, reg, buf, _, appsink = self._setup()
+        reg.appsrc.push_buffer.return_value = Gst.FlowReturn.FLUSHING
+        self._run(sink, appsink)
+        assert reg.last_pts is None
+
+    def test_pushed_frame_records_its_cue_running_time(self):
+        sink, comp, reg, buf, _, appsink = self._setup()
+        assert reg.last_rt is None
+        self._run(sink, appsink)
+        assert reg.last_rt == 2000 * Gst.MSECOND
+
+    def test_queue_entry_records_the_newest_faded_frame(self):
+        # Frames take their alpha in the cue's VideoAlpha, upstream of
+        # the queue: the newest frame to enter it is the newest one
+        # whose level is already decided.
+        sink, comp, reg, buf, _, appsink = self._setup()
+        info = MagicMock()
+        info.type = Gst.PadProbeType.BUFFER
+        info.get_buffer.return_value.pts = 1234
+        pad = MagicMock()
+        seg = pad.get_sticky_event.return_value.parse_segment.return_value
+        seg.to_running_time.return_value = 777 * Gst.MSECOND
+        ret = sink._VideoSink__on_queue_in(pad, info)
+        assert ret == Gst.PadProbeReturn.OK
+        assert sink._queued_rt == 777 * Gst.MSECOND
+
+    def test_wait_drained_returns_once_a_later_frame_is_pumped(self):
+        # After a fade-out, the frames queued so far still carry the
+        # fade's last levels; the cue must keep running until one that
+        # took its alpha after the fade (a black one) is pushed, or the
+        # picture stops on a 10-20 % frame (cut to black).
+        # Two frames past it: the first can still have taken its alpha
+        # as the fader's last step landed.
+        sink, comp, reg, buf, sample, appsink = self._setup()
+        sink._queued_rt = 1990 * Gst.MSECOND  # newest faded frame
+        result = self._wait_while_pumping(
+            sink, sample, appsink, [2000, 2033])
+        assert result == [True]
+
+    def test_wait_drained_times_out_after_one_later_frame(self):
+        sink, comp, reg, buf, sample, appsink = self._setup()
+        sink._queued_rt = 1990 * Gst.MSECOND
+        result = self._wait_while_pumping(sink, sample, appsink, [2000])
+        assert result == [False]
+
+    def test_wait_drained_times_out_when_no_later_frame_comes(self):
+        sink, comp, reg, buf, _, appsink = self._setup()
+        sink._queued_rt = 2000 * Gst.MSECOND
+        self._run(sink, appsink)  # only rt 2000: not past it
+        assert sink.wait_drained(deadline=time.monotonic() + 0.05) is False
+
+    def _wait_while_pumping(self, sink, sample, appsink, rts_ms):
+        """Call wait_drained on a worker (as the fade thread does) and
+        pump frames at `rts_ms` meanwhile; returns [its result]."""
+        import threading
+        result = []
+        waiter = threading.Thread(
+            target=lambda: result.append(sink.wait_drained(deadline=time.monotonic() + 0.5)))
+        waiter.start()
+        seg = sample.get_segment.return_value
+        for rt in rts_ms:
+            time.sleep(0.03)
+            seg.to_running_time.return_value = rt * Gst.MSECOND
+            self._run(sink, appsink)
+        waiter.join(timeout=2)
+        return result
+
+    def test_wait_drained_marks_the_branch_to_be_held(self):
+        # A drained fade-out's branch is kept until its last frame is
+        # out; a hard stop's is not (see the compositor's _drain).
+        sink, comp, reg, buf, _, appsink = self._setup()
+        sink._queued_rt = 2000 * Gst.MSECOND
+        assert reg.hold_until_shown is False
+        sink.wait_drained(deadline=time.monotonic())
+        assert reg.hold_until_shown is True
+
+    def test_wait_drained_stops_at_once_when_aborted(self):
+        # A second Stop during the drain cuts at once, as mid-fade.
+        import threading
+        sink, comp, reg, buf, _, appsink = self._setup()
+        sink._queued_rt = 2000 * Gst.MSECOND
+        abort = threading.Event()
+        abort.set()
+        t0 = time.monotonic()
+        assert sink.wait_drained(abort=abort) is False
+        assert time.monotonic() - t0 < 0.1
+
+    def test_wait_drained_respects_a_shared_deadline(self):
+        sink, comp, reg, buf, _, appsink = self._setup()
+        sink._queued_rt = 2000 * Gst.MSECOND
+        t0 = time.monotonic()
+        assert sink.wait_drained(deadline=t0 - 1) is False
+        assert time.monotonic() - t0 < 0.1
+
+    def test_drain_timeout_covers_what_the_queue_holds(self):
+        # A small-frame video queues up to its 1 s limit: the frames
+        # that took the fade's last levels are pumped that much later,
+        # so a fixed 0.5 s cap still cut the fade.
+        sink, comp, reg, buf, _, appsink = self._setup()
+        sink.video_queue.get_property.return_value = 900 * Gst.MSECOND
+        assert sink.drain_timeout() >= 0.9 + PUMP_LEAD / Gst.SECOND
+        sink.video_queue.get_property.return_value = 20 * Gst.SECOND
+        assert sink.drain_timeout() == DRAIN_TIMEOUT_MAX
+
+    def test_flush_forgets_running_times_from_before_it(self):
+        # A flushing seek restarts the running time: values from
+        # before it must not end (or stretch) a drain after it.
+        sink, comp, reg, buf, _, appsink = self._setup()
+        self._run(sink, appsink)
+        sink._queued_rt = 2000 * Gst.MSECOND
+        info = MagicMock()
+        info.type = Gst.PadProbeType.EVENT_FLUSH
+        info.get_event.return_value.type = Gst.EventType.FLUSH_STOP
+        sink._VideoSink__on_queue_in(MagicMock(), info)
+        assert sink._queued_rt is None
+        assert reg.last_rt is None
+
+    def test_restart_forgets_the_previous_runs_queue_time(self):
+        sink, comp, reg, buf, _, appsink = self._setup()
+        sink._queued_rt = 60 * Gst.SECOND
+        sink.stop()
+        assert sink._queued_rt is None
+
+    def test_wait_drained_with_nothing_queued_returns_at_once(self):
+        sink, comp, reg, buf, _, appsink = self._setup()
+        assert sink._queued_rt is None
+        assert sink.wait_drained() is True
+
+    def test_wait_drained_without_registration_returns_at_once(self):
+        sink, comp, reg, buf, _, appsink = self._setup()
+        sink.stop()  # unregistered: nothing reaches the projection
+        assert sink.wait_drained() is True
+
     def test_projection_latency_comes_from_compositor_cache(self):
         sink, comp, reg, buf, _, appsink = self._setup()
         _, query = self._run(sink, appsink, n=3)
@@ -714,6 +861,62 @@ class TestVideoSinkDispose:
             sink.dispose()
         for name in names:
             assert pipeline.get_by_name(name) is None
+
+    def test_queue_probe_is_attached_and_removed_on_dispose(self):
+        # The probe's closure would keep the sink (and its whole cue
+        # pipeline) alive after dispose: it must be removed.
+        pipeline = Gst.Pipeline()
+        sink = VideoSink(pipeline)
+        pad = sink.video_queue.get_static_pad("sink")
+        probe_id = sink._queue_probe
+        assert probe_id  # 0 = add_probe failed
+        with patch.object(pad.__class__, "remove_probe") as remove:
+            with patch(_CM, return_value=None):
+                sink.dispose()
+        remove.assert_called_once_with(probe_id)
+        assert sink._queue_probe is None
+
+    def test_queue_probe_records_real_running_times(self):
+        # Real GStreamer: frames entering the queue update _queued_rt.
+        pipeline = Gst.Pipeline()
+        sink = VideoSink(pipeline)
+        src = Gst.ElementFactory.make("videotestsrc", None)
+        src.set_property("num-buffers", 3)
+        pipeline.add(src)
+        # Video only (as post_link does): an unlinked audio sink would
+        # never preroll and hold the pipeline in PAUSED.
+        pipeline.remove(sink.audio_sink)
+        sink._audio_removed = True
+        assert src.link(sink.video_queue)
+        pipeline.set_state(Gst.State.PLAYING)
+        try:
+            msg = pipeline.get_bus().timed_pop_filtered(
+                5 * Gst.SECOND,
+                Gst.MessageType.EOS | Gst.MessageType.ERROR)
+            assert msg is not None and msg.type == Gst.MessageType.EOS
+            assert sink._queued_rt is not None
+            assert 0 <= sink._queued_rt < Gst.SECOND
+        finally:
+            pipeline.set_state(Gst.State.NULL)
+            with patch(_CM, return_value=None):
+                sink.dispose()
+
+    def test_weak_probe_does_not_keep_its_owner_alive(self):
+        import gc
+        import weakref
+
+        class Owner:
+            def probe(self, pad, info):
+                return Gst.PadProbeReturn.DROP
+
+        owner = Owner()
+        trampoline = _weak_probe(weakref.WeakMethod(owner.probe))
+        assert trampoline(None, None) == Gst.PadProbeReturn.DROP
+        alive = weakref.ref(owner)
+        del owner
+        gc.collect()
+        assert alive() is None
+        assert trampoline(None, None) == Gst.PadProbeReturn.OK
 
     def test_dispose_removes_audio_sink_when_not_already_removed(self):
         pipeline = Gst.Pipeline()

@@ -15,7 +15,8 @@
 # You should have received a copy of the GNU General Public License
 # along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
-from threading import Lock
+import logging
+from threading import Event, Lock
 
 from PyQt5.QtCore import QT_TRANSLATE_NOOP
 
@@ -24,6 +25,9 @@ from lisp.core.fade_functions import FadeInType, FadeOutType
 from lisp.core.fader_group import FaderGroup
 from lisp.core.properties import Property
 from lisp.cues.cue import Cue, CueAction, CueState
+
+
+logger = logging.getLogger(__name__)
 
 
 class MediaCue(Cue):
@@ -62,6 +66,11 @@ class MediaCue(Cue):
 
         self.__in_fadein = False
         self.__in_fadeout = False
+        # From a fade-out's start until its drain ends (see
+        # __fadeout_then_drain): a second stop/pause in that time cuts
+        # at once, setting __drain_abort to end the drain.
+        self.__draining = False
+        self.__drain_abort = Event()
 
         self.__fade_lock = Lock()
         self.__fader_group = FaderGroup()
@@ -124,8 +133,9 @@ class MediaCue(Cue):
 
     def __stop__(self, fade=False):
         try:
-            if self.__in_fadeout:
+            if self.__in_fadeout or self.__draining:
                 self.__fader_group.stop()
+                self.__drain_abort.set()
             else:
                 if self.__in_fadein:
                     self.__fader_group.stop()
@@ -139,9 +149,8 @@ class MediaCue(Cue):
                     # caller's `finally` releases it (H36).
                     self._st_lock.release()
                     try:
-                        self.__fadeout(
+                        self.__fadeout_then_drain(
                             self.fadeout_duration,
-                            self.__fade_to_zero(),
                             FadeOutType[self.fadeout_type],
                         )
                     finally:
@@ -153,8 +162,9 @@ class MediaCue(Cue):
 
     def __pause__(self, fade=False):
         try:
-            if self.__in_fadeout:
+            if self.__in_fadeout or self.__draining:
                 self.__fader_group.stop()
+                self.__drain_abort.set()
             else:
                 if self.__in_fadein:
                     self.__fader_group.stop()
@@ -168,9 +178,8 @@ class MediaCue(Cue):
                     # caller's `finally` releases it (H36).
                     self._st_lock.release()
                     try:
-                        self.__fadeout(
+                        self.__fadeout_then_drain(
                             self.fadeout_duration,
-                            self.__fade_to_zero(),
                             FadeOutType[self.fadeout_type],
                         )
                     finally:
@@ -183,18 +192,20 @@ class MediaCue(Cue):
     def __interrupt__(self, fade=False):
         try:
             if self._can_fade():
+                # Interrupting a drain cuts at once, like a stop does.
+                draining = self.__draining
                 self.__fader_group.stop()
+                self.__drain_abort.set()
 
                 fade_duration = self._interrupt_fade_duration()
                 if (
                     fade
                     and fade_duration > 0
                     and self._state & CueState.Running
+                    and not draining
                 ):
-                    self.__fadeout(
-                        fade_duration,
-                        self.__fade_to_zero(),
-                        self._interrupt_fade_type(),
+                    self.__fadeout_then_drain(
+                        fade_duration, self._interrupt_fade_type()
                     )
         finally:
             # Even if the fade failed: the cue must still go quiet.
@@ -334,6 +345,26 @@ class MediaCue(Cue):
 
     def _can_fade(self):
         return bool(self.__fader_group)
+
+    def __fadeout_then_drain(self, duration, fade_type):
+        """Fade to zero; once the fade completes, let the faded frames
+        reach the projection (Media.drain_video) before the caller
+        stops/pauses the media. Without the drain the last, darkest
+        frames were dropped and the picture cut from ~15 % straight to
+        black. Marked as draining from the start, so a second stop or
+        pause during fade or drain cuts at once (no second fade). The
+        drain never raises: the cue must still go quiet."""
+        self.__drain_abort.clear()
+        self.__draining = True
+        try:
+            if self.__fadeout(duration, self.__fade_to_zero(), fade_type):
+                if not self.__drain_abort.is_set():
+                    try:
+                        self.media.drain_video(abort=self.__drain_abort)
+                    except Exception:
+                        logger.exception("MediaCue: video drain failed")
+        finally:
+            self.__draining = False
 
     @async_function
     def _on_start_fade(self):
