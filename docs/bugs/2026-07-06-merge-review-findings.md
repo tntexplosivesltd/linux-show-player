@@ -11,9 +11,9 @@ Generated 2026-07-06 from a 3-agent QA / security / code-review panel run over a
 |---|---:|
 | Critical | 1 |
 | High | 36 |
-| Medium | 77 |
+| Medium | 78 |
 | Low | 108 |
-| **Total** | **222** |
+| **Total** | **223** |
 
 _Also: 8 finding(s) already fixed on master, 1 not-applicable — see appendix._
 
@@ -134,7 +134,7 @@ _Also: 8 finding(s) already fixed on master, 1 not-applicable — see appendix._
   `Cue.start` (an `@async_function`) wraps the start in `try/finally` with no `except`. An exception from `__start__` (H35, a bad element, a plugin bug) unwinds out of the worker thread to stderr; the cue never reaches Running or Error, no `error` signal, no notification. On stage, GO simply does nothing.  
   _Fix:_ Catch exceptions around `__start__` (and the other `__*__` hooks), log them, and move the cue to Error with the `error` signal so the layout and notifications show it.  
 
-## Medium (77)
+## Medium (78)
 
 - [ ] **M1** · `lisp/plugins/test_harness/handlers.py:438` · _00bc9852 (qa)_ — **Unvalidated generic setattr with no unit test coverage**  
   handle_layout_set_property does `setattr(app.layout, name, value)` with no allowlist and no check that `name` actually names a known ProxyProperty (e.g. `volume_indicators_visible`). If a test passes a mistyped or non-existent property name, Python silently creates a new instance attribute instead of raising, and the…  
@@ -367,6 +367,9 @@ _Also: 8 finding(s) already fixed on master, 1 not-applicable — see appendix._
 - [ ] **M78** · `lisp/plugins/action_cues/stop_cue.py:146` · _found 2026-11-22 (show review, Docker E2E)_ — **A crossfade that starts during a Fade & Stop/Hibernate of its playlist group is not faded: the next track swells in and is cut at the pause**  
   `StopCue.__start__` collects the faders of the cues playing when it fires, then fades them. The group's crossfade monitor keeps running: if the crossfade point falls inside the fade, the incoming child fades in to full (it is not in the snapshot) and the outgoing child's own crossfade fade takes its volume controller back from the StopCue's. At the end of the fade both are audible and the pause (or stop) cuts them hard. Measured in Docker (2 s hibernate, crossfade starting 0.8 s in): incoming at 0.47–0.61, outgoing at 0.21–0.26 just before the pause. A child ending naturally during the fade starts the next one unfaded too. Shore Dance hibernates its 3 s-crossfade background playlist with a 3 s fade: ~1–2% of hibernates.  
   _Fix:_ While a Fade & Stop fades a playlist group, the group starts no new child (crossfade monitor off, natural advance held). The StopCue releases its hold (one token per StopCue) once its action has landed, or at once on an abort; the catch-up runs on the main thread if the group still plays; a resume runs the held advance, faded in by Fade & Resume. Remaining window: L108.  
+- [ ] **M79** · `lisp/plugins/gst_backend/gst_media.py:194` · _found 2026-11-22 (PR #31 E2E, Docker)_ — **A faded stop ends with the level reset to full while the pipeline still plays: a possible blip at full volume after every fade-out**  
+  `GstMedia.stop()` calls `element.stop()` on every element (Volume: `live_volume = volume`, back to the saved level) and only then sets the pipeline to READY. Buffers that pass the Volume element in between get full gain. Seen in Docker as a cue that faded to 0.0 reading 1.0 just before it stopped: 6/80 and 4/80 hibernate-mid-crossfade reps (master and PR #31 alike). Every Fade & Stop, crossfade fade-out and fade-out stop ends this way; whether the few ms are audible depends on the sink's buffering.  
+  _Fix:_ Leave PLAYING first (READY, or PAUSED then READY), then reset the elements; or reset Volume's level only once the pipeline is down. Test: a fade-out stop never renders a buffer at the saved level after the fade (probe on the sink pad, or the E2E sampler with the M79 allowance removed).  
 
 ## Low (108)
 

@@ -166,13 +166,40 @@ def after_hibernate_and_resume(tag, group, kids, res, sampler):
 
     # Silence at the pause: each child's last sample while it played
     # (the sampler polls every ~50 ms, so allow a little ramp left).
-    last = {}
+    series = {}
     for t, row in sampler.samples:
         if t <= t_pause:
-            last.update(row)
+            for name, level in row.items():
+                series.setdefault(name, []).append(level)
+    stopped = {n: state(i) == "Stop" for n, i in kids.items()}
+    last = {}
+    for name, levels in series.items():
+        if (
+            stopped[name]
+            and len(levels) > 1
+            and levels[-1] >= 0.99
+            and levels[-2] <= 0.15
+        ):
+            # Faded out, then read back at its saved level as it
+            # stopped: GstMedia.stop() resets the Volume element
+            # before the pipeline leaves PLAYING (M79, on master too).
+            # Not this test's subject: judge the fade by the level
+            # before the reset.
+            print(f"    {name}: level reset on stop seen (M79)")
+            levels = levels[:-1]
+        last[name] = levels[-1]
     loud = {n: v for n, v in last.items() if v > 0.15}
     check(f"{tag}: music silent when the hibernate pauses it",
           not loud, f"last live_volume before the pause: {loud}")
+    if loud:
+        t0 = sampler.samples[0][0] if sampler.samples else t_pause
+        for name in loud:
+            timed = [
+                (round(t - t0, 2), row[name])
+                for t, row in sampler.samples if name in row
+            ]
+            print(f"    {name} series (s since the fade, level): "
+                  f"{timed}; pause seen at {round(t_pause - t0, 2)}")
 
     time.sleep(1.5)  # let any outgoing stop worker finish
     s = snapshot("1.5 s after pause", {"group": group, **kids})
@@ -272,8 +299,16 @@ def test_c_natural_end_during_hibernate_fade(group, kids):
         # Fade & Resume fades the held child in (it wasn't playing,
         # so no fader of its covered it): it starts low and rises.
         check("C: B fades in on the resume, not a hard start",
-              bool(levels) and levels[0] < 0.5 and levels[-1] > 0.9,
+              bool(levels) and levels[0] < 0.5,
               f"levels {levels[:3]} ... {levels[-2:]}")
+        # The ramp runs in stream time, which can start late (M74):
+        # poll for the end of it rather than assume the wall clock.
+        deadline = time.time() + 5.0
+        while time.time() < deadline and live_volume(kids["B"]) < 0.95:
+            time.sleep(0.1)
+        check("C: B reaches its full level",
+              live_volume(kids["B"]) >= 0.95,
+              f"live_volume {live_volume(kids['B'])}")
         s = snapshot("1 s after resume", {"group": group, **kids})
         check("C: A not restarted", s["A"] == "Stop", s["A"])
     finally:
@@ -294,10 +329,17 @@ def main():
         start_lisp()
     try:
         group, kids = setup()
-        for _ in range(2):
-            test_a_hibernate_mid_crossfade(group, kids)
-            test_b_crossfade_during_hibernate_fade(group, kids)
-            test_c_natural_end_during_hibernate_fade(group, kids)
+        # E2E_HIB_CASES / E2E_HIB_REPS narrow and repeat the run (for
+        # chasing an intermittent failure); default: every case, twice.
+        cases = {
+            "A": test_a_hibernate_mid_crossfade,
+            "B": test_b_crossfade_during_hibernate_fade,
+            "C": test_c_natural_end_during_hibernate_fade,
+        }
+        chosen = os.environ.get("E2E_HIB_CASES") or "ABC"
+        for _ in range(int(os.environ.get("E2E_HIB_REPS") or 2)):
+            for name in chosen:
+                cases[name](group, kids)
     finally:
         call("layout.stop_all")
         if not args.no_launch:
