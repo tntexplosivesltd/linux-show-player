@@ -1017,6 +1017,38 @@ def register_all(dispatcher, app, signal_manager):
             else False,
         }
 
+    def handle_video_monitor_state(params):
+        """Query the operator-side video monitor window."""
+        from lisp.plugins.gst_backend.gst_backend import GstBackend
+
+        def read():
+            monitor = GstBackend.monitor_window()
+            if monitor is None:
+                return {"exists": False, "visible": False}
+            return {"exists": True, "visible": monitor.isVisible()}
+
+        return invoke_on_main_thread(read)
+
+    def handle_video_monitor_toggle(params):
+        """Toggle the video monitor via its Tools menu action, the same
+        path a user takes. Runs on the main thread (widget show/close)."""
+        from lisp.plugins import get_plugin
+        from lisp.plugins.gst_backend.gst_backend import GstBackend
+
+        try:
+            plugin = get_plugin("GstBackend")
+        except Exception:
+            return {"error": "GstBackend not loaded"}
+
+        def toggle():
+            plugin._monitor_action.trigger()
+            monitor = GstBackend.monitor_window()
+            return {
+                "visible": monitor.isVisible() if monitor else False,
+            }
+
+        return invoke_on_main_thread(toggle)
+
     def handle_video_stats(params):
         """Projection performance counters: the projection sink's
         GstBaseSink stats (rendered / dropped / average-rate) and, per
@@ -1569,6 +1601,8 @@ def register_all(dispatcher, app, signal_manager):
         # Video window
         "video_window.state": handle_video_window_state,
         "video.stats": handle_video_stats,
+        "video_monitor.state": handle_video_monitor_state,
+        "video_monitor.toggle": handle_video_monitor_toggle,
         # Playback monitor
         "playback_monitor.state": handle_playback_monitor_state,
         "playback_monitor.toggle": handle_playback_monitor_toggle,
