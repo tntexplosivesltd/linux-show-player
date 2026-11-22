@@ -130,13 +130,17 @@ class MediaCue(Cue):
                 self.__fader_group.stop()
 
             if fade and self._state & CueState.Running and self._can_fade():
+                # Take the lock back even if the fade raises: the
+                # caller's `finally` releases it (H36).
                 self._st_lock.release()
-                self.__fadeout(
-                    self.fadeout_duration,
-                    self.__fade_to_zero(),
-                    FadeOutType[self.fadeout_type],
-                )
-                self._st_lock.acquire()
+                try:
+                    self.__fadeout(
+                        self.fadeout_duration,
+                        self.__fade_to_zero(),
+                        FadeOutType[self.fadeout_type],
+                    )
+                finally:
+                    self._st_lock.acquire()
 
         self.media.stop()
         return True
@@ -149,13 +153,17 @@ class MediaCue(Cue):
                 self.__fader_group.stop()
 
             if fade and self._state & CueState.Running and self._can_fade():
+                # Take the lock back even if the fade raises: the
+                # caller's `finally` releases it (H36).
                 self._st_lock.release()
-                self.__fadeout(
-                    self.fadeout_duration,
-                    self.__fade_to_zero(),
-                    FadeOutType[self.fadeout_type],
-                )
-                self._st_lock.acquire()
+                try:
+                    self.__fadeout(
+                        self.fadeout_duration,
+                        self.__fade_to_zero(),
+                        FadeOutType[self.fadeout_type],
+                    )
+                finally:
+                    self._st_lock.acquire()
 
         self.media.pause()
         return True
