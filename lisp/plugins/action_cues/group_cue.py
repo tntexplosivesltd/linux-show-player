@@ -69,6 +69,13 @@ class GroupCue(Cue):
         self._lock = Lock()
         self._playlist_index = 0
         self._crossfade_armed = False
+        # Fade & Stop fades in flight on this group (M78): while > 0
+        # the group starts no new child. Guarded by _lock.
+        self._fade_holds = 0
+        # Id of the child a natural end would have started during a
+        # hold; started on release, or on resume after the pause.
+        # Guarded by _lock.
+        self._held_next_id = None
         # Track which children have signal handlers connected
         self._connected_children = set()
         # Crossfade fade durations waiting to be put back, as
@@ -304,8 +311,12 @@ class GroupCue(Cue):
         return False
 
     def __start__(self, fade=False):
+        with self._lock:
+            self._fade_holds = 0
         children = self._resolve_playable_children()
         if not children:
+            with self._lock:
+                self._held_next_id = None
             return False
 
         if self.group_mode == "parallel":
@@ -346,7 +357,18 @@ class GroupCue(Cue):
                 idx < len(children)
                 and children[idx].state & CueState.IsPaused
             )
-            if not resuming:
+            # A child ended during the Fade & Stop that paused the
+            # group, and its successor was held back (M78): start
+            # that one.
+            held_id, self._held_next_id = self._held_next_id, None
+            held = next(
+                (i for i, c in enumerate(children) if c.id == held_id),
+                None,
+            )
+            if held is not None and not resuming:
+                idx = held
+                self._playlist_index = held
+            elif not resuming:
                 idx = 0
                 self._playlist_index = 0
             self._connected_children = set()
@@ -541,7 +563,7 @@ class GroupCue(Cue):
     def _check_crossfade(self):
         """Clock callback: check if crossfade point is reached."""
         with self._lock:
-            if not self._crossfade_armed:
+            if not self._crossfade_armed or self._fade_holds:
                 return
             index = self._playlist_index
 
@@ -780,24 +802,93 @@ class GroupCue(Cue):
         playable = self._resolve_playable_children()
 
         if next_cue is None:
-            if not (self.loop and self._play_child_at(0, playable)):
+            if not (self.loop and playable):
                 self._ended()
-            return
+                return
+            next_idx = 0
+        else:
+            # _play_child_at takes an index into the playable list.
+            try:
+                next_idx = next(
+                    i for i, c in enumerate(playable)
+                    if c.id == next_cue.id
+                )
+            except StopIteration:
+                # Shouldn't happen (next_cue was chosen from the
+                # enabled walk), but fail safe.
+                self._ended()
+                return
 
-        # _play_child_at takes an index into the playable list.
-        try:
-            next_idx = next(
-                i for i, c in enumerate(playable) if c.id == next_cue.id
-            )
-        except StopIteration:
-            # Shouldn't happen (next_cue was chosen from the
-            # enabled walk), but fail safe.
-            self._ended()
-            return
+        with self._lock:
+            if self._fade_holds:
+                # A Fade & Stop is fading the group: a child started
+                # now would play unfaded and be cut by its pause or
+                # stop (M78). Keep it for the release or the resume.
+                self._held_next_id = playable[next_idx].id
+                return
 
         # Refused children are skipped; if none can start, end.
         if not self._play_child_at(next_idx, playable):
             self._ended()
+
+    def hold_transitions(self):
+        """A Fade & Stop (`StopCue`, any action) starts fading this
+        group: start no new child until it is done (M78).
+
+        The fade covers only the cues playing when it starts. A
+        crossfade or natural advance during it would bring in a child
+        at full level, and the pause or stop at its end would cut it.
+        So the crossfade monitor stops, and a natural end records the
+        next child instead of starting it.
+
+        The group's own stop, pause or interrupt ends the hold (the
+        StopCue's action is async, so it cannot release safely after
+        dispatching it); `release_transitions` ends it when the fade
+        is aborted. Holds nest.
+        """
+        with self._lock:
+            self._fade_holds += 1
+        self._stop_crossfade_monitor()
+
+    def release_transitions(self):
+        """The fade was aborted: catch up on what the hold kept back,
+        if the group is still playing: start the held next child, or
+        re-arm the crossfade (which fires at once if its point has
+        passed)."""
+        with self._lock:
+            if self._fade_holds == 0:
+                return
+            self._fade_holds -= 1
+            if self._fade_holds:
+                return
+            held_id, self._held_next_id = self._held_next_id, None
+            index = self._playlist_index
+
+        if not self.state & CueState.Running:
+            return
+
+        playable = self._resolve_playable_children()
+        if held_id is not None:
+            held = next(
+                (i for i, c in enumerate(playable) if c.id == held_id),
+                None,
+            )
+            if held is None or not self._play_child_at(held, playable):
+                self._ended()
+            return
+
+        if index < len(playable) and (
+            playable[index].state & CueState.Running
+        ):
+            self._arm_crossfade_if_needed(index, playable)
+
+    def _end_hold(self, keep_next=False):
+        """The group stopped, paused or was interrupted: any hold is
+        over. A pause keeps the held next child for the resume."""
+        with self._lock:
+            self._fade_holds = 0
+            if not keep_next:
+                self._held_next_id = None
 
     def _on_playlist_child_stopped(self, cue):
         """Playlist mode: child was stopped/interrupted, stop group."""
@@ -809,6 +900,7 @@ class GroupCue(Cue):
             self._ended()
 
     def __stop__(self, fade=False):
+        self._end_hold()
         self._stop_crossfade_monitor()
         self._disconnect_all_children()
         self._flush_pending_restores()
@@ -823,6 +915,7 @@ class GroupCue(Cue):
         return True
 
     def __pause__(self, fade=False):
+        self._end_hold(keep_next=True)
         self._stop_crossfade_monitor()
 
         for child in self._resolve_children():
@@ -835,6 +928,7 @@ class GroupCue(Cue):
         return True
 
     def __interrupt__(self, fade=False):
+        self._end_hold()
         self._stop_crossfade_monitor()
         self._disconnect_all_children()
         self._flush_pending_restores()

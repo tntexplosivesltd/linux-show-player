@@ -90,6 +90,20 @@ def build_affected_set(target):
     return leaves
 
 
+def build_affected_groups(target):
+    """The GroupCues in target's tree (target itself, if a group, and
+    any nested ones), outermost first."""
+    from lisp.plugins.action_cues.group_cue import GroupCue
+
+    if not isinstance(target, GroupCue):
+        return []
+
+    groups = [target]
+    for child in target._resolve_children():
+        groups.extend(build_affected_groups(child))
+    return groups
+
+
 class ParallelFadeRunner:
     """Drive a set of Faders concurrently to a target value.
 

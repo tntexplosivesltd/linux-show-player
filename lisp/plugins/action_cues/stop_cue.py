@@ -31,6 +31,7 @@ from lisp.core.properties import Property
 from lisp.cues.cue import Cue, CueAction
 from lisp.cues.targeting import TargetingCue
 from lisp.plugins.action_cues._fader_coordinator import (
+    build_affected_groups,
     build_affected_set,
     collect_live_faders,
     ParallelFadeRunner,
@@ -76,6 +77,10 @@ class StopCue(TargetingCue, Cue):
         # In-flight ParallelFadeRunner, if any. Set by __start__, cleared
         # on completion/abort. Used by __stop__ to cancel the fade.
         self._runner = None
+
+        # GroupCues held for the in-flight fade (M78), released if it
+        # is aborted. None = nothing held.
+        self._held_groups = None
 
         # List of (cue, handler) pairs armed by _arm_hibernate_listener
         # when action=Hibernate. For single-target cases this is one
@@ -142,6 +147,11 @@ class StopCue(TargetingCue, Cue):
             self._error()
             return False
 
+        # Hold the groups BEFORE collecting the faders: a child a group
+        # started in between would play on unfaded (M78).
+        if self.duration > 0:
+            self._hold_groups(target)
+
         affected = build_affected_set(target)
         faders = collect_live_faders(affected)
 
@@ -159,6 +169,9 @@ class StopCue(TargetingCue, Cue):
             )
             self._run_fade_then_action(target)
             return True
+
+        # Nothing to fade: nothing to hold the groups for.
+        self._release_groups()
 
         # Instant path: no fade to run, dispatch action.
         # NOTE: Cue.pause() is @async_function — returns before the
@@ -179,24 +192,45 @@ class StopCue(TargetingCue, Cue):
             if not completed:
                 # Fade aborted — disarm the hibernate listener so the
                 # target isn't accidentally hibernated by a later
-                # unrelated pause.
+                # unrelated pause, and let the groups play on.
                 self._disarm_hibernate_listener(target)
+                self._release_groups()
                 return  # caller's __stop__ handled state
             # Dispatch Pause. Cue.pause() is @async_function — it
             # returns before the target transitions. We do NOT disarm
             # here (it would race with the pending paused emission).
             # The handler's `fired` flag makes it idempotent; weak-
             # ref cleanup disposes it when StopCue is GC'd.
+            # The groups stay held: their own pause/stop/interrupt
+            # ends the hold. Releasing here, before the async action
+            # lands, could start a held child just to cut it.
+            self._held_groups = None
             self._dispatch_action(target)
         except Exception:
             logger.exception("StopCue: error during fade-and-action")
             self._disarm_hibernate_listener(target)
+            self._release_groups()
             self._error()
             return
         finally:
             self._runner = None
 
         self._ended()
+
+    def _hold_groups(self, target):
+        """Stop every group being faded from starting a new child
+        until the fade is done (`GroupCue.hold_transitions`)."""
+        self._release_groups()
+        groups = build_affected_groups(target)
+        for group in groups:
+            group.hold_transitions()
+        self._held_groups = groups
+
+    def _release_groups(self):
+        """Release the groups held for the fade (no-op if none)."""
+        groups, self._held_groups = self._held_groups, None
+        for group in groups or ():
+            group.release_transitions()
 
     def _arm_hibernate_listener(self, target):
         """Subscribe one-shot-style handlers to target.paused that flip
