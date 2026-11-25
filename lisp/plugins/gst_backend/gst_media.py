@@ -67,6 +67,9 @@ class GstMedia(Media):
         self.__finalizer = None
         self.__loop = 0  # current number of loops left to do
         self.__current_pipe = None  # A copy of the pipe property
+        # The pipe the live pipeline was built from (None until a build
+        # completes); the rebuild fast path compares against it.
+        self.__built_pipe = None
         self.__armed = False  # True when pre-armed (pipeline in PAUSED)
         # What the armed pipeline was prerolled and seeked for (see
         # __armed_settings); play() skips the seek only while it holds.
@@ -490,10 +493,13 @@ class GstMedia(Media):
         # play sequence, throw away the prearm latency benefit the
         # user paid for). Bail out if the live pipeline already
         # matches `pipe` and is in a usable state.
+        # Compared with what was actually built: __on_pipe_changed sets
+        # __current_pipe before calling here, so that cannot tell a
+        # real pipe change from a repeat. Elements that failed to build
+        # are skipped, so neither can counting self.elements.
         if (
             self.__pipeline is not None
-            and self.__current_pipe == tuple(self.pipe)
-            and len(self.elements) == len(self.pipe)
+            and self.__built_pipe == tuple(self.pipe)
         ):
             try:
                 gst_state = self.__pipeline.get_state(0)[1]
@@ -514,6 +520,7 @@ class GstMedia(Media):
         # internal reset, not a user-visible disarm.
         self.__armed = False
         self.__armed_for = None
+        self.__built_pipe = None
 
         # Call the current media-finalizer, if any
         if self.__finalizer is not None:
@@ -593,6 +600,7 @@ class GstMedia(Media):
         # Set the pipeline to READY
         self.__pipeline.set_state(Gst.State.READY)
         self.__pipeline.get_state(Gst.SECOND)
+        self.__built_pipe = tuple(self.pipe)
 
         self.elements_changed.emit(self)
 

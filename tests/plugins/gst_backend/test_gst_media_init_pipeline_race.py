@@ -21,10 +21,13 @@ a coherent live state.
 
 import threading
 import time
+import wave
 
 import pytest
 
+from lisp.backend.media import MediaState
 from lisp.plugins.gst_backend import elements as gst_elements
+from lisp.plugins.gst_backend.gi_repository import Gst
 from lisp.plugins.gst_backend.gst_media import GstMedia
 
 
@@ -193,8 +196,68 @@ class TestInitPipelineSkipsCoherentRebuild:
         built = media._GstMedia__pipeline  # noqa: SLF001
         assert built is not None
 
+        assert built.get_state(0)[1] == Gst.State.READY
+
         media._GstMedia__init_pipeline()  # noqa: SLF001
 
         assert media._GstMedia__pipeline is built, (
             "a coherent READY pipeline was torn down and rebuilt"
         )
+
+    def test_armed_pipeline_survives_the_second_caller(self, tmp_path):
+        """The rehearsal interleaving, minus the threads: the first
+        caller has the pipeline prerolled (here armed: PAUSED, silent)
+        when the second, which also saw Null, reaches __init_pipeline.
+        It must keep that pipeline, not finalise it to NULL."""
+        path = tmp_path / "tone.wav"
+        with wave.open(str(path), "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(48000)
+            w.writeframes(b"\x00\x00" * 48000)
+        media = GstMedia()
+        media.update_properties({"pipe": ["UriInput", "Volume", "AutoSink"]})
+        media.elements[0].uri = f"file://{path}"
+        try:
+            assert media.prearm()
+            built = media._GstMedia__pipeline  # noqa: SLF001
+
+            media._GstMedia__init_pipeline()  # noqa: SLF001
+
+            assert media._GstMedia__pipeline is built
+            assert media.state == MediaState.Armed
+        finally:
+            media.disarm()
+
+    def test_unknown_element_does_not_force_a_rebuild(self):
+        """A pipe naming an element this machine lacks builds without
+        it; the next __init_pipeline must still keep that pipeline."""
+        media = GstMedia()
+        media.update_properties(
+            {"pipe": ["UriInput", "NoSuchElement", "AutoSink"]}
+        )
+        built = media._GstMedia__pipeline  # noqa: SLF001
+        assert len(media.elements) == 2
+
+        media._GstMedia__init_pipeline()  # noqa: SLF001
+
+        assert media._GstMedia__pipeline is built
+
+    @pytest.mark.parametrize("seq", [list, tuple], ids=["list", "tuple"])
+    def test_same_length_element_swap_rebuilds(self, seq):
+        """A real pipe change (a preset, the pipe editor) of the same
+        length must rebuild with the new elements."""
+        media = GstMedia()
+        media.update_properties(
+            {"pipe": seq(("UriInput", "Volume", "AutoSink"))}
+        )
+        built = media._GstMedia__pipeline  # noqa: SLF001
+
+        media.update_properties(
+            {"pipe": seq(("UriInput", "AudioPan", "AutoSink"))}
+        )
+
+        assert media._GstMedia__pipeline is not built
+        assert [type(e).__name__ for e in media.elements] == [
+            "UriInput", "AudioPan", "AutoSink",
+        ]
