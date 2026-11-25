@@ -463,6 +463,10 @@ class GstMedia(Media):
 
     def __on_pipe_changed(self, new_pipe):
         # Rebuild the pipeline only if something is changed
+        # Kept as a tuple: a session file loads `pipe` as a list, and a
+        # list never equals the tuple the rebuild fast path compares it
+        # with, so every __init_pipeline would tear down a good pipeline.
+        new_pipe = tuple(new_pipe)
         if new_pipe != self.__current_pipe:
             self.__current_pipe = new_pipe
             self.__init_pipeline()

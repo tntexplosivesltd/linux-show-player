@@ -168,3 +168,33 @@ class TestInitPipelineRace:
             f"(max in-flight={max_observed[0]}) — the lock is missing "
             f"or ineffective"
         )
+
+
+@pytest.mark.usefixtures("bypass_session_paths")
+class TestInitPipelineSkipsCoherentRebuild:
+    """A second __init_pipeline on a usable pipeline must keep it.
+
+    A session file stores `pipe` as a JSON list, so a loaded cue gets a
+    list, while the fast path compared it against `tuple(self.pipe)`: a
+    list never equals a tuple, so every call rebuilt. When the standby
+    pre-arm and GO both found the music cue's pipeline in NULL (after a
+    disarm), the second rebuild finalised the pipeline the first had
+    just set PLAYING: the cue showed Running, stuck at 0 (2026-11-25
+    rehearsal, "music stalls on the second time through").
+    """
+
+    @pytest.mark.parametrize("pipe", [
+        ("UriInput", "Volume", "AutoSink"),
+        ["UriInput", "Volume", "AutoSink"],
+    ], ids=["tuple", "list-from-session"])
+    def test_second_init_keeps_the_ready_pipeline(self, pipe):
+        media = GstMedia()
+        media.update_properties({"pipe": pipe})
+        built = media._GstMedia__pipeline  # noqa: SLF001
+        assert built is not None
+
+        media._GstMedia__init_pipeline()  # noqa: SLF001
+
+        assert media._GstMedia__pipeline is built, (
+            "a coherent READY pipeline was torn down and rebuilt"
+        )
