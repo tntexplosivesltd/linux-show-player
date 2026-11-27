@@ -49,13 +49,16 @@ def save_window_geometry(window, conf, key, screen_key):
     conf.set(screen_key, screen.name() if screen is not None else "")
 
 
-def restore_window_geometry(window, conf, key, screen_key):
+def restore_window_geometry(
+    window, conf, key, screen_key, fill_primary=True
+):
     """Restore a geometry saved by `save_window_geometry`.
 
     The saved geometry is used only if the screen it was saved on (by
     name) is still connected; if Qt resolves the blob's screen index to
     a different monitor, the window is moved back onto the named one.
-    Otherwise the window fills the primary screen's available area.
+    Otherwise the window fills the primary screen's available area,
+    or, with ``fill_primary=False``, keeps its current geometry.
 
     Call it before the window is first shown: an unshown window sits at
     (0, 0), so asking Qt "which screen is this window on" would
@@ -70,7 +73,7 @@ def restore_window_geometry(window, conf, key, screen_key):
         return True
 
     primary = qApp.primaryScreen()
-    if primary is not None:
+    if fill_primary and primary is not None:
         window.setGeometry(primary.availableGeometry())
     return False
 

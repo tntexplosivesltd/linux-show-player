@@ -65,7 +65,8 @@ def build():
             patch("lisp.plugins.gst_backend.gst_video_window."
                   "VideoOutputWindow", side_effect=lambda _p: _window()),
             patch("lisp.plugins.gst_backend.gst_video_window."
-                  "VideoMonitorWindow", side_effect=lambda _p: _window()),
+                  "VideoMonitorWindow",
+                  side_effect=lambda _p, **_kw: _window()),
             patch.object(GstBackend,
                          "_GstBackend__apply_video_config"),
             patch("lisp.plugins.gst_backend.video_compositor."
