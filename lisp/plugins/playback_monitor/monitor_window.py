@@ -19,8 +19,11 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QFont, QFontMetrics
 from PyQt5.QtWidgets import (
     QAction,
+    QFrame,
     QLabel,
+    QLCDNumber,
     QMenu,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -44,6 +47,38 @@ def format_monitor_time(milliseconds):
     if hours > 0:
         return f"{hours:02}:{minutes:02}:{seconds:02}"
     return f"{minutes:02}:{seconds:02}"
+
+
+class TimeLCD(QLCDNumber):
+    """Seven-segment time readout that also reports its text.
+
+    ``QLCDNumber`` has no text getter, and the monitor needs one: the
+    click-to-swap reads the shown values back, as do the tests and
+    the test harness. Every write goes through ``setText``, which
+    sizes the display to the string and draws it, so ``text()`` is
+    always what is on screen.
+    """
+
+    def __init__(self, text, parent=None):
+        super().__init__(parent)
+        self._text = ""
+        self.setSegmentStyle(QLCDNumber.Flat)
+        self.setFrameShape(QFrame.NoFrame)
+        self.setStyleSheet("background-color: transparent")
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        # The digits scale to the widget, so let the layout shrink it.
+        self.setMinimumSize(1, 1)
+        self.setText(text)
+
+    def setText(self, text):
+        self._text = text
+        # One digit per character, so "MM:SS" gets 5 wide digits
+        # instead of sharing an 8-digit "HH:MM:SS" width.
+        self.setDigitCount(max(1, len(text)))
+        self.display(text)
+
+    def text(self):
+        return self._text
 
 
 class PlaybackMonitorWindow(QWidget):
@@ -85,22 +120,19 @@ class PlaybackMonitorWindow(QWidget):
         self._name_label.setTextFormat(Qt.PlainText)
         layout.addWidget(self._name_label, 0)
 
-        # Spacer pushes primary group to vertical centre
-        layout.addStretch(1)
-
-        # Primary label + display (grouped together)
+        # Primary label + display (grouped together). The LCD digits
+        # scale to the space they get, so the layout stretch factors
+        # set their size: primary about five times the secondary.
         self._primary_label = QLabel(
             self._primary_label_text()
         )
         self._primary_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self._primary_label, 0)
 
-        self._primary_display = QLabel("00:00")
-        self._primary_display.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self._primary_display, 0)
+        self._primary_display = TimeLCD("00:00")
+        layout.addWidget(self._primary_display, 5)
 
-        # Spacer pushes secondary group to bottom
-        layout.addStretch(1)
+        layout.addSpacing(4)
 
         # Secondary label + display (grouped at bottom)
         self._secondary_label = QLabel(
@@ -109,9 +141,8 @@ class PlaybackMonitorWindow(QWidget):
         self._secondary_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self._secondary_label, 0)
 
-        self._secondary_display = QLabel("00:00")
-        self._secondary_display.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self._secondary_display, 0)
+        self._secondary_display = TimeLCD("00:00")
+        layout.addWidget(self._secondary_display, 1)
 
         # Restore saved geometry
         x = config.get("geometry.x", -1)
@@ -278,8 +309,8 @@ class PlaybackMonitorWindow(QWidget):
 
     def _update_fonts(self):
         h = self.height()
-        # name 5%, primary-label 8%, primary 50%,
-        # secondary-label 6%, secondary 10%
+        # name 5%, primary-label 8%, secondary-label 6%. The LCD
+        # time displays size themselves from the layout stretch.
         self._fit_font(
             self._name_label, int(h * 0.05), bold=False
         )
@@ -287,17 +318,9 @@ class PlaybackMonitorWindow(QWidget):
             self._primary_label, int(h * 0.08), bold=False
         )
         self._fit_font(
-            self._primary_display, int(h * 0.50), bold=True
-        )
-        self._fit_font(
             self._secondary_label,
             int(h * 0.06),
             bold=False,
-        )
-        self._fit_font(
-            self._secondary_display,
-            int(h * 0.10),
-            bold=True,
         )
 
     @staticmethod
