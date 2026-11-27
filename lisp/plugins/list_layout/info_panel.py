@@ -15,11 +15,46 @@
 # You should have received a copy of the GNU General Public License
 # along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
+import re
+
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QTextDocument
 from PyQt5.QtWidgets import QWidget, QTextEdit, QLineEdit, QVBoxLayout
 
 from lisp.ui.ui_utils import translate
+
+# A line that starts a Markdown block of its own: heading, list item,
+# quote, table row or code fence.
+_MD_BLOCK_START = re.compile(r"[ \t]*(?:#|[-+*][ \t]|\d+[.)][ \t]|>|\||```|~~~)")
+_MD_FENCE = re.compile(r"[ \t]*(?:```|~~~)")
+
+
+def keep_line_breaks(text):
+    """Make every line the operator typed show as its own line.
+
+    In Markdown a single newline is a soft break, so "Teacher: X" and
+    "Begins: Y" on separate lines ran together into one. Between two
+    plain text lines the newline becomes U+2028, which Qt draws as a
+    line break inside the paragraph (a Markdown hard break would become
+    a new paragraph with its margins, i.e. double spacing). Blank lines,
+    block starts (headings, lists, quotes, tables) and fenced code are
+    left to the Markdown parser.
+    """
+    lines = text.replace("\r\n", "\n").split("\n")
+    out = lines[:1]
+    in_fence = bool(lines) and bool(_MD_FENCE.match(lines[0]))
+    for prev, line in zip(lines, lines[1:]):
+        plain = (
+            not in_fence
+            and prev.strip()
+            and line.strip()
+            and not prev.lstrip().startswith("#")
+            and not _MD_BLOCK_START.match(line)
+        )
+        out.append((" " if plain else "\n") + line)
+        if _MD_FENCE.match(line):
+            in_fence = not in_fence
+    return "".join(out)
 
 
 class InfoPanel(QWidget):
@@ -89,7 +124,9 @@ class InfoPanel(QWidget):
 
     def _desc_changed(self, description):
         if hasattr(QTextDocument, "setMarkdown"):
-            self.cueDescription.document().setMarkdown(description)
+            self.cueDescription.document().setMarkdown(
+                keep_line_breaks(description)
+            )
         else:
             self.cueDescription.setText(description)
 

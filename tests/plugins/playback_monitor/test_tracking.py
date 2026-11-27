@@ -145,8 +145,8 @@ class _FakeNonMediaCue:
 @pytest.fixture
 def monitor_window(qtbot):
     """A real ``PlaybackMonitorWindow`` — the test exercises display
-    logic that touches QLabel widgets, so ``__new__`` isn't enough;
-    we need the constructed label tree."""
+    logic that touches the TimeLCD displays, so ``__new__`` isn't
+    enough; we need the constructed widget tree."""
     config = DummyConfiguration(root={"elapsedPrimary": True})
     window = PlaybackMonitorWindow(config)
     qtbot.addWidget(window)

@@ -20,7 +20,7 @@ from tests.e2e.helpers import (
 def _wait_elapsed_ticks(timeout=5.0):
     """Poll until the monitor's displayed elapsed passes 00:00.
 
-    ``playback_monitor.state["elapsed"]`` returns the live QLabel text,
+    ``playback_monitor.state["elapsed"]`` returns the live TimeLCD text,
     refreshed by a ``Connection.QtQueued`` slot on the 33 ms CueTime
     clock.  MM:SS truncation means it reads "00:00" for the first second
     of playback, and under sustained load the Qt event loop can starve
