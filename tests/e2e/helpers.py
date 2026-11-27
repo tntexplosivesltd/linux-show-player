@@ -208,6 +208,7 @@ def start_lisp(
                     if result.get("has_session"):
                         if owns_session:
                             os.unlink(session_path)
+                        _close_reopened_monitors()
                         if expected_cues:
                             wait_cues_loaded(expected_cues)
                         return
@@ -247,6 +248,20 @@ def stop_lisp():
 
 
 # ── JSON-RPC helpers ───────────────────────────────────────────
+
+def _close_reopened_monitors():
+    """Start every test with both monitors closed, as on CI.
+
+    LiSP reopens the playback and video monitors if they were open when
+    it last exited, and a host run may use a copy of a real config. An
+    open video monitor adds a second render sink to every video test.
+    Tests that want a monitor open it themselves.
+    """
+    for ns in ("playback_monitor", "video_monitor"):
+        state = send_request(HOST, PORT, f"{ns}.state").get("result") or {}
+        if state.get("visible"):
+            send_request(HOST, PORT, f"{ns}.toggle")
+
 
 def call(method, params=None):
     """Call a harness method; return result or raise on error."""

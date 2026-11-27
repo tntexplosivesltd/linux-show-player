@@ -15,6 +15,8 @@
 # You should have received a copy of the GNU General Public License
 # along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
+import logging
+
 from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import QAction
 
@@ -25,6 +27,8 @@ from lisp.plugins.playback_monitor.monitor_window import (
 )
 from lisp.ui.ui_utils import translate
 
+logger = logging.getLogger(__name__)
+
 
 class PlaybackMonitor(Plugin):
     Name = "Playback Monitor"
@@ -34,10 +38,16 @@ class PlaybackMonitor(Plugin):
         "Standalone window showing elapsed and remaining time"
     )
 
+    # Config key: was the window open when LiSP last exited?
+    OPEN_KEY = "open"
+
     def __init__(self, app):
         super().__init__(app)
         self._window = None
         self._tracked_cues = {}
+        # Set while LiSP shuts down: closing the window then must not
+        # be recorded as the operator closing it.
+        self._finalizing = False
 
         # Menu action with keyboard shortcut
         self._action = QAction(app.window)
@@ -58,17 +68,44 @@ class PlaybackMonitor(Plugin):
         # Reset on session changes
         app.session_before_finalize.connect(self._session_reset)
 
+        # Reopen the window if it was open when LiSP last exited. On
+        # the first session, so it appears with the main window.
+        app.session_created.connect(self._reopen_window)
+
     def _toggle_window(self):
         if self._window is None:
             self._window = PlaybackMonitorWindow(
                 PlaybackMonitor.Config
             )
+            self._window.closed.connect(self._window_closed)
             self._window.show()
+            self._remember_open(True)
         elif self._window.isVisible():
             self._window.close()
         else:
             self._window.show()
             self._window.raise_()
+            self._remember_open(True)
+
+    def _reopen_window(self, *_):
+        self.app.session_created.disconnect(self._reopen_window)
+        if PlaybackMonitor.Config.get(self.OPEN_KEY, False) and not (
+            self._window is not None and self._window.isVisible()
+        ):
+            self._toggle_window()
+
+    def _window_closed(self):
+        if not self._finalizing:
+            self._remember_open(False)
+
+    def _remember_open(self, is_open):
+        # Best effort: called from Qt slots, where an exception (full
+        # disk, read-only config dir) would abort LiSP.
+        try:
+            PlaybackMonitor.Config.set(self.OPEN_KEY, is_open)
+            PlaybackMonitor.Config.write()
+        except Exception:
+            logger.exception("Could not save the playback monitor state")
 
     def _cue_added(self, cue):
         cue.started.connect(
@@ -103,6 +140,7 @@ class PlaybackMonitor(Plugin):
             self._window.reset()
 
     def finalize(self):
+        self._finalizing = True
         self._disconnect_all_cues()
         self.app.window.menuTools.removeAction(self._action)
         if self._window is not None:

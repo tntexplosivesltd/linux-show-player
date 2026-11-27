@@ -22,6 +22,7 @@ from PyQt5.QtGui import QCursor
 from PyQt5.QtWidgets import QMainWindow, QWidget, QApplication
 
 from lisp.plugins.gst_backend.video_compositor import canvas_size_for
+from lisp.ui.ui_utils import restore_window_geometry, save_window_geometry
 
 logger = logging.getLogger(__name__)
 
@@ -247,15 +248,35 @@ class VideoMonitorWindow(QMainWindow):
     branch off the projection mixer.
 
     Closing the window hides it (the menu toggle re-shows it).
+
+    With a ``config`` it remembers its geometry (and screen, by name)
+    and whether the operator left it open, so the next launch can
+    reopen it in place: see ``open_and_remember`` and ``closeEvent``.
+    Shutting LiSP down never calls ``closeEvent`` on it (only the
+    operator closing it does), so an open monitor stays "open".
     """
 
-    def __init__(self, parent=None):
+    OPEN_KEY = "monitor_open"
+    GEOMETRY_KEY = "monitor_geometry"
+    SCREEN_KEY = "monitor_screen"
+
+    def __init__(self, parent=None, config=None):
         super().__init__(
             parent,
             Qt.Window | Qt.WindowStaysOnTopHint,
         )
+        self._config = config
         self.setWindowTitle("LiSP Video Monitor")
         self.resize(640, 360)
+        if config is not None:
+            # Before the first show, so the saved screen is honoured.
+            restore_window_geometry(
+                self,
+                config,
+                self.GEOMETRY_KEY,
+                self.SCREEN_KEY,
+                fill_primary=False,
+            )
 
         central = QWidget(self)
         central.setStyleSheet("background-color: black;")
@@ -281,7 +302,41 @@ class VideoMonitorWindow(QMainWindow):
         if central is not None:
             self._render_widget.setGeometry(central.rect())
 
+    def open_and_remember(self):
+        """Show (and raise) the monitor and record that it is open."""
+        self.show()
+        self.raise_()
+        self._remember(open_=True)
+
+    def save_geometry(self):
+        """Record where the monitor is, without changing open/closed."""
+        self._remember(open_=None)
+
+    def was_left_open(self):
+        return bool(
+            self._config is not None
+            and self._config.get(self.OPEN_KEY, False)
+        )
+
+    def _remember(self, open_):
+        if self._config is None:
+            return
+        # Best effort: this runs inside Qt slots and closeEvent, where
+        # an exception (e.g. a full disk or read-only config dir)
+        # would abort LiSP. Losing the saved state is the lesser harm.
+        try:
+            if open_ is not None:
+                self._config.set(self.OPEN_KEY, open_)
+            save_window_geometry(
+                self, self._config, self.GEOMETRY_KEY, self.SCREEN_KEY
+            )
+            self._config.write()
+        except Exception:
+            logger.exception("Could not save the video monitor state")
+
     def closeEvent(self, event):
         """Hide instead of close so the window can be re-shown."""
         event.ignore()
+        # Record while still mapped, as PlaybackMonitorWindow does.
+        self._remember(open_=False)
         self.hide()

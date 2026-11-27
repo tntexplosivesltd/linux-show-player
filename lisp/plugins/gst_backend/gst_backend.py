@@ -96,7 +96,10 @@ class GstBackend(Plugin, BaseBackend):
             VideoOutputWindow,
         )
         GstBackend._video_window = VideoOutputWindow(app.window)
-        GstBackend._monitor_window = VideoMonitorWindow(app.window)
+        GstBackend._monitor_window = VideoMonitorWindow(
+            app.window, config=GstBackend.Config
+        )
+        self.__monitor_shown = False
         self.__apply_video_config()
 
         # One persistent projection pipeline that every video/image cue
@@ -195,6 +198,9 @@ class GstBackend(Plugin, BaseBackend):
             self.__toggle_monitor_window
         )
         self.app.window.menuTools.addAction(self._monitor_action)
+        # Reopen the monitor if it was open when LiSP last exited. On
+        # the first session, so it appears with the main window.
+        self.app.session_created.connect(self.__reopen_monitor)
 
         # Load elements and their settings-widgets
         elements.load()
@@ -270,6 +276,13 @@ class GstBackend(Plugin, BaseBackend):
         if GstBackend._video_compositor is not None:
             GstBackend._video_compositor.shutdown()
             GstBackend._video_compositor = None
+        # Then keep the monitor's last position for the next launch
+        # (after the shutdown, so it can never get in its way). Only
+        # if it was shown: an unshown window's geometry is a default.
+        # The window is still alive: app.window goes after plugins.
+        monitor = GstBackend.monitor_window()
+        if monitor is not None and self.__monitor_shown:
+            monitor.save_geometry()
         super().finalize()
 
     def uri_duration(self, uri):
@@ -604,5 +617,16 @@ class GstBackend(Plugin, BaseBackend):
         if monitor.isVisible():
             monitor.close()
         else:
-            monitor.show()
-            monitor.raise_()
+            monitor.open_and_remember()
+            self.__monitor_shown = True
+
+    def __reopen_monitor(self, *_):
+        self.app.session_created.disconnect(self.__reopen_monitor)
+        monitor = GstBackend.monitor_window()
+        if (
+            monitor is not None
+            and monitor.was_left_open()
+            and not monitor.isVisible()
+        ):
+            monitor.open_and_remember()
+            self.__monitor_shown = True
