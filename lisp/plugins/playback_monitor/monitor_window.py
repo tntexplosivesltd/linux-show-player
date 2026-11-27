@@ -61,7 +61,7 @@ class TimeLCD(QLCDNumber):
 
     def __init__(self, text, parent=None):
         super().__init__(parent)
-        self._text = ""
+        self._text = None
         self.setSegmentStyle(QLCDNumber.Flat)
         self.setFrameShape(QFrame.NoFrame)
         self.setStyleSheet("background-color: transparent")
@@ -71,9 +71,16 @@ class TimeLCD(QLCDNumber):
         self.setText(text)
 
     def setText(self, text):
+        # CueTime ticks ~30 times a second but MM:SS changes once a
+        # second; display() always repaints, so skip unchanged text.
+        if text == self._text:
+            return
         self._text = text
         # One digit per character, so "MM:SS" gets 5 wide digits
-        # instead of sharing an 8-digit "HH:MM:SS" width.
+        # instead of sharing an 8-digit "HH:MM:SS" width. On a cue
+        # over an hour the digits change size as a time crosses the
+        # hour mark; that is accepted, so cues under an hour (nearly
+        # all of them) always get the largest digits.
         self.setDigitCount(max(1, len(text)))
         self.display(text)
 
