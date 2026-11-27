@@ -25,6 +25,8 @@ from PyQt5.QtCore import QRect
 from PyQt5.QtWidgets import QMainWindow
 
 from lisp.core.configuration import DummyConfiguration
+from lisp.core.signal import Signal
+from lisp.plugins.gst_backend import gst_video_window as gvw
 from lisp.plugins.gst_backend.gst_backend import GstBackend
 from lisp.plugins.gst_backend.gst_video_window import VideoMonitorWindow
 
@@ -43,6 +45,13 @@ def _build_backend(request):
 OPEN = VideoMonitorWindow.OPEN_KEY
 GEOMETRY = VideoMonitorWindow.GEOMETRY_KEY
 SCREEN = VideoMonitorWindow.SCREEN_KEY
+
+
+class _UnwritableConfig(DummyConfiguration):
+    """A config whose file can't be written (full disk, read-only)."""
+
+    def write(self):
+        raise OSError(28, "No space left on device")
 
 
 @pytest.fixture
@@ -107,7 +116,7 @@ class TestVideoMonitorWindowMemory:
 
         assert (second.width(), second.height()) == (640, 360)
 
-    def test_shutdown_does_not_count_as_closing(
+    def test_main_window_close_does_not_count_as_closing(
         self, make_monitor, config, qtbot
     ):
         """LiSP exits by closing the main window; the monitor (its
@@ -121,6 +130,18 @@ class TestVideoMonitorWindowMemory:
         main.close()
 
         assert config.get(OPEN) is True
+
+    def test_unwritable_config_does_not_break_the_window(
+        self, make_monitor
+    ):
+        """A failed write is logged, never raised into Qt (where it
+        would abort LiSP), and the monitor still shows and hides."""
+        monitor = make_monitor(conf=_UnwritableConfig(root={}))
+
+        monitor.open_and_remember()
+        assert monitor.isVisible()
+        monitor.close()
+        assert not monitor.isVisible()
 
     def test_without_config_nothing_is_saved(self, qtbot):
         monitor = VideoMonitorWindow()
@@ -154,10 +175,31 @@ class TestGstBackendMonitorWiring:
         _toggle(backend)
         assert not monitor.isVisible() and config.get(OPEN) is False
 
+    def test_monitor_built_with_the_backend_config(self, backend):
+        gvw.VideoMonitorWindow.assert_called_once_with(
+            backend.app.window, config=GstBackend.Config
+        )
+
     def test_reopen_is_wired_to_the_first_session(self, backend):
         backend.app.session_created.connect.assert_any_call(
             backend._GstBackend__reopen_monitor
         )
+
+    def test_real_signal_reopens_once(self, backend, monitor, config):
+        """With a real Signal: the first session reopens it; hidden
+        again with the config still "open", a second session (File >
+        New) does not, because the slot disconnected itself."""
+        config.set(OPEN, True)
+        sessions = Signal()
+        sessions.connect(backend._GstBackend__reopen_monitor)
+        backend.app.session_created = sessions
+
+        sessions.emit(object())
+        assert monitor.isVisible()
+        monitor.hide()
+
+        sessions.emit(object())
+        assert not monitor.isVisible()
 
     def test_reopens_on_first_session_if_left_open(
         self, backend, monitor, config
@@ -179,6 +221,41 @@ class TestGstBackendMonitorWiring:
 
         assert not monitor.isVisible()
         backend.app.session_created.disconnect.assert_called_once()
+
+
+class TestGstBackendShutdown:
+    def test_exit_keeps_it_open_and_saves_where_it_is(
+        self, request, make_monitor, config, monkeypatch
+    ):
+        backend = _build_backend(request)
+        monitor = make_monitor()
+        monkeypatch.setattr(GstBackend, "_monitor_window", monitor)
+        _toggle(backend)
+        monitor.move(monitor.x() + 40, monitor.y() + 30)
+        moved = monitor.saveGeometry()
+
+        backend.finalize()
+
+        assert config.get(OPEN) is True
+        assert config.get(GEOMETRY) == bytes(moved.toBase64()).decode()
+
+    def test_compositor_shuts_down_before_the_save(
+        self, request, monkeypatch
+    ):
+        backend = _build_backend(request)
+        order = []
+        GstBackend.video_compositor().shutdown.side_effect = (
+            lambda: order.append("shutdown")
+        )
+        monitor = MagicMock()
+        monitor.isVisible.return_value = False
+        monitor.save_geometry.side_effect = lambda: order.append("save")
+        monkeypatch.setattr(GstBackend, "_monitor_window", monitor)
+        _toggle(backend)
+
+        backend.finalize()
+
+        assert order == ["shutdown", "save"]
 
 
 class TestGstBackendFinalizeSavesGeometry:

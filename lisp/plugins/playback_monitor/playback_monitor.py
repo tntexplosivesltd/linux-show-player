@@ -15,6 +15,8 @@
 # You should have received a copy of the GNU General Public License
 # along with Linux Show Player.  If not, see <http://www.gnu.org/licenses/>.
 
+import logging
+
 from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import QAction
 
@@ -24,6 +26,8 @@ from lisp.plugins.playback_monitor.monitor_window import (
     PlaybackMonitorWindow,
 )
 from lisp.ui.ui_utils import translate
+
+logger = logging.getLogger(__name__)
 
 
 class PlaybackMonitor(Plugin):
@@ -95,8 +99,13 @@ class PlaybackMonitor(Plugin):
             self._remember_open(False)
 
     def _remember_open(self, is_open):
-        PlaybackMonitor.Config.set(self.OPEN_KEY, is_open)
-        PlaybackMonitor.Config.write()
+        # Best effort: called from Qt slots, where an exception (full
+        # disk, read-only config dir) would abort LiSP.
+        try:
+            PlaybackMonitor.Config.set(self.OPEN_KEY, is_open)
+            PlaybackMonitor.Config.write()
+        except Exception:
+            logger.exception("Could not save the playback monitor state")
 
     def _cue_added(self, cue):
         cue.started.connect(

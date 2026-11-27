@@ -321,15 +321,22 @@ class VideoMonitorWindow(QMainWindow):
     def _remember(self, open_):
         if self._config is None:
             return
-        if open_ is not None:
-            self._config.set(self.OPEN_KEY, open_)
-        save_window_geometry(
-            self, self._config, self.GEOMETRY_KEY, self.SCREEN_KEY
-        )
-        self._config.write()
+        # Best effort: this runs inside Qt slots and closeEvent, where
+        # an exception (e.g. a full disk or read-only config dir)
+        # would abort LiSP. Losing the saved state is the lesser harm.
+        try:
+            if open_ is not None:
+                self._config.set(self.OPEN_KEY, open_)
+            save_window_geometry(
+                self, self._config, self.GEOMETRY_KEY, self.SCREEN_KEY
+            )
+            self._config.write()
+        except Exception:
+            logger.exception("Could not save the video monitor state")
 
     def closeEvent(self, event):
         """Hide instead of close so the window can be re-shown."""
         event.ignore()
-        self.hide()
+        # Record while still mapped, as PlaybackMonitorWindow does.
         self._remember(open_=False)
+        self.hide()

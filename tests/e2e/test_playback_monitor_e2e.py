@@ -69,10 +69,6 @@ def run_tests(t):
 
     # ── Test 2: Toggle window open ────────────────────────────
     print("\n=== Test 2: Toggle window open ===")
-    # The monitor reopens at launch if it was open when LiSP last
-    # exited (the config may come from a real install): start closed.
-    if call("playback_monitor.state").get("visible"):
-        call("playback_monitor.toggle")
     result = call("playback_monitor.toggle")
     t.check(
         "2: window visible after toggle",

@@ -30,15 +30,22 @@ from lisp.plugins.playback_monitor.playback_monitor import PlaybackMonitor
 OPEN = PlaybackMonitor.OPEN_KEY
 
 
+class _UnwritableConfig(DummyConfiguration):
+    """A config whose file can't be written (full disk, read-only)."""
+
+    def write(self):
+        raise OSError(28, "No space left on device")
+
+
 @pytest.fixture
 def make_plugin(qtbot, monkeypatch):
     plugins = []
 
-    def _make(open_at_exit=None):
+    def _make(open_at_exit=None, config_cls=DummyConfiguration):
         root = {"elapsedPrimary": True}
         if open_at_exit is not None:
             root[OPEN] = open_at_exit
-        config = DummyConfiguration(root=root)
+        config = config_cls(root=root)
         monkeypatch.setattr(PlaybackMonitor, "Config", config)
         app = SimpleNamespace(
             window=SimpleNamespace(menuTools=MagicMock()),
@@ -55,11 +62,20 @@ def make_plugin(qtbot, monkeypatch):
         return plugin, app, config
 
     monkeypatch.setattr(pm, "QAction", MagicMock())
+    # Plugin.__init__ rebinds the class-level State; monkeypatch
+    # restores the original value after the test.
     monkeypatch.setattr(PlaybackMonitor, "State", PlaybackMonitor.State)
+    # Register each monitor window with qtbot so it is closed and
+    # deleted deterministically after the test.
+    real_ctor = pm.PlaybackMonitorWindow
+
+    def tracked_window(*args, **kwargs):
+        window = real_ctor(*args, **kwargs)
+        qtbot.addWidget(window)
+        return window
+
+    monkeypatch.setattr(pm, "PlaybackMonitorWindow", tracked_window)
     yield _make
-    for plugin in plugins:
-        if plugin._window is not None:
-            plugin._window.deleteLater()
 
 
 def _visible(plugin):
@@ -88,6 +104,24 @@ def test_title_bar_close_records_closed(make_plugin):
     assert config.get(OPEN) is False
 
 
+def test_unwritable_config_does_not_break_opening(make_plugin):
+    """The plugin's own "open" write is logged, never raised into
+    Qt (where it would abort LiSP), and the window still opens.
+
+    Closing is not covered here: PlaybackMonitorWindow.closeEvent's
+    own geometry write is unguarded too, which predates this feature
+    (tracked separately)."""
+    plugin, _app, config = make_plugin(config_cls=_UnwritableConfig)
+
+    plugin._toggle_window()
+    assert _visible(plugin)
+    plugin._window.hide()
+    plugin._window_closed()  # the close path's own write
+
+    # Teardown closes the window, whose closeEvent write is unguarded.
+    config.write = lambda: None
+
+
 def test_exit_keeps_it_recorded_open(make_plugin):
     """finalize() closes the window as LiSP exits; that is not the
     operator closing it, so the next launch must reopen it."""
@@ -112,6 +146,19 @@ def test_reopens_at_launch_and_respects_a_later_close(make_plugin):
     # The operator closes it; a later new session must not reopen it.
     plugin._window.close()
     app.session_created.emit(object())
+    assert not _visible(plugin)
+
+
+def test_only_the_first_session_reopens(make_plugin):
+    """Hidden without recording a close (config still "open"), a
+    second session must still not reopen it: the slot is gone."""
+    plugin, app, config = make_plugin(open_at_exit=True)
+    app.session_created.emit(object())
+    plugin._window.hide()
+    assert config.get(OPEN) is True
+
+    app.session_created.emit(object())
+
     assert not _visible(plugin)
 
 

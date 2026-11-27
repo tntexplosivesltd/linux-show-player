@@ -271,16 +271,18 @@ class GstBackend(Plugin, BaseBackend):
         )
 
     def finalize(self):
-        # Keep the monitor's last position for the next launch. Only
-        # if it was shown: an unshown window's geometry is a default.
-        monitor = GstBackend.monitor_window()
-        if monitor is not None and self.__monitor_shown:
-            monitor.save_geometry()
         # Stop the projection pipeline before the session and windows
         # are torn down (see VideoCompositor.shutdown).
         if GstBackend._video_compositor is not None:
             GstBackend._video_compositor.shutdown()
             GstBackend._video_compositor = None
+        # Then keep the monitor's last position for the next launch
+        # (after the shutdown, so it can never get in its way). Only
+        # if it was shown: an unshown window's geometry is a default.
+        # The window is still alive: app.window goes after plugins.
+        monitor = GstBackend.monitor_window()
+        if monitor is not None and self.__monitor_shown:
+            monitor.save_geometry()
         super().finalize()
 
     def uri_duration(self, uri):
